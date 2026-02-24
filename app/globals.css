@@ -1,26 +1,68 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --em-primary: #0b5cff;
+  --em-secondary: #1a3ea8;
+  --em-accent: #f13d4f;
+  --em-bg: #ffffff;
+  --em-surface: #ffffff;
+  --em-surface-2: #f4f6fb;
+  --em-border: #d9dfee;
+  --em-text: #1f2432;
+  --em-text-muted: #667089;
+  --em-danger: #ff5f77;
+  --em-success: #3dcf95;
+  --em-radius: 14px;
+  --em-shadow: 0 10px 30px rgba(31, 36, 50, 0.12);
+
+  --background: var(--em-bg);
+  --foreground: var(--em-text);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-body);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-background: var(--em-bg);
+  --color-foreground: var(--em-text);
+  --color-surface: var(--em-surface);
+  --color-surface-2: var(--em-surface-2);
+  --color-border: var(--em-border);
+  --color-muted: var(--em-text-muted);
+  --color-primary: var(--em-primary);
+  --color-primary-2: var(--em-secondary);
+  --color-accent: var(--em-accent);
+  --color-danger: var(--em-danger);
+  --color-success: var(--em-success);
+  --color-primary-foreground: #ffffff;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--em-bg);
+  color: var(--em-text);
+  font-family: var(--font-body), system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading), var(--font-body), system-ui, sans-serif;
+}
+
+@keyframes quiz-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.quiz-hero-card-enter {
+  animation: quiz-card-in 0.35s ease-out;
 }
