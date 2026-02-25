@@ -4,19 +4,19 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { USER_ROLES, resolveProfileRole } from "@/lib/roles";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { buildFrequencySessionDrafts } from "@/lib/course-sessions";
-
-const SKILL_MOCKS = [
-  { label: "Speaking", value: 7 },
-  { label: "Reading", value: 6 },
-  { label: "Grammar", value: 5 },
-  { label: "Listening", value: 8 },
-];
+import { loadStudentAppSkillSnapshot, normalizeLevelCode } from "@/lib/student-skills";
 
 const LIMA_TIME_ZONE = "America/Lima";
 const LIMA_OFFSET_HOURS = 5;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function parseScore(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return clamp(parsed, 0, 100);
 }
 
 function normalizeCourseLevel(raw) {
@@ -339,6 +339,18 @@ export default async function StudentDashboard() {
   if (hasActiveEnrollment && !derivedNextClassDate) derivedNextClassDate = fallbackDraft?.nextClass || null;
 
   const resolvedCourseLevel = hasActiveEnrollment ? commission?.course_level : profile?.course_level || null;
+  const resolvedLevelCode = normalizeLevelCode(resolvedCourseLevel || "");
+  const skillSnapshot = await loadStudentAppSkillSnapshot({
+    db: supabase,
+    userId: user.id,
+    currentLevel: resolvedLevelCode,
+  });
+  const skillCards = [
+    { label: "Speaking", value: parseScore(skillSnapshot?.combined?.speaking) },
+    { label: "Reading", value: parseScore(skillSnapshot?.combined?.reading) },
+    { label: "Grammar", value: parseScore(skillSnapshot?.combined?.grammar) },
+    { label: "Listening", value: parseScore(skillSnapshot?.combined?.listening) },
+  ];
   const levelInfo = parseCourseLevel(resolvedCourseLevel);
   const courseTitle = hasActiveEnrollment && resolvedCourseLevel
     ? `English ${levelInfo.code || "C1"} (Nivel ${levelInfo.tier})`
@@ -484,16 +496,16 @@ export default async function StudentDashboard() {
           <div className="rounded-3xl border border-border bg-surface p-6">
             <p className="text-xs uppercase tracking-[0.3em] text-muted">Tus habilidades</p>
             <div className="mt-4 space-y-4">
-              {SKILL_MOCKS.map((skill) => (
+              {skillCards.map((skill) => (
                 <div key={skill.label} className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-foreground">{skill.label}</span>
-                    <span className="text-muted">{skill.value}/10</span>
+                    <span className="text-muted">{skill.value == null ? "--" : `${Math.round(skill.value)}%`}</span>
                   </div>
                   <div className="h-2 w-full rounded-full bg-surface-2">
                     <div
                       className="h-full rounded-full bg-primary"
-                      style={{ width: `${(skill.value / 10) * 100}%` }}
+                      style={{ width: `${skill.value ?? 0}%` }}
                     />
                   </div>
                 </div>
@@ -505,5 +517,3 @@ export default async function StudentDashboard() {
     </section>
   );
 }
-
-

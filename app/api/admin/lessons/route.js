@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { requireAdminRouteAccess } from "@/lib/duolingo/api-auth";
 import { validateLessonPublishable } from "@/lib/duolingo/validation";
+import { runExerciseGarbageCollection } from "@/lib/duolingo/exercise-lifecycle";
 
 function cleanText(value) {
   if (value == null) return "";
@@ -62,10 +63,11 @@ async function loadLessonExercises(db, lessonId) {
     .from("exercises")
     .select("id, type, status, content_json")
     .eq("lesson_id", lessonId)
+    .in("status", ["draft", "published", "archived"])
     .order("ordering", { ascending: true });
 
   if (error) {
-    throw new Error(error.message || "No se pudieron cargar ejercicios de la lección.");
+    throw new Error(error.message || "No se pudieron cargar ejercicios de la leccion.");
   }
 
   return data || [];
@@ -81,7 +83,7 @@ export async function POST(request) {
 
     if (status === "published") {
       return NextResponse.json(
-        { error: "Crea la lección en draft primero y publícala después de validar ejercicios." },
+        { error: "Crea la leccion en draft primero y publicala despues de validar ejercicios." },
         { status: 400 }
       );
     }
@@ -115,7 +117,7 @@ export async function POST(request) {
 
     if (error) {
       return NextResponse.json(
-        { error: error.message || "No se pudo crear lección." },
+        { error: error.message || "No se pudo crear leccion." },
         { status: 400 }
       );
     }
@@ -124,7 +126,7 @@ export async function POST(request) {
   } catch (error) {
     console.error("POST /api/admin/lessons failed", error);
     return NextResponse.json(
-      { error: error?.message || "No se pudo crear lección." },
+      { error: error?.message || "No se pudo crear leccion." },
       { status: 500 }
     );
   }
@@ -172,7 +174,7 @@ export async function PUT(request) {
       if (!validation.valid) {
         return NextResponse.json(
           {
-            error: "No se puede publicar la lección: ejercicios incompletos.",
+            error: "No se puede publicar la leccion: ejercicios incompletos.",
             details: validation.errors,
           },
           { status: 400 }
@@ -189,7 +191,7 @@ export async function PUT(request) {
 
     if (error) {
       return NextResponse.json(
-        { error: error.message || "No se pudo actualizar lección." },
+        { error: error.message || "No se pudo actualizar leccion." },
         { status: 400 }
       );
     }
@@ -198,7 +200,7 @@ export async function PUT(request) {
   } catch (error) {
     console.error("PUT /api/admin/lessons failed", error);
     return NextResponse.json(
-      { error: error?.message || "No se pudo actualizar lección." },
+      { error: error?.message || "No se pudo actualizar leccion." },
       { status: 500 }
     );
   }
@@ -217,21 +219,44 @@ export async function DELETE(request) {
       return NextResponse.json({ error: "id es obligatorio." }, { status: 400 });
     }
 
-    const { error } = await auth.db.from("lessons").delete().eq("id", lessonId);
+    const actorId = auth.user?.id || null;
+    const { error } = await auth.db
+      .from("lessons")
+      .update({ status: "archived", updated_at: new Date().toISOString() })
+      .eq("id", lessonId);
     if (error) {
       return NextResponse.json(
-        { error: error.message || "No se pudo eliminar lección." },
+        { error: error.message || "No se pudo archivar leccion." },
         { status: 400 }
       );
     }
+
+    const { error: archiveExercisesError } = await auth.db
+      .from("exercises")
+      .update({
+        status: "archived",
+        updated_at: new Date().toISOString(),
+        updated_by: actorId,
+        last_editor: actorId,
+      })
+      .eq("lesson_id", lessonId)
+      .in("status", ["draft", "published"]);
+
+    if (archiveExercisesError) {
+      return NextResponse.json(
+        { error: archiveExercisesError.message || "No se pudieron archivar ejercicios." },
+        { status: 400 }
+      );
+    }
+
+    await runExerciseGarbageCollection({ db: auth.db, actorId });
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("DELETE /api/admin/lessons failed", error);
     return NextResponse.json(
-      { error: error?.message || "No se pudo eliminar lección." },
+      { error: error?.message || "No se pudo archivar leccion." },
       { status: 500 }
     );
   }
 }
-

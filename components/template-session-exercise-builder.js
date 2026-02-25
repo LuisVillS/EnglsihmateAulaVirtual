@@ -9,7 +9,13 @@ const EXERCISE_TYPE_OPTIONS = [
   { value: "audio_match", label: "Audio Match / Dictation" },
   { value: "image_match", label: "Image-Word Association" },
   { value: "pairs", label: "Pairs Game" },
-  { value: "cloze", label: "Cloze Test" },
+  { value: "cloze", label: "Fill in the blanks" },
+];
+
+const SKILL_TAG_OPTIONS = [
+  { value: "speaking", label: "Speaking" },
+  { value: "reading", label: "Reading" },
+  { value: "grammar", label: "Grammar" },
 ];
 
 const EXERCISE_STATUS_OPTIONS = [
@@ -96,6 +102,12 @@ function getDefaultContent(type) {
         correct_index: 0,
       };
   }
+}
+
+function defaultSkillTagByType(type) {
+  if (type === "audio_match") return "speaking";
+  if (type === "image_match" || type === "pairs") return "reading";
+  return "grammar";
 }
 
 function normalizeContent(type, rawObject) {
@@ -189,6 +201,7 @@ function createDraft(overrides = {}) {
     status: overrides.status || "published",
     title: overrides.title || "",
     lessonId: overrides.lessonId || "",
+    skillTag: overrides.skillTag || defaultSkillTagByType(type),
     contentJson: toPrettyJson(resolved),
   };
 }
@@ -402,6 +415,7 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
           status: item.status,
           title: item.title,
           lessonId: item.lessonId || "",
+          skillTag: item.skillTag || "",
           contentJson: item.contentJson,
         }))
       ),
@@ -544,7 +558,7 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
                 </div>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-3">
                 <div className="space-y-1">
                   <label className="text-xs font-semibold uppercase tracking-wide text-muted">Tipo</label>
                   <select
@@ -553,6 +567,7 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
                       const nextType = event.target.value;
                       updateItem(item.localId, {
                         type: nextType,
+                        skillTag: defaultSkillTagByType(nextType),
                         contentJson: toPrettyJson(getDefaultContent(nextType)),
                       });
                     }}
@@ -573,6 +588,20 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
                     className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
                   >
                     {EXERCISE_STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-muted">Habilidad</label>
+                  <select
+                    value={item.skillTag}
+                    onChange={(event) => updateItem(item.localId, { skillTag: event.target.value })}
+                    className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  >
+                    {SKILL_TAG_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
                       </option>

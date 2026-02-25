@@ -23,7 +23,7 @@ function ExerciseTypeBadge({ type }) {
     audio_match: "Audio Match",
     image_match: "Image Match",
     pairs: "Pairs",
-    cloze: "Cloze",
+    cloze: "Fill in the blanks",
   };
   const label = labels[String(type || "").trim()] || "Ejercicio";
   return (

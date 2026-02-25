@@ -3,11 +3,12 @@ import { requireAdminRouteAccess } from "@/lib/duolingo/api-auth";
 import { resolveAudioUrlFromContent } from "@/lib/duolingo/audio-cache";
 import { toPreviewModel } from "@/lib/duolingo/validation";
 
-export async function GET(request, { params }) {
+export async function GET(request, { params: paramsPromise }) {
   const auth = await requireAdminRouteAccess();
   if (auth.errorResponse) return auth.errorResponse;
 
   try {
+    const params = await paramsPromise;
     const exerciseId = params?.id?.toString();
     if (!exerciseId) {
       return NextResponse.json({ error: "id inválido." }, { status: 400 });
@@ -83,4 +84,3 @@ export async function GET(request, { params }) {
     );
   }
 }
-

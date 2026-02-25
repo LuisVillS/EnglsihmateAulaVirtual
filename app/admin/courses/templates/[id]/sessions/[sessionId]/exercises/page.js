@@ -13,7 +13,7 @@ const EXERCISE_TYPE_LABELS = {
   audio_match: "Audio Match / Dictation",
   image_match: "Image-Word Association",
   pairs: "Pairs Game",
-  cloze: "Cloze Test",
+  cloze: "Fill in the blanks",
 };
 
 function formatExerciseType(value) {
@@ -63,10 +63,15 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
   if (!session?.id) redirect(`/admin/courses/templates/${template.id}`);
 
   const [lessonsResult, exercisesResult] = await Promise.all([
-    supabase.from("lessons").select("id, title, status").order("created_at", { ascending: true }),
+    supabase
+      .from("lessons")
+      .select("id, title, status")
+      .in("status", ["draft", "published"])
+      .order("created_at", { ascending: true }),
     supabase
       .from("exercises")
       .select("id, lesson_id, type, status, prompt, updated_at")
+      .in("status", ["draft", "published"])
       .order("updated_at", { ascending: false })
       .limit(500),
   ]);
@@ -115,6 +120,15 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
   } else {
     itemRows = itemsResult.data || [];
   }
+
+  const activeItemRows = itemRows.filter((item) => {
+    if (!item.exercise_id) return false;
+    const status = String(item?.exercise?.status || "")
+      .trim()
+      .toLowerCase();
+    return status === "draft" || status === "published";
+  });
+  const hiddenInactiveItems = Math.max(0, itemRows.length - activeItemRows.length);
 
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
@@ -169,6 +183,11 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
             {itemsError}
           </div>
         ) : null}
+        {hiddenInactiveItems ? (
+          <div className="rounded-2xl border border-accent/45 bg-accent/12 px-4 py-3 text-sm text-accent">
+            Se ocultaron {hiddenInactiveItems} ejercicio(s) archivados/eliminados. Solo se muestran ejercicios activos.
+          </div>
+        ) : null}
 
         {!missingExerciseColumn ? (
           <div className="rounded-2xl border border-border bg-surface p-5">
@@ -191,10 +210,10 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
           <div className="rounded-2xl border border-border bg-surface p-5">
             <p className="text-xs uppercase tracking-[0.24em] text-muted">Ejercicios ya asignados</p>
             <p className="mt-1 text-sm text-muted">
-              Esta prueba contiene {itemRows.length} ejercicio{itemRows.length === 1 ? "" : "s"}.
+              Esta prueba contiene {activeItemRows.length} ejercicio{activeItemRows.length === 1 ? "" : "s"}.
             </p>
             <div className="mt-3 space-y-3">
-              {itemRows.map((item) => {
+              {activeItemRows.map((item) => {
                 const linkedExercise = item.exercise || null;
                 return (
                   <div key={item.id} className="grid gap-2 rounded-xl border border-border bg-surface-2 p-3">
@@ -257,7 +276,9 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
                   </div>
                 );
               })}
-              {!itemRows.length ? <p className="text-sm text-muted">Aun no hay ejercicios asignados a esta clase.</p> : null}
+              {!activeItemRows.length ? (
+                <p className="text-sm text-muted">Aun no hay ejercicios activos asignados a esta clase.</p>
+              ) : null}
             </div>
           </div>
         ) : null}

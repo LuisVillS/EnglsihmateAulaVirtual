@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { requireAdminRouteAccess } from "@/lib/duolingo/api-auth";
 import { loadTeacherStudentsOverview } from "@/lib/student-skills";
 
@@ -27,11 +27,10 @@ export async function GET(request) {
 
     return NextResponse.json(data);
   } catch (error) {
-    console.error("GET /api/admin/teacher-dashboard failed", error);
+    console.error("GET /api/admin/students failed", error);
     return NextResponse.json(
-      { error: error?.message || "No se pudo cargar dashboard docente." },
+      { error: error?.message || "No se pudo cargar alumnos del dashboard." },
       { status: 500 }
     );
   }
 }
-

@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
@@ -19,18 +19,6 @@ const MATERIAL_TYPE_OPTIONS = [
   { value: "file", label: "Archivo" },
   { value: "video", label: "Video" },
 ];
-
-const EXERCISE_TYPE_LABELS = {
-  scramble: "Scrambled Sentence",
-  audio_match: "Audio Match / Dictation",
-  image_match: "Image-Word Association",
-  pairs: "Pairs Game",
-  cloze: "Cloze Test",
-};
-
-function formatExerciseType(value) {
-  return EXERCISE_TYPE_LABELS[String(value || "").trim()] || value || "Ejercicio";
-}
 
 function formatFrequencyLabel(value) {
   const map = {
@@ -63,6 +51,7 @@ function resolveSessionPosition(row, sessionsPerMonth) {
   if (!Number.isInteger(cycleIndex) || cycleIndex < 1 || sessionsPerMonth < 1) {
     return { monthIndex: null, sessionInMonth: null };
   }
+
   return {
     monthIndex: Math.floor((cycleIndex - 1) / sessionsPerMonth) + 1,
     sessionInMonth: ((cycleIndex - 1) % sessionsPerMonth) + 1,
@@ -71,7 +60,7 @@ function resolveSessionPosition(row, sessionsPerMonth) {
 
 function buildSessionNumber(monthIndex, sessionInMonth, sessionsPerMonth) {
   if (!sessionsPerMonth) return null;
-  return ((monthIndex - 1) * sessionsPerMonth) + sessionInMonth;
+  return (monthIndex - 1) * sessionsPerMonth + sessionInMonth;
 }
 
 function buildSessionBadge(monthIndex, sessionInMonth, sessionsPerMonth) {
@@ -84,9 +73,75 @@ function buildSessionBadge(monthIndex, sessionInMonth, sessionsPerMonth) {
 
 function formatMaterialTypeLabel(type) {
   const value = String(type || "").trim();
-  if (value === "exercise") return "Ejercicio";
   const row = MATERIAL_TYPE_OPTIONS.find((option) => option.value === value);
   return row?.label || "Material";
+}
+
+function normalizeAdditionalSlides(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => {
+      if (typeof item === "string") {
+        const url = item.trim();
+        if (!url) return null;
+        return { title: "", url };
+      }
+      if (!item || typeof item !== "object") return null;
+      const title = String(item.title || "").trim();
+      const url = String(item.url || "").trim();
+      if (!url) return null;
+      return { title, url };
+    })
+    .filter(Boolean);
+}
+
+function toAdditionalSlidesInput(slides) {
+  return normalizeAdditionalSlides(slides)
+    .map((item) => (item.title ? `${item.title}|${item.url}` : item.url))
+    .join("\n");
+}
+
+function parseGoogleSlideMeta(url) {
+  const text = String(url || "").trim();
+  if (!text) return { presentationId: "", slideId: "" };
+
+  const presentationMatch = text.match(/\/presentation\/d\/([^/]+)/i);
+  const presentationId = presentationMatch?.[1] || "";
+  let slideId = "";
+
+  try {
+    const parsed = new URL(text);
+    slideId = parsed.searchParams.get("slide") || "";
+    if (!slideId && parsed.hash) {
+      const hashValue = parsed.hash.replace(/^#/, "");
+      const hashParams = new URLSearchParams(hashValue);
+      slideId = hashParams.get("slide") || "";
+      if (!slideId && hashValue.startsWith("slide=")) {
+        slideId = hashValue.replace(/^slide=/, "");
+      }
+    }
+  } catch {
+    const inlineSlideMatch = text.match(/slide=([^&#]+)/i);
+    slideId = inlineSlideMatch?.[1] || "";
+  }
+
+  return { presentationId, slideId };
+}
+
+function buildSlidePreviewUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+
+  try {
+    const parsed = new URL(raw);
+    parsed.pathname = parsed.pathname.replace(/\/edit$/i, "/preview");
+    if (!parsed.searchParams.get("rm")) {
+      parsed.searchParams.set("rm", "minimal");
+    }
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
 }
 
 export default async function CourseTemplateDetailPage({ params: paramsPromise }) {
@@ -117,18 +172,38 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
   const sessionsPerMonth = frequencyReference?.sessionsPerMonth || 0;
   const totalSessions = sessionsPerMonth * durationMonths;
 
-  const { data: sessionsRows, error: sessionsError } = await supabase
+  let missingSlideColumns = false;
+  let sessionsResult = await supabase
     .from("template_sessions")
-    .select("id, month_index, session_in_month, session_in_cycle, title")
+    .select(
+      "id, month_index, session_in_month, session_in_cycle, title, class_slide_url, class_slide_title, additional_slides"
+    )
     .eq("template_id", template.id)
     .order("month_index", { ascending: true })
     .order("session_in_month", { ascending: true });
 
-  const missingSessionColumn = getMissingColumnFromError(sessionsError);
+  const missingSessionColumn = getMissingColumnFromError(sessionsResult.error);
+  if (
+    sessionsResult.error &&
+    (missingSessionColumn === "class_slide_url" ||
+      missingSessionColumn === "class_slide_title" ||
+      missingSessionColumn === "additional_slides")
+  ) {
+    missingSlideColumns = true;
+    sessionsResult = await supabase
+      .from("template_sessions")
+      .select("id, month_index, session_in_month, session_in_cycle, title")
+      .eq("template_id", template.id)
+      .order("month_index", { ascending: true })
+      .order("session_in_month", { ascending: true });
+  }
+
+  const sessionsRows = sessionsResult.data || [];
+  const sessionsError = sessionsResult.error;
   const needsSchemaUpdate =
     missingSessionColumn === "month_index" || missingSessionColumn === "session_in_month";
 
-  const sessions = (sessionsRows || [])
+  const sessions = sessionsRows
     .map((row) => {
       const position = resolveSessionPosition(row, sessionsPerMonth);
       if (!position.monthIndex || !position.sessionInMonth) return null;
@@ -136,6 +211,9 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
         ...row,
         monthIndex: position.monthIndex,
         sessionInMonth: position.sessionInMonth,
+        class_slide_url: String(row.class_slide_url || "").trim(),
+        class_slide_title: String(row.class_slide_title || "").trim(),
+        additional_slides: Array.isArray(row.additional_slides) ? row.additional_slides : [],
       };
     })
     .filter(Boolean)
@@ -194,13 +272,6 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
     }
   }
 
-  const { data: exercisesRows } = await supabase
-    .from("exercises")
-    .select("id, type, status, prompt, updated_at")
-    .order("updated_at", { ascending: false })
-    .limit(500);
-  const exercises = exercisesRows || [];
-
   const monthIndexes = Array.from({ length: durationMonths }, (_, idx) => idx + 1);
   const sessionsByMonth = sessions.reduce((acc, session) => {
     const current = acc.get(session.monthIndex) || [];
@@ -246,14 +317,24 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
         </div>
 
         <div className="rounded-2xl border border-border bg-surface p-4 text-sm text-muted">
-          Total esperado de clases:{" "}
-          <span className="font-semibold text-foreground">{totalSessions || sessions.length}</span>. Los ejercicios son
-          materiales de clase y pueden aportar hasta el 50% de la nota final del curso.
+          Total esperado de clases: <span className="font-semibold text-foreground">{totalSessions || sessions.length}</span>. Los
+          ejercicios aportan hasta el 50% de la nota final.
         </div>
 
         {needsSchemaUpdate ? (
           <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
             Falta actualizar template_sessions con month_index/session_in_month. Ejecuta el SQL actualizado.
+          </div>
+        ) : null}
+        {missingSlideColumns ? (
+          <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+            Falta actualizar template_sessions con class_slide_url/class_slide_title/additional_slides. Ejecuta el SQL
+            actualizado para habilitar gestion opcional de slide principal.
+          </div>
+        ) : null}
+        {sessionsError ? (
+          <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+            {sessionsError.message || "No se pudieron cargar sesiones de plantilla."}
           </div>
         ) : null}
         {itemsErrorMessage ? (
@@ -282,8 +363,22 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                 <div className="mt-4 space-y-4">
                   {monthSessions.map((session) => {
                     const items = itemsBySession.get(session.id) || [];
-                    const exerciseItems = items.filter((item) => item.type === "exercise" && item.exercise_id);
+                    const exerciseItems = items.filter((item) => {
+                      if (item.type !== "exercise" || !item.exercise_id) return false;
+                      const exerciseStatus = String(item?.exercise?.status || "")
+                        .trim()
+                        .toLowerCase();
+                      return exerciseStatus === "draft" || exerciseStatus === "published";
+                    });
+                    const materialItems = items.filter((item) => item.type !== "exercise");
+                    const additionalSlides = normalizeAdditionalSlides(session.additional_slides);
+                    const slidesExtraCount =
+                      additionalSlides.length + materialItems.filter((item) => item.type === "slides").length;
+                    const linksCount = materialItems.filter((item) => item.type !== "slides").length;
                     const sessionBadge = buildSessionBadge(monthIndex, session.sessionInMonth, sessionsPerMonth);
+                    const slideMeta = parseGoogleSlideMeta(session.class_slide_url);
+                    const slidePreviewUrl = buildSlidePreviewUrl(session.class_slide_url);
+                    const hasQuiz = exerciseItems.length > 0;
 
                     return (
                       <article key={session.id} className="rounded-2xl border border-border bg-surface-2 p-4">
@@ -292,123 +387,151 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                             <p className="text-xs uppercase tracking-[0.22em] text-muted">{sessionBadge}</p>
                             <h3 className="text-lg font-semibold text-foreground">{session.title || "Clase sin titulo"}</h3>
                             <p className="text-xs text-muted">
-                              {items.length} materiales, {exerciseItems.length} ejercicios
+                              Materiales: {materialItems.length} - Prueba: {exerciseItems.length} ejercicio
+                              {exerciseItems.length === 1 ? "" : "s"}
                             </p>
                           </div>
-                          <Link
-                            href={`/admin/courses/templates/${template.id}/sessions/${session.id}/exercises`}
-                            className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
-                          >
-                            Crear prueba para esta clase
-                          </Link>
                         </div>
 
-                        <form action={upsertTemplateSession} className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
-                          <input type="hidden" name="templateId" value={template.id} />
-                          <input type="hidden" name="templateSessionId" value={session.id} />
-                          <div className="space-y-1">
-                            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo de clase</label>
-                            <input
-                              name="title"
-                              defaultValue={session.title || ""}
-                              className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                              required
-                            />
+                        <div className="mt-4 grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+                          <div className="space-y-4 rounded-2xl border border-border bg-surface p-4">
+                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">
+                              Configuracion de clase
+                            </p>
+                            <form action={upsertTemplateSession} className="space-y-3">
+                              <input type="hidden" name="templateId" value={template.id} />
+                              <input type="hidden" name="templateSessionId" value={session.id} />
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo de clase</label>
+                                <input
+                                  name="title"
+                                  defaultValue={session.title || ""}
+                                  className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                  required
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                                  Slide de clase (opcional)
+                                </label>
+                                <input
+                                  name="classSlideUrl"
+                                  defaultValue={session.class_slide_url || ""}
+                                  className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                  placeholder="https://docs.google.com/presentation/d/.../edit?slide=id..."
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                                  Nombre de presentacion (opcional)
+                                </label>
+                                <input
+                                  name="classSlideTitle"
+                                  defaultValue={session.class_slide_title || ""}
+                                  className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                  placeholder="Unidad 2 - Clase 05"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                                  Slides adicionales (opcional)
+                                </label>
+                                <textarea
+                                  name="additionalSlidesInput"
+                                  rows={4}
+                                  defaultValue={toAdditionalSlidesInput(session.additional_slides)}
+                                  className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                  placeholder={"https://docs.google.com/presentation/d/...\nRepaso|https://docs.google.com/presentation/d/..."}
+                                />
+                                <p className="text-xs text-muted">Formato por linea: `url` o `titulo|url`.</p>
+                              </div>
+                              <button
+                                type="submit"
+                                className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface"
+                              >
+                                Guardar clase
+                              </button>
+                            </form>
+
+                            <div className="rounded-xl border border-border bg-surface-2 p-3 text-xs text-muted">
+                              <p className="font-semibold text-foreground">Slide principal (opcional)</p>
+                              <p className="mt-1">
+                                Presentacion: {session.class_slide_title || slideMeta.presentationId || "Sin nombre"}
+                              </p>
+                              <p>slide_id: {slideMeta.slideId || "No especificado en URL"}</p>
+                              {session.class_slide_url ? (
+                                <a
+                                  href={session.class_slide_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-2 inline-flex rounded-full border border-border px-3 py-1 text-[11px] font-semibold text-foreground transition hover:border-primary hover:bg-surface"
+                                >
+                                  Abrir slide
+                                </a>
+                              ) : null}
+                              {slidePreviewUrl ? (
+                                <div className="mt-3 overflow-hidden rounded-xl border border-border bg-background">
+                                  <iframe
+                                    src={slidePreviewUrl}
+                                    title={`Preview ${session.title || session.id}`}
+                                    className="h-48 w-full"
+                                    loading="lazy"
+                                  />
+                                </div>
+                              ) : (
+                                <p className="mt-2 text-muted">Sin slide principal configurado.</p>
+                              )}
+                            </div>
                           </div>
-                          <button
-                            type="submit"
-                            className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface"
-                          >
-                            Guardar titulo
-                          </button>
-                        </form>
 
-                        <div className="mt-4 grid gap-4 xl:grid-cols-[1.8fr_1fr]">
-                          <div className="rounded-2xl border border-border bg-surface p-4">
-                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Materiales de clase</p>
-                            <div className="mt-3 space-y-3">
-                              {items.map((item) => {
-                                const isExercise = item.type === "exercise" && !missingExerciseColumn;
-                                const linkedExercise = item.exercise || null;
+                          <div className="space-y-3">
+                            <div className="rounded-2xl border border-primary/30 bg-primary/8 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Prueba / Test</p>
+                              <p className="mt-1 text-sm text-foreground">{hasQuiz ? "Creada" : "No creada"}</p>
+                              <p className="text-xs text-muted">
+                                {exerciseItems.length} ejercicio{exerciseItems.length === 1 ? "" : "s"}
+                              </p>
+                              <Link
+                                href={`/admin/courses/templates/${template.id}/sessions/${session.id}/exercises`}
+                                className="mt-3 inline-flex w-full justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+                              >
+                                {hasQuiz ? "Editar prueba" : "Crear prueba para esta clase"}
+                              </Link>
+                            </div>
 
-                                if (isExercise) {
-                                  return (
-                                    <div key={item.id} className="grid gap-2 rounded-xl border border-border bg-surface-2 p-3">
-                                      <form action={upsertTemplateSessionItem} className="grid gap-2 sm:grid-cols-2">
-                                        <input type="hidden" name="templateId" value={template.id} />
-                                        <input type="hidden" name="templateSessionId" value={session.id} />
-                                        <input type="hidden" name="itemId" value={item.id} />
-                                        <input type="hidden" name="type" value="exercise" />
-                                        <div className="space-y-1 sm:col-span-2">
-                                          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                                            Ejercicio vinculado
-                                          </p>
-                                          <select
-                                            name="exerciseId"
-                                            defaultValue={item.exercise_id || ""}
-                                            className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                            required
+                            <details className="rounded-2xl border border-border bg-surface p-4">
+                              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.24em] text-muted">
+                                Materiales de clase: {materialItems.length} items - Slides extra: {slidesExtraCount} - Links: {linksCount}
+                              </summary>
+                              <div className="mt-3 space-y-3">
+                                {additionalSlides.length ? (
+                                  <div className="rounded-xl border border-border bg-surface-2 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Slides adicionales guardados</p>
+                                    <ul className="mt-2 space-y-1 text-xs text-muted">
+                                      {additionalSlides.map((slide, idx) => (
+                                        <li key={`${session.id}-extra-slide-${idx}`}>
+                                          {slide.title ? `${slide.title}: ` : ""}
+                                          <a
+                                            href={slide.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-foreground underline decoration-border underline-offset-2"
                                           >
-                                            <option value="" disabled>
-                                              Selecciona ejercicio
-                                            </option>
-                                            {exercises.map((exercise) => (
-                                              <option key={exercise.id} value={exercise.id}>
-                                                {formatExerciseType(exercise.type)} -{" "}
-                                                {exercise.prompt || exercise.id.slice(0, 8)}
-                                              </option>
-                                            ))}
-                                          </select>
-                                        </div>
-                                        <div className="space-y-1">
-                                          <label className="text-xs font-semibold uppercase tracking-wide text-muted">
-                                            Titulo visible
-                                          </label>
-                                          <input
-                                            name="title"
-                                            defaultValue={item.title || ""}
-                                            className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                            placeholder="Prueba de clase"
-                                          />
-                                        </div>
-                                        <div className="flex items-end gap-2">
-                                          <button
-                                            type="submit"
-                                            className="w-full rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface"
-                                          >
-                                            Guardar
-                                          </button>
-                                        </div>
-                                      </form>
-                                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                                        <span>
-                                          {linkedExercise
-                                            ? `${formatExerciseType(linkedExercise.type)} (${linkedExercise.status || "draft"})`
-                                            : "Sin metadatos"}
-                                        </span>
-                                        <form action={deleteTemplateSessionItem}>
-                                          <input type="hidden" name="templateId" value={template.id} />
-                                          <input type="hidden" name="itemId" value={item.id} />
-                                          <button
-                                            type="submit"
-                                            className="rounded-full border border-danger/60 px-3 py-1 text-xs font-semibold text-danger transition hover:bg-danger/10"
-                                          >
-                                            Eliminar
-                                          </button>
-                                        </form>
-                                      </div>
-                                    </div>
-                                  );
-                                }
+                                            {slide.url}
+                                          </a>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                ) : null}
 
-                                return (
-                                  <div key={item.id} className="grid gap-2 rounded-xl border border-border bg-surface-2 p-3">
-                                    <form action={upsertTemplateSessionItem} className="grid gap-2 sm:grid-cols-2">
+                                {materialItems.map((item) => (
+                                  <div key={item.id} className="rounded-xl border border-border bg-surface-2 p-3">
+                                    <form action={upsertTemplateSessionItem} className="grid gap-2">
                                       <input type="hidden" name="templateId" value={template.id} />
                                       <input type="hidden" name="templateSessionId" value={session.id} />
                                       <input type="hidden" name="itemId" value={item.id} />
-                                      <div className="space-y-1">
-                                        <label className="text-xs font-semibold uppercase tracking-wide text-muted">Tipo</label>
+                                      <div className="grid gap-2 sm:grid-cols-2">
                                         <select
                                           name="type"
                                           defaultValue={item.type || "link"}
@@ -420,35 +543,29 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                                             </option>
                                           ))}
                                         </select>
-                                      </div>
-                                      <div className="space-y-1">
-                                        <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo</label>
                                         <input
                                           name="title"
                                           defaultValue={item.title || ""}
                                           className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                          placeholder="Material de clase"
+                                          placeholder="Titulo"
                                           required
                                         />
                                       </div>
-                                      <div className="space-y-1 sm:col-span-2">
-                                        <label className="text-xs font-semibold uppercase tracking-wide text-muted">URL</label>
-                                        <input
-                                          name="url"
-                                          defaultValue={item.url || ""}
-                                          className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                          placeholder="https://..."
-                                          required
-                                        />
-                                      </div>
+                                      <input
+                                        name="url"
+                                        defaultValue={item.url || ""}
+                                        className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                        placeholder="https://..."
+                                        required
+                                      />
                                       <button
                                         type="submit"
-                                        className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface sm:col-span-2"
+                                        className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface"
                                       >
                                         Guardar
                                       </button>
                                     </form>
-                                    <div className="flex items-center justify-between gap-2 text-xs text-muted">
+                                    <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted">
                                       <span>{formatMaterialTypeLabel(item.type)}</span>
                                       <form action={deleteTemplateSessionItem}>
                                         <input type="hidden" name="templateId" value={template.id} />
@@ -462,122 +579,52 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                                       </form>
                                     </div>
                                   </div>
-                                );
-                              })}
+                                ))}
 
-                              {!items.length ? <p className="text-sm text-muted">Sin materiales en esta clase.</p> : null}
-                            </div>
-                          </div>
+                                {!materialItems.length ? (
+                                  <p className="text-sm text-muted">Sin materiales extra en esta clase.</p>
+                                ) : null}
 
-                          <div className="space-y-3">
-                            <div className="rounded-2xl border border-dashed border-border bg-surface p-4">
-                              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Agregar material</p>
-                              <form action={upsertTemplateSessionItem} className="mt-2 space-y-2">
-                                <input type="hidden" name="templateId" value={template.id} />
-                                <input type="hidden" name="templateSessionId" value={session.id} />
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold uppercase tracking-wide text-muted">Tipo</label>
-                                  <select
-                                    name="type"
-                                    defaultValue="slides"
-                                    className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                  >
-                                    {MATERIAL_TYPE_OPTIONS.map((option) => (
-                                      <option key={option.value} value={option.value}>
-                                        {option.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo</label>
-                                  <input
-                                    name="title"
-                                    className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                    placeholder="Nuevo material"
-                                    required
-                                  />
-                                </div>
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold uppercase tracking-wide text-muted">URL</label>
-                                  <input
-                                    name="url"
-                                    className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                    placeholder="https://..."
-                                    required
-                                  />
-                                </div>
-                                <button
-                                  type="submit"
-                                  className="w-full rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
-                                >
-                                  Agregar material
-                                </button>
-                              </form>
-                            </div>
-
-                            <div className="rounded-2xl border border-dashed border-primary/35 bg-primary/5 p-4">
-                              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Pruebas y ejercicios</p>
-                              <p className="mt-1 text-xs text-muted">
-                                Crea una prueba completa para esta clase o asigna un ejercicio existente.
-                              </p>
-                              {missingExerciseColumn ? (
-                                <p className="mt-2 text-xs text-muted">
-                                  Actualiza el SQL para habilitar ejercicios por clase.
-                                </p>
-                              ) : (
-                                <div className="mt-3 space-y-2">
-                                  <Link
-                                    href={`/admin/courses/templates/${template.id}/sessions/${session.id}/exercises`}
-                                    className="inline-flex w-full justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
-                                  >
-                                    Crear prueba (1 o varios ejercicios)
-                                  </Link>
-                                  <form action={upsertTemplateSessionItem} className="space-y-2">
+                                <div className="rounded-xl border border-dashed border-border bg-surface-2 p-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">Agregar material extra</p>
+                                  <form action={upsertTemplateSessionItem} className="mt-2 space-y-2">
                                     <input type="hidden" name="templateId" value={template.id} />
                                     <input type="hidden" name="templateSessionId" value={session.id} />
-                                    <input type="hidden" name="type" value="exercise" />
-                                    <div className="space-y-1">
-                                      <label className="text-xs font-semibold uppercase tracking-wide text-muted">
-                                        Asignar ejercicio existente
-                                      </label>
+                                    <div className="grid gap-2 sm:grid-cols-2">
                                       <select
-                                        name="exerciseId"
-                                        defaultValue=""
+                                        name="type"
+                                        defaultValue="slides"
                                         className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                        required
                                       >
-                                        <option value="" disabled>
-                                          Selecciona ejercicio
-                                        </option>
-                                        {exercises.map((exercise) => (
-                                          <option key={exercise.id} value={exercise.id}>
-                                            {formatExerciseType(exercise.type)} -{" "}
-                                            {exercise.prompt || exercise.id.slice(0, 8)}
+                                        {MATERIAL_TYPE_OPTIONS.map((option) => (
+                                          <option key={option.value} value={option.value}>
+                                            {option.label}
                                           </option>
                                         ))}
                                       </select>
-                                    </div>
-                                    <div className="space-y-1">
-                                      <label className="text-xs font-semibold uppercase tracking-wide text-muted">
-                                        Titulo visible (opcional)
-                                      </label>
                                       <input
                                         name="title"
                                         className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                        placeholder="Prueba de clase"
+                                        placeholder="Titulo"
+                                        required
                                       />
                                     </div>
+                                    <input
+                                      name="url"
+                                      className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                      placeholder="https://..."
+                                      required
+                                    />
                                     <button
                                       type="submit"
                                       className="w-full rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface"
                                     >
-                                      Asignar ejercicio
+                                      Agregar material
                                     </button>
                                   </form>
                                 </div>
-                              )}
-                            </div>
+                              </div>
+                            </details>
                           </div>
                         </div>
                       </article>

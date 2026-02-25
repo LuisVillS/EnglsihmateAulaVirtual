@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 const STATUS_OPTIONS = ["draft", "published", "archived"];
 const EXERCISE_TYPES = ["scramble", "audio_match", "image_match", "pairs", "cloze"];
+const SKILL_TAG_OPTIONS = ["speaking", "reading", "grammar"];
 
 function toJson(value, fallback = {}) {
   try {
@@ -40,6 +41,12 @@ function defaultContent(type) {
     return { sentence: "I ____ a student.", options: ["am", "are", "is", "be"], correct_index: 0 };
   }
   return { prompt_native: "Yo soy estudiante", target_words: ["I", "am", "a", "student"], answer_order: [0, 1, 2, 3] };
+}
+
+function defaultSkillTagByType(type) {
+  if (type === "audio_match") return "speaking";
+  if (type === "image_match" || type === "pairs") return "reading";
+  return "grammar";
 }
 
 function upsert(list, item) {
@@ -145,6 +152,7 @@ export default function CourseContentEditor({ initialData }) {
     id: "",
     lesson_id: initialData.lessons?.[0]?.id || "",
     type: "scramble",
+    skill_tag: defaultSkillTagByType("scramble"),
     status: "draft",
     ordering: "1",
     content_json: pretty(defaultContent("scramble")),
@@ -311,6 +319,7 @@ export default function CourseContentEditor({ initialData }) {
       id: selected.id,
       lesson_id: selected.lesson_id || initialData.lessons?.[0]?.id || "",
       type: selected.type || "scramble",
+      skill_tag: selected.skill_tag || defaultSkillTagByType(selected.type || "scramble"),
       status: selected.status || "draft",
       ordering: String(selected.ordering || 1),
       content_json: pretty(selected.content_json || {}),
@@ -383,6 +392,7 @@ export default function CourseContentEditor({ initialData }) {
         id: "",
         lesson_id: initialData.lessons?.[0]?.id || "",
         type: "scramble",
+        skill_tag: defaultSkillTagByType("scramble"),
         status: "draft",
         ordering: "1",
         content_json: pretty(defaultContent("scramble")),
@@ -467,6 +477,7 @@ export default function CourseContentEditor({ initialData }) {
     const payload = exercises.map((exercise) => ({
       lesson_id: exercise.lesson_id,
       type: exercise.type,
+      skill_tag: exercise.skill_tag || defaultSkillTagByType(exercise.type),
       status: exercise.status,
       ordering: exercise.ordering,
       content_json: exercise.content_json,
@@ -494,7 +505,10 @@ export default function CourseContentEditor({ initialData }) {
       if (!Array.isArray(rows)) throw new Error("El JSON debe ser una lista.");
       let count = 0;
       for (const row of rows) {
-        const data = await requestJson("/api/admin/exercises", "POST", row);
+        const data = await requestJson("/api/admin/exercises", "POST", {
+          ...row,
+          skill_tag: row.skill_tag || defaultSkillTagByType(row.type),
+        });
         if (data?.exercise?.id) {
           setExercises((prev) => upsert(prev, data.exercise));
           count += 1;
@@ -607,9 +621,12 @@ export default function CourseContentEditor({ initialData }) {
               <option value="">Selecciona lección</option>
               {lessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}
             </select>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <select value={exerciseForm.type} onChange={(e) => setExerciseForm((prev) => ({ ...prev, type: e.target.value, content_json: pretty(defaultContent(e.target.value)) }))} className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <select value={exerciseForm.type} onChange={(e) => setExerciseForm((prev) => ({ ...prev, type: e.target.value, skill_tag: defaultSkillTagByType(e.target.value), content_json: pretty(defaultContent(e.target.value)) }))} className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm">
                 {EXERCISE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+              <select value={exerciseForm.skill_tag} onChange={(e) => setExerciseForm((prev) => ({ ...prev, skill_tag: e.target.value }))} className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm">
+                {SKILL_TAG_OPTIONS.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
               </select>
               <select value={exerciseForm.status} onChange={(e) => setExerciseForm((prev) => ({ ...prev, status: e.target.value }))} className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm">
                 {STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}

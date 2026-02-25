@@ -151,6 +151,11 @@ function isSlidesItem(item) {
   return type === "slides" || url.includes("docs.google.com/presentation");
 }
 
+function isPrimarySlideItem(item) {
+  const note = String(item?.note || "").trim().toLowerCase();
+  return note === "primary_slide";
+}
+
 function isVideoItem(item) {
   const type = String(item?.type || "").toLowerCase();
   const url = String(item?.url || "").toLowerCase();
@@ -170,6 +175,28 @@ function isExerciseItem(item) {
     return Boolean(String(item?.exercise_id || "").trim() || String(item?.lesson_id || "").trim());
   }
   return false;
+}
+
+function formatResourceTypeLabel(type) {
+  const normalized = String(type || "").trim().toLowerCase();
+  if (normalized === "link") return "enlace";
+  if (normalized === "file") return "archivo";
+  if (normalized === "note") return "nota";
+  if (normalized === "recording") return "grabacion";
+  if (normalized === "live_link") return "clase en vivo";
+  if (normalized === "video") return "video";
+  if (normalized === "slides") return "presentacion";
+  if (!normalized) return "recurso";
+  return normalized;
+}
+
+function getResourceActionLabel(item) {
+  if (isSlidesItem(item)) return "Ver presentacion";
+  if (isVideoItem(item)) return "Ver video";
+  const type = String(item?.type || "").trim().toLowerCase();
+  if (type === "file") return "Abrir archivo";
+  if (type === "link") return "Abrir enlace";
+  return "Abrir recurso";
 }
 
 function resolveExerciseItemUrl(item) {
@@ -350,11 +377,28 @@ export default function CourseSessionList({
 
   const selectedSession = hydratedSessions.find((session) => session.id === openSessionId) || null;
   const selectedItems = selectedSession ? itemsBySession[selectedSession.id] || [] : [];
+  const selectedSlidesItems = selectedItems.filter((item) => isSlidesItem(item));
   const slidesItem =
-    selectedItems.find((item) => item.type === "slides" || String(item.url || "").includes("docs.google.com/presentation")) || null;
+    selectedSlidesItems.find((item) => isPrimarySlideItem(item)) ||
+    selectedSlidesItems[0] ||
+    null;
+  const selectedNonExerciseItems = [
+    ...selectedSlidesItems.filter((item) => item.id !== slidesItem?.id),
+    ...selectedItems.filter((item) => !isExerciseItem(item) && !isSlidesItem(item)),
+  ];
   const selectedExerciseGroups = groupExerciseItems(selectedItems.filter((item) => isExerciseItem(item)));
   const selectedResources = [
-    ...selectedItems.filter((item) => !isExerciseItem(item)).map((item) => ({ ...item, resource_kind: "item" })),
+    ...(slidesItem
+      ? [
+          {
+            ...slidesItem,
+            id: slidesItem.id || `primary-slide:${selectedSession?.id || "session"}`,
+            title: slidesItem.title || "Slide principal",
+            resource_kind: "primary_slide",
+          },
+        ]
+      : []),
+    ...selectedNonExerciseItems.map((item) => ({ ...item, resource_kind: "item" })),
     ...selectedExerciseGroups.map((group) => ({
       id: `exercise-group:${group.key}`,
       title: group.title,
@@ -434,11 +478,17 @@ export default function CourseSessionList({
                     const classExpanded = Boolean(expandedSessionMap[session.id]) && !monthLocked;
                     const classItems = itemsBySession[session.id] || [];
                     const slidesItems = classItems.filter((item) => isSlidesItem(item));
-                    const videoItems = classItems.filter((item) => isVideoItem(item));
                     const exerciseItems = classItems.filter((item) => isExerciseItem(item));
                     const exerciseGroups = groupExerciseItems(exerciseItems);
-                    const extraPresentationItems = slidesItems.slice(1);
-                    const hasDetails = Boolean(extraPresentationItems.length || videoItems.length || exerciseGroups.length);
+                    const primarySlideItem =
+                      slidesItems.find((item) => isPrimarySlideItem(item)) || slidesItems[0] || null;
+                    const classMaterialItems = classItems.filter(
+                      (item) => !isExerciseItem(item) && item.id !== primarySlideItem?.id
+                    );
+                    const hasDetails = Boolean(
+                      classMaterialItems.length ||
+                        exerciseGroups.length
+                    );
                     const hasLiveLink = Boolean(session.live_link) && !monthLocked;
                     const hasRecordingLink = Boolean(session.recording_link) && !monthLocked;
 
@@ -523,12 +573,20 @@ export default function CourseSessionList({
 
                           {classExpanded ? (
                             <div className="mt-4 space-y-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-4">
-                              {extraPresentationItems.length ? (
+                              {classMaterialItems.length ? (
                                 <div className="space-y-2">
-                                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Presentaciones extra</p>
-                                  {extraPresentationItems.map((item) => (
+                                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">
+                                    Material de clase
+                                  </p>
+                                  {classMaterialItems.map((item) => (
                                     <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/15 bg-surface px-3 py-2">
-                                      <p className="text-sm font-semibold text-foreground">{item.title || "Presentacion"}</p>
+                                      <div>
+                                        <p className="text-sm font-semibold text-foreground">{item.title || "Recurso"}</p>
+                                        <p className="text-xs uppercase tracking-wide text-muted">
+                                          {formatResourceTypeLabel(item.type)}
+                                        </p>
+                                        {item.note ? <p className="text-xs text-muted">{item.note}</p> : null}
+                                      </div>
                                       {item.url ? (
                                         <a
                                           href={item.url}
@@ -536,7 +594,7 @@ export default function CourseSessionList({
                                           rel="noopener noreferrer"
                                           className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
                                         >
-                                          Ver presentacion
+                                          {getResourceActionLabel(item)}
                                         </a>
                                       ) : (
                                         <button
@@ -544,36 +602,7 @@ export default function CourseSessionList({
                                           disabled
                                           className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted disabled:cursor-not-allowed"
                                         >
-                                          Ver presentacion
-                                        </button>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : null}
-
-                              {videoItems.length ? (
-                                <div className="space-y-2">
-                                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Videos</p>
-                                  {videoItems.map((item) => (
-                                    <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/15 bg-surface px-3 py-2">
-                                      <p className="text-sm font-semibold text-foreground">{item.title || "Video"}</p>
-                                      {item.url ? (
-                                        <a
-                                          href={item.url}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
-                                        >
-                                          Ver video
-                                        </a>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          disabled
-                                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted disabled:cursor-not-allowed"
-                                        >
-                                          Ver video
+                                          Sin enlace
                                         </button>
                                       )}
                                     </div>
@@ -583,14 +612,14 @@ export default function CourseSessionList({
 
                               {exerciseGroups.length ? (
                                 <div className="space-y-2">
-                                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Pruebas</p>
+                                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Test de clase</p>
                                   {exerciseGroups.map((group) => (
                                     <div
                                       key={group.key}
                                       className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/15 bg-surface px-3 py-2"
                                     >
                                       <div>
-                                        <p className="text-sm font-semibold text-foreground">{group.title || "Prueba de clase"}</p>
+                                        <p className="text-sm font-semibold text-foreground">{group.title || "Test de clase"}</p>
                                         <p className="text-xs text-muted">
                                           {group.count} ejercicio{group.count === 1 ? "" : "s"}
                                         </p>
@@ -667,8 +696,11 @@ export default function CourseSessionList({
                     <p className="text-[11px] uppercase tracking-wide text-muted">
                       {item.resource_kind === "exercise_group"
                         ? `prueba (${item.exercise_count} ejercicio${item.exercise_count === 1 ? "" : "s"})`
-                        : item.type}
+                        : item.resource_kind === "primary_slide"
+                          ? "slide principal"
+                        : formatResourceTypeLabel(item.type)}
                     </p>
+                    {item.note ? <p className="text-xs text-muted">{item.note}</p> : null}
                     {item.url ? (
                       <a
                         href={item.url}
@@ -676,7 +708,9 @@ export default function CourseSessionList({
                         rel="noopener noreferrer"
                         className="text-xs text-primary underline-offset-2 hover:underline"
                       >
-                        {item.resource_kind === "exercise_group" && item.has_linked_exercise ? "Realizar prueba" : "Abrir recurso"}
+                        {item.resource_kind === "exercise_group" && item.has_linked_exercise
+                          ? "Realizar prueba"
+                          : getResourceActionLabel(item)}
                       </a>
                     ) : (
                       <p className="text-xs text-muted">Sin URL para este recurso.</p>

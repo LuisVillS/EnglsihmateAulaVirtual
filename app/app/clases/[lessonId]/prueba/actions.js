@@ -102,8 +102,20 @@ async function upsertAttemptAsStarted({ supabase, userId, lessonId, totalExercis
     .from("lesson_quiz_attempts")
     .upsert(payload, { onConflict: "user_id,lesson_id" });
 
+  if (error && isMissingLessonQuizRestartColumnError(error)) {
+    const fallbackPayload = { ...payload };
+    delete fallbackPayload.restart_count;
+    const { error: fallbackError } = await supabase
+      .from("lesson_quiz_attempts")
+      .upsert(fallbackPayload, { onConflict: "user_id,lesson_id" });
+    if (fallbackError) {
+      throw new Error(fallbackError.message || "No se pudo iniciar/reiniciar la prueba.");
+    }
+    return;
+  }
+
   if (error) {
-    throw error;
+    throw new Error(error.message || "No se pudo iniciar/reiniciar la prueba.");
   }
 }
 
@@ -132,7 +144,7 @@ export async function startLessonQuizAttempt(formData) {
         .eq("lesson_id", lessonId)
         .maybeSingle();
       if (query.error && !isMissingLessonQuizRestartColumnError(query.error)) {
-        throw query.error;
+        throw new Error(query.error.message || "No se pudo cargar el intento de prueba.");
       }
       existingAttempt = query.error ? null : query.data;
     }
@@ -147,7 +159,7 @@ export async function startLessonQuizAttempt(formData) {
     if (isMissingLessonQuizTableError(error)) {
       redirect(`/app/clases/${lessonId}/prueba?tracking=missing`);
     }
-    throw error;
+    throw error instanceof Error ? error : new Error(String(error?.message || "No se pudo iniciar la prueba."));
   }
 
   revalidateLessonQuizPaths(lessonId);
@@ -177,13 +189,15 @@ export async function restartLessonQuizAttempt(formData) {
           .eq("user_id", userId)
           .eq("lesson_id", lessonId)
           .maybeSingle();
-        if (fallbackQuery.error) throw fallbackQuery.error;
+        if (fallbackQuery.error) {
+          throw new Error(fallbackQuery.error.message || "No se pudo cargar el intento de prueba.");
+        }
         currentAttemptRow = {
           ...(fallbackQuery.data || {}),
           restart_count: 0,
         };
       } else {
-        throw primaryQuery.error;
+        throw new Error(primaryQuery.error.message || "No se pudo cargar el intento de prueba.");
       }
     }
     const currentAttempt = normalizeAttemptRow(currentAttemptRow, toInt(currentAttemptRow?.total_exercises, 0));
@@ -204,7 +218,7 @@ export async function restartLessonQuizAttempt(formData) {
     if (isMissingLessonQuizTableError(error)) {
       redirect(`/app/clases/${lessonId}/prueba?tracking=missing`);
     }
-    throw error;
+    throw error instanceof Error ? error : new Error(String(error?.message || "No se pudo reiniciar la prueba."));
   }
 
   revalidateLessonQuizPaths(lessonId);
@@ -258,13 +272,15 @@ export async function submitLessonQuizStep(formData) {
           .eq("user_id", userId)
           .eq("lesson_id", lessonId)
           .maybeSingle();
-        if (fallback.error) throw fallback.error;
+        if (fallback.error) {
+          throw new Error(fallback.error.message || "No se pudo cargar el intento de prueba.");
+        }
         existingAttempt = {
           ...(fallback.data || {}),
           restart_count: 0,
         };
       } else {
-        throw error;
+        throw new Error(error.message || "No se pudo cargar el intento de prueba.");
       }
     } else {
       existingAttempt = data || null;
@@ -277,7 +293,7 @@ export async function submitLessonQuizStep(formData) {
     if (isMissingLessonQuizTableError(error)) {
       redirect(`/app/clases/${lessonId}/prueba?tracking=missing`);
     }
-    throw error;
+    throw error instanceof Error ? error : new Error(String(error?.message || "No se pudo enviar el progreso."));
   }
 
   const current = normalizeAttemptRow(existingAttempt, totalExercises);
@@ -381,9 +397,18 @@ export async function submitLessonQuizStep(formData) {
     updated_at: nowIso,
   };
 
-  const { error: upsertError } = await supabase
+  let { error: upsertError } = await supabase
     .from("lesson_quiz_attempts")
     .upsert(payload, { onConflict: "user_id,lesson_id" });
+
+  if (upsertError && isMissingLessonQuizRestartColumnError(upsertError)) {
+    const fallbackPayload = { ...payload };
+    delete fallbackPayload.restart_count;
+    const { error: fallbackUpsertError } = await supabase
+      .from("lesson_quiz_attempts")
+      .upsert(fallbackPayload, { onConflict: "user_id,lesson_id" });
+    upsertError = fallbackUpsertError;
+  }
 
   if (upsertError) {
     if (isMissingLessonQuizTableError(upsertError)) {

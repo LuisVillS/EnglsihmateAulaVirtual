@@ -10,7 +10,7 @@ const TYPE_LABELS = {
   audio_match: "Audio Match",
   image_match: "Image Match",
   pairs: "Pairs",
-  cloze: "Cloze",
+  cloze: "Fill in the blanks",
 };
 
 function normalizeArray(value) {

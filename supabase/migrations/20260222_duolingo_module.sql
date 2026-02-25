@@ -243,7 +243,7 @@ alter table public.exercises
 
 alter table public.exercises
   add constraint exercises_status_check
-    check (status in ('draft', 'published', 'archived'));
+    check (status in ('draft', 'published', 'archived', 'deleted'));
 
 alter table public.exercises
   drop constraint if exists exercises_content_json_object_check;
@@ -252,11 +252,38 @@ alter table public.exercises
   add constraint exercises_content_json_object_check
     check (jsonb_typeof(content_json) = 'object');
 
+alter table public.exercises
+  add column if not exists skill_tag text;
+
+update public.exercises
+set skill_tag = case
+  when type = 'audio_match' then 'speaking'
+  when type in ('image_match', 'pairs') then 'reading'
+  else 'grammar'
+end
+where skill_tag is null;
+
+alter table public.exercises
+  alter column skill_tag set default 'grammar';
+
+alter table public.exercises
+  alter column skill_tag set not null;
+
+alter table public.exercises
+  drop constraint if exists exercises_skill_tag_check;
+
+alter table public.exercises
+  add constraint exercises_skill_tag_check
+    check (skill_tag in ('speaking', 'reading', 'grammar'));
+
 create index if not exists exercises_lesson_status_order_idx
   on public.exercises (lesson_id, status, ordering, created_at);
 
 create index if not exists exercises_type_status_idx
   on public.exercises (type, status);
+
+create index if not exists exercises_skill_tag_idx
+  on public.exercises (skill_tag, status, type);
 
 create table if not exists public.vocabulary (
   id uuid primary key default uuid_generate_v4(),
@@ -360,6 +387,73 @@ create index if not exists audio_cache_provider_voice_idx
   on public.audio_cache (provider, voice_id);
 
 -- -----------------------------------------------------------------------------
+-- Student-focused grading + skill history
+-- -----------------------------------------------------------------------------
+create table if not exists public.student_skill_overrides (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  level text not null,
+  listening_value_0_100 numeric(5, 2) not null,
+  updated_by uuid references auth.users (id) on delete set null,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique (user_id, level),
+  constraint student_skill_overrides_listening_check
+    check (listening_value_0_100 >= 0 and listening_value_0_100 <= 100)
+);
+
+create index if not exists student_skill_overrides_user_idx
+  on public.student_skill_overrides (user_id, updated_at desc);
+
+create table if not exists public.student_level_history (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  level text not null,
+  started_at timestamptz,
+  completed_at timestamptz,
+  final_grade_0_100 numeric(5, 2) not null default 0,
+  final_speaking_0_100 numeric(5, 2) not null default 0,
+  final_reading_0_100 numeric(5, 2) not null default 0,
+  final_grammar_0_100 numeric(5, 2) not null default 0,
+  final_listening_0_100 numeric(5, 2) not null default 0,
+  notes text,
+  updated_by uuid references auth.users (id) on delete set null,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique (user_id, level),
+  constraint student_level_history_grade_check
+    check (final_grade_0_100 >= 0 and final_grade_0_100 <= 100),
+  constraint student_level_history_speaking_check
+    check (final_speaking_0_100 >= 0 and final_speaking_0_100 <= 100),
+  constraint student_level_history_reading_check
+    check (final_reading_0_100 >= 0 and final_reading_0_100 <= 100),
+  constraint student_level_history_grammar_check
+    check (final_grammar_0_100 >= 0 and final_grammar_0_100 <= 100),
+  constraint student_level_history_listening_check
+    check (final_listening_0_100 >= 0 and final_listening_0_100 <= 100)
+);
+
+create index if not exists student_level_history_user_idx
+  on public.student_level_history (user_id, completed_at desc, updated_at desc);
+
+create table if not exists public.student_course_grades (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  level text not null,
+  admin_grade_0_100 numeric(5, 2) not null,
+  comment text,
+  updated_by uuid references auth.users (id) on delete set null,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique (user_id, level),
+  constraint student_course_grades_admin_grade_check
+    check (admin_grade_0_100 >= 0 and admin_grade_0_100 <= 100)
+);
+
+create index if not exists student_course_grades_user_idx
+  on public.student_course_grades (user_id, updated_at desc);
+
+-- -----------------------------------------------------------------------------
 -- RLS updates for published-only learning content + progress
 -- -----------------------------------------------------------------------------
 alter table public.lesson_subjects enable row level security;
@@ -367,6 +461,9 @@ alter table public.vocabulary enable row level security;
 alter table public.exercise_vocabulary enable row level security;
 alter table public.user_progress enable row level security;
 alter table public.audio_cache enable row level security;
+alter table public.student_skill_overrides enable row level security;
+alter table public.student_level_history enable row level security;
+alter table public.student_course_grades enable row level security;
 
 drop policy if exists "Public read lessons" on public.lessons;
 create policy "Published lessons read" on public.lessons
@@ -461,6 +558,172 @@ drop policy if exists "Admins manage audio cache" on public.audio_cache;
 create policy "Admins manage audio cache" on public.audio_cache
   for all using (public.is_admin())
   with check (public.is_admin());
+
+drop policy if exists "Students read own skill overrides" on public.student_skill_overrides;
+create policy "Students read own skill overrides" on public.student_skill_overrides
+  for select using (
+    auth.uid() = user_id
+    or public.is_admin()
+  );
+
+drop policy if exists "Admins manage skill overrides" on public.student_skill_overrides;
+create policy "Admins manage skill overrides" on public.student_skill_overrides
+  for all using (public.is_admin())
+  with check (public.is_admin());
+
+drop policy if exists "Students read own level history" on public.student_level_history;
+create policy "Students read own level history" on public.student_level_history
+  for select using (
+    auth.uid() = user_id
+    or public.is_admin()
+  );
+
+drop policy if exists "Admins manage level history" on public.student_level_history;
+create policy "Admins manage level history" on public.student_level_history
+  for all using (public.is_admin())
+  with check (public.is_admin());
+
+drop policy if exists "Students read own course grades" on public.student_course_grades;
+create policy "Students read own course grades" on public.student_course_grades
+  for select using (
+    auth.uid() = user_id
+    or public.is_admin()
+  );
+
+drop policy if exists "Admins manage course grades" on public.student_course_grades;
+create policy "Admins manage course grades" on public.student_course_grades
+  for all using (public.is_admin())
+  with check (public.is_admin());
+
+-- -----------------------------------------------------------------------------
+-- Template class slide requirements + exercise lifecycle cleanup
+-- -----------------------------------------------------------------------------
+alter table public.template_sessions
+  add column if not exists class_slide_url text;
+
+alter table public.template_sessions
+  add column if not exists class_slide_title text;
+
+alter table public.template_sessions
+  add column if not exists additional_slides jsonb;
+
+update public.template_sessions
+set additional_slides = '[]'::jsonb
+where additional_slides is null
+   or jsonb_typeof(additional_slides) <> 'array';
+
+alter table public.template_sessions
+  alter column additional_slides set default '[]'::jsonb;
+
+alter table public.template_sessions
+  alter column additional_slides set not null;
+
+alter table public.template_sessions
+  drop constraint if exists template_sessions_additional_slides_array_check;
+
+alter table public.template_sessions
+  add constraint template_sessions_additional_slides_array_check
+    check (jsonb_typeof(additional_slides) = 'array');
+
+create or replace function public.gc_orphan_archived_exercises()
+returns table (deleted_count int, kept_with_history_count int)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  deleted_rows int := 0;
+  kept_rows int := 0;
+begin
+  with kept_history as (
+    select e.id
+    from public.exercises e
+    where e.status in ('archived', 'deleted')
+      and not exists (
+        select 1
+        from public.template_session_items tsi
+        where tsi.exercise_id = e.id
+      )
+      and not exists (
+        select 1
+        from public.session_items si
+        where si.exercise_id = e.id
+      )
+      and not exists (
+        select 1
+        from public.lessons l
+        where l.id = e.lesson_id
+          and l.status in ('draft', 'published')
+      )
+      and exists (
+        select 1
+        from public.user_progress up
+        where up.exercise_id = e.id
+      )
+  )
+  select count(*)::int
+  into kept_rows
+  from kept_history;
+
+  delete from public.exercises e
+  where e.status in ('archived', 'deleted')
+    and not exists (
+      select 1
+      from public.template_session_items tsi
+      where tsi.exercise_id = e.id
+    )
+    and not exists (
+      select 1
+      from public.session_items si
+      where si.exercise_id = e.id
+    )
+    and not exists (
+      select 1
+      from public.lessons l
+      where l.id = e.lesson_id
+        and l.status in ('draft', 'published')
+    )
+    and not exists (
+      select 1
+      from public.user_progress up
+      where up.exercise_id = e.id
+    );
+
+  get diagnostics deleted_rows = row_count;
+  return query select deleted_rows, kept_rows;
+end;
+$$;
+
+do $$
+begin
+  begin
+    create extension if not exists pg_cron;
+  exception when others then
+    -- pg_cron puede no estar disponible en todos los entornos
+    null;
+  end;
+
+  if exists (
+    select 1
+    from pg_extension
+    where extname = 'pg_cron'
+  ) then
+    if not exists (
+      select 1
+      from cron.job
+      where jobname = 'gc_orphan_archived_exercises_daily'
+    ) then
+      perform cron.schedule(
+        'gc_orphan_archived_exercises_daily',
+        '15 3 * * *',
+        'select public.gc_orphan_archived_exercises();'
+      );
+    end if;
+  end if;
+exception when others then
+  null;
+end;
+$$;
 
 -- -----------------------------------------------------------------------------
 -- Fixed admin(s): always keep specific email(s) as admin
@@ -562,4 +825,3 @@ for each row
 execute function public.prevent_fixed_admin_delete();
 
 select public.sync_fixed_admins_from_auth();
-

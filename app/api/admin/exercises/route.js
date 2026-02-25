@@ -5,6 +5,10 @@ import {
   prepareExercisePayload,
   syncExerciseVocabulary,
 } from "@/lib/duolingo/exercises";
+import {
+  archiveExercisesIfOrphaned,
+  runExerciseGarbageCollection,
+} from "@/lib/duolingo/exercise-lifecycle";
 
 function cleanText(value) {
   if (value == null) return "";
@@ -115,7 +119,7 @@ export async function PUT(request) {
 
     const { data: existing, error: existingError } = await auth.db
       .from("exercises")
-      .select("id, lesson_id, revision")
+      .select("id, lesson_id, revision, status, skill_tag")
       .eq("id", exerciseId)
       .maybeSingle();
 
@@ -129,11 +133,18 @@ export async function PUT(request) {
     if (!existing?.id) {
       return NextResponse.json({ error: "Ejercicio no encontrado." }, { status: 404 });
     }
+    if (String(existing.status || "").trim().toLowerCase() === "deleted") {
+      return NextResponse.json(
+        { error: "Ejercicio eliminado. No se puede actualizar." },
+        { status: 400 }
+      );
+    }
 
     const payload = await prepareExercisePayload({
       input: {
         ...body,
         lesson_id: cleanText(body.lesson_id || body.lessonId) || existing.lesson_id,
+        skill_tag: cleanText(body.skill_tag || body.skillTag) || existing.skill_tag,
         revision: Number(existing.revision || 1) + 1,
       },
       actorId: auth.user.id,
@@ -187,13 +198,30 @@ export async function DELETE(request) {
       return NextResponse.json({ error: "id es obligatorio." }, { status: 400 });
     }
 
-    const { error } = await auth.db.from("exercises").delete().eq("id", exerciseId);
+    const actorId = auth.user?.id || null;
+    const { error } = await auth.db
+      .from("exercises")
+      .update({
+        status: "archived",
+        updated_at: new Date().toISOString(),
+        updated_by: actorId,
+        last_editor: actorId,
+      })
+      .eq("id", exerciseId);
     if (error) {
       return NextResponse.json(
-        { error: error.message || "No se pudo eliminar ejercicio." },
+        { error: error.message || "No se pudo archivar ejercicio." },
         { status: 400 }
       );
     }
+
+    await archiveExercisesIfOrphaned({
+      db: auth.db,
+      exerciseIds: [exerciseId],
+      actorId,
+      ignoreLessonReference: true,
+    });
+    await runExerciseGarbageCollection({ db: auth.db, actorId });
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -204,4 +232,3 @@ export async function DELETE(request) {
     );
   }
 }
-

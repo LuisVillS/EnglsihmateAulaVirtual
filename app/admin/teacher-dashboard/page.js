@@ -1,60 +1,44 @@
 ﻿import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
-import { loadTeacherDashboardData } from "@/lib/duolingo/teacher-analytics";
+import TeacherDashboardStudentsTable from "@/components/teacher-dashboard-students-table";
+import { loadTeacherStudentsOverview } from "@/lib/student-skills";
 
 export const metadata = {
   title: "Teacher Dashboard | Admin",
 };
 
-function MetricCard({ label, value }) {
+const LEVEL_OPTIONS = ["A1", "A2", "B1", "B2", "C1", "C2"];
+
+function cleanText(value) {
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function average(values = []) {
+  const list = values
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (!list.length) return null;
+  const total = list.reduce((sum, value) => sum + value, 0);
+  return Math.round((total / list.length) * 10) / 10;
+}
+
+function MetricCard({ label, value, hint }) {
   return (
     <article className="rounded-2xl border border-border bg-surface p-4">
-      <p className="text-xs uppercase tracking-[0.25em] text-muted">{label}</p>
-      <p className="mt-2 text-3xl font-semibold">{value}</p>
+      <p className="text-xs uppercase tracking-[0.22em] text-muted">{label}</p>
+      <p className="mt-2 text-3xl font-semibold text-foreground">{value}</p>
+      {hint ? <p className="mt-1 text-xs text-muted">{hint}</p> : null}
     </article>
   );
 }
 
-function RankingTable({ title, rows, keyLabel = "item", valueLabel = "errores" }) {
-  return (
-    <article className="rounded-2xl border border-border bg-surface p-4">
-      <h3 className="text-lg font-semibold">{title}</h3>
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[280px] text-sm">
-          <thead>
-            <tr className="text-left text-muted">
-              <th className="pb-2">{keyLabel}</th>
-              <th className="pb-2 text-right">{valueLabel}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows || []).map((row) => (
-              <tr key={`${row.key}-${row.count}`} className="border-t border-border/50">
-                <td className="py-2">{row.key}</td>
-                <td className="py-2 text-right font-semibold">{row.count}</td>
-              </tr>
-            ))}
-            {!rows?.length ? (
-              <tr>
-                <td className="py-2 text-muted" colSpan={2}>
-                  Sin datos en este filtro.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    </article>
-  );
-}
-
-export default async function TeacherDashboardPage({ searchParams }) {
-  const params = searchParams || {};
-  const from = params.from || "";
-  const to = params.to || "";
-  const level = params.level || "";
-  const commissionId = params.commission_id || "";
+export default async function TeacherDashboardPage({ searchParams: searchParamsPromise }) {
+  const searchParams = (await searchParamsPromise) || {};
+  const commissionId = cleanText(searchParams?.commission || searchParams?.commission_id || searchParams?.commissionId);
+  const level = cleanText(searchParams?.level).toUpperCase();
+  const query = cleanText(searchParams?.q);
 
   const supabase = await createSupabaseServerClient();
   const {
@@ -77,119 +61,75 @@ export default async function TeacherDashboardPage({ searchParams }) {
 
   const db = hasServiceRoleClient() ? getServiceSupabaseClient() : supabase;
 
-  const [dashboard, commissionsResult] = await Promise.all([
-    loadTeacherDashboardData({
-      db,
-      filters: {
-        from,
-        to,
-        level,
-        commissionId,
-      },
-    }),
-    db
-      .from("course_commissions")
-      .select("id, course_level, commission_number")
-      .order("course_level", { ascending: true })
-      .order("commission_number", { ascending: true }),
-  ]);
+  const dashboard = await loadTeacherStudentsOverview({
+    db,
+    filters: { commissionId, level, query },
+  });
 
-  const commissions = commissionsResult.data || [];
+  const students = dashboard.students || [];
+  const activeCount = students.filter((student) => student.status === "active").length;
+  const inactiveCount = Math.max(0, students.length - activeCount);
+  const courseAverage = average(students.map((student) => student.course_average));
 
   return (
     <section className="mx-auto w-full max-w-7xl space-y-6 px-6 py-8 text-foreground">
       <header className="rounded-3xl border border-border bg-surface p-6">
         <p className="text-xs uppercase tracking-[0.3em] text-muted">Teacher Dashboard</p>
-        <h1 className="mt-2 text-3xl font-semibold">Insights por clase y ejercicio</h1>
+        <h1 className="mt-2 text-3xl font-semibold">Seguimiento de alumnos</h1>
         <p className="mt-2 text-sm text-muted">
-          Métricas de accuracy, streak promedio y ranking de errores para acciones docentes.
+          Vista rápida por estudiante con filtros por comisión y nivel. Desde aquí puedes abrir perfil y editar nota.
         </p>
       </header>
 
-      <form className="grid gap-3 rounded-2xl border border-border bg-surface p-4 md:grid-cols-5">
-        <input
-          type="date"
-          name="from"
-          defaultValue={from}
-          className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
-        />
-        <input
-          type="date"
-          name="to"
-          defaultValue={to}
-          className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
-        />
-        <input
-          type="text"
-          name="level"
-          defaultValue={level}
-          placeholder="A1 / A2 / B1"
-          className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
-        />
+      <form className="grid gap-3 rounded-2xl border border-border bg-surface p-4 md:grid-cols-[1.2fr_0.8fr_1fr_auto]">
         <select
-          name="commission_id"
+          name="commission"
           defaultValue={commissionId}
           className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
         >
           <option value="">Todas las comisiones</option>
-          {commissions.map((commission) => (
+          {(dashboard.commissions || []).map((commission) => (
             <option key={commission.id} value={commission.id}>
               {commission.course_level} - #{commission.commission_number}
             </option>
           ))}
         </select>
+        <select
+          name="level"
+          defaultValue={level}
+          className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
+        >
+          <option value="">Todos los niveles</option>
+          {LEVEL_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <input
+          type="search"
+          name="q"
+          defaultValue={query}
+          placeholder="Buscar por nombre o código"
+          className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
+        />
         <button type="submit" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
           Filtrar
         </button>
       </form>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard label="Attempts" value={dashboard.totals.attempts} />
-        <MetricCard label="Accuracy" value={`${dashboard.totals.accuracy}%`} />
-        <MetricCard label="Students" value={dashboard.totals.students} />
-        <MetricCard label="Avg Streak" value={dashboard.totals.averageStreak} />
+        <MetricCard label="Alumnos" value={students.length} />
+        <MetricCard label="Activos" value={activeCount} />
+        <MetricCard label="Inactivos" value={inactiveCount} />
+        <MetricCard
+          label="Promedio curso"
+          value={courseAverage == null ? "--" : `${courseAverage}%`}
+          hint="Componente de nota actual del alumno"
+        />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <RankingTable title="Errores por lección" rows={dashboard.rankings.byLesson} keyLabel="Lección" />
-        <RankingTable title="Errores por tema" rows={dashboard.rankings.bySubject} keyLabel="Tema" />
-        <RankingTable title="Errores por tipo" rows={dashboard.rankings.byType} keyLabel="Tipo" />
-      </div>
-
-      <article className="rounded-2xl border border-border bg-surface p-4">
-        <h3 className="text-lg font-semibold">Ejercicios más fallados</h3>
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[680px] text-sm">
-            <thead>
-              <tr className="text-left text-muted">
-                <th className="pb-2">Exercise ID</th>
-                <th className="pb-2">Lección</th>
-                <th className="pb-2">Tema</th>
-                <th className="pb-2">Tipo</th>
-                <th className="pb-2 text-right">Errores</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(dashboard.rankings.hardestExercises || []).map((row) => (
-                <tr key={row.exercise_id} className="border-t border-border/50">
-                  <td className="py-2 font-mono text-xs">{row.exercise_id}</td>
-                  <td className="py-2">{row.lesson_title}</td>
-                  <td className="py-2">{row.subject}</td>
-                  <td className="py-2 uppercase">{row.type}</td>
-                  <td className="py-2 text-right font-semibold">{row.errors}</td>
-                </tr>
-              ))}
-              {!dashboard.rankings.hardestExercises?.length ? (
-                <tr>
-                  <td className="py-2 text-muted" colSpan={5}>
-                    Sin intentos registrados para este filtro.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </article>
+      <TeacherDashboardStudentsTable students={students} />
     </section>
   );
 }

@@ -19,7 +19,11 @@ import {
 } from "@/lib/course-sessions";
 import { getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { prepareExercisePayload } from "@/lib/duolingo/exercises";
-import { EXERCISE_TYPE_VALUES } from "@/lib/duolingo/constants";
+import { EXERCISE_SKILL_TAG_VALUES, EXERCISE_TYPE_VALUES } from "@/lib/duolingo/constants";
+import {
+  archiveExercisesIfOrphaned,
+  runExerciseGarbageCollection,
+} from "@/lib/duolingo/exercise-lifecycle";
 
 async function requireAdmin() {
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
@@ -265,10 +269,114 @@ function normalizeExerciseType(value) {
   return EXERCISE_TYPE_VALUES.includes(raw) ? raw : "cloze";
 }
 
+function defaultSkillTagByType(type) {
+  const normalizedType = normalizeExerciseType(type);
+  if (normalizedType === "audio_match") return "speaking";
+  if (normalizedType === "image_match" || normalizedType === "pairs") return "reading";
+  return "grammar";
+}
+
+function normalizeExerciseSkillTag(value, type) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (EXERCISE_SKILL_TAG_VALUES.includes(raw)) return raw;
+  return defaultSkillTagByType(type);
+}
+
 function normalizeExerciseStatus(value) {
   const raw = String(value || "").trim().toLowerCase();
-  if (raw === "published" || raw === "archived") return raw;
+  if (raw === "published" || raw === "archived" || raw === "deleted") return raw;
   return "draft";
+}
+
+function parseAdditionalSlidesJson(rawValue) {
+  if (!rawValue) return [];
+
+  const raw = String(rawValue || "").trim();
+  if (!raw) return [];
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = null;
+  }
+
+  if (parsed == null) {
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return lines
+      .map((line) => {
+        const [maybeTitle, maybeUrl] = line.split("|");
+        if (maybeUrl) {
+          const title = String(maybeTitle || "").trim();
+          const url = String(maybeUrl || "").trim();
+          if (!url) return null;
+          return { title, url };
+        }
+        return { title: "", url: line };
+      })
+      .filter(Boolean);
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("Slides adicionales inválidos. Debe ser una lista o líneas URL.");
+  }
+
+  const normalized = parsed
+    .map((item) => {
+      if (typeof item === "string") {
+        const url = item.trim();
+        if (!url) return null;
+        return { title: "", url };
+      }
+      if (!item || typeof item !== "object") return null;
+      const title = String(item.title || "").trim();
+      const url = String(item.url || "").trim();
+      if (!url) return null;
+      return { title, url };
+    })
+    .filter(Boolean);
+
+  return normalized;
+}
+
+async function getAdminActorId(supabase) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user?.id || null;
+}
+
+async function collectTemplateExerciseIdsBySessionIds(supabase, sessionIds = []) {
+  const safeSessionIds = Array.from(new Set((sessionIds || []).map((value) => String(value || "").trim()).filter(Boolean)));
+  if (!safeSessionIds.length) return [];
+
+  let query = supabase
+    .from("template_session_items")
+    .select("exercise_id")
+    .in("template_session_id", safeSessionIds)
+    .eq("type", "exercise");
+
+  let result = await query;
+  if (result.error && getMissingTableName(result.error)?.endsWith("template_session_items")) {
+    return [];
+  }
+  if (result.error && getMissingColumnFromError(result.error) === "exercise_id") {
+    return [];
+  }
+  if (result.error) {
+    throw new Error(result.error.message || "No se pudieron cargar ejercicios vinculados de plantilla.");
+  }
+
+  return Array.from(
+    new Set(
+      (result.data || [])
+        .map((row) => String(row?.exercise_id || "").trim())
+        .filter(Boolean)
+    )
+  );
 }
 
 function buildPracticeExerciseUrl(exerciseId, lessonId = null) {
@@ -531,6 +639,24 @@ function resolveTemplateSessionPosition(row, sessionsPerMonth) {
   };
 }
 
+function normalizeTemplateAdditionalSlides(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => {
+      if (typeof item === "string") {
+        const url = item.trim();
+        if (!url) return null;
+        return { title: "", url };
+      }
+      if (!item || typeof item !== "object") return null;
+      const title = String(item.title || "").trim();
+      const url = String(item.url || "").trim();
+      if (!url) return null;
+      return { title, url };
+    })
+    .filter(Boolean);
+}
+
 async function ensureTemplateSessionSkeleton(supabase, templateId, frequency) {
   const structure = getTemplateStructure(frequency);
   if (!structure) {
@@ -646,9 +772,21 @@ async function ensureTemplateSessionSkeleton(supabase, templateId, frequency) {
   }
 
   if (staleRows.length) {
+    const staleExerciseIds = await collectTemplateExerciseIdsBySessionIds(supabase, staleRows);
     const { error: deleteError } = await supabase.from("template_sessions").delete().in("id", staleRows);
     if (deleteError) {
       return { error: deleteError.message || "No se pudo limpiar sesiones fuera de rango." };
+    }
+
+    if (staleExerciseIds.length) {
+      const actorId = await getAdminActorId(supabase);
+      await archiveExercisesIfOrphaned({
+        db: supabase,
+        exerciseIds: staleExerciseIds,
+        actorId,
+        ignoreLessonReference: true,
+      });
+      await runExerciseGarbageCollection({ db: supabase, actorId });
     }
   }
 
@@ -692,12 +830,31 @@ async function loadTemplateMaterialBySessionIndex(supabase, { courseLevel, frequ
     return { templateFound: false, byMonthAndSession: new Map() };
   }
 
-  const { data: templateSessions, error: sessionError } = await supabase
+  let sessionsResult = await supabase
     .from("template_sessions")
-    .select("id, month_index, session_in_month, session_in_cycle, title")
+    .select(
+      "id, month_index, session_in_month, session_in_cycle, title, class_slide_url, class_slide_title, additional_slides"
+    )
     .eq("template_id", template.id)
     .order("month_index", { ascending: true })
     .order("session_in_month", { ascending: true });
+
+  const missingSessionColumn = getMissingColumnFromError(sessionsResult.error);
+  if (
+    sessionsResult.error &&
+    (missingSessionColumn === "class_slide_url" ||
+      missingSessionColumn === "class_slide_title" ||
+      missingSessionColumn === "additional_slides")
+  ) {
+    sessionsResult = await supabase
+      .from("template_sessions")
+      .select("id, month_index, session_in_month, session_in_cycle, title")
+      .eq("template_id", template.id)
+      .order("month_index", { ascending: true })
+      .order("session_in_month", { ascending: true });
+  }
+
+  const { data: templateSessions, error: sessionError } = sessionsResult;
 
   if (sessionError) {
     const missingTable = getMissingTableName(sessionError);
@@ -752,7 +909,8 @@ async function loadTemplateMaterialBySessionIndex(supabase, { courseLevel, frequ
       const { data: exerciseRows, error: exerciseRowsError } = await supabase
         .from("exercises")
         .select("id, lesson_id")
-        .in("id", exerciseIds);
+        .in("id", exerciseIds)
+        .in("status", ["draft", "published"]);
       if (!exerciseRowsError) {
         lessonIdByExerciseId = new Map(
           (exerciseRows || []).map((exercise) => [String(exercise.id || "").trim(), exercise.lesson_id || null])
@@ -780,6 +938,11 @@ async function loadTemplateMaterialBySessionIndex(supabase, { courseLevel, frequ
       {
         title: row.title || null,
         items: itemsByTemplateSessionId.get(row.id) || [],
+        classSlide: {
+          title: String(row.class_slide_title || "").trim(),
+          url: String(row.class_slide_url || "").trim(),
+        },
+        additionalSlides: normalizeTemplateAdditionalSlides(row.additional_slides),
       }
     );
   }
@@ -922,6 +1085,7 @@ async function regenerateCommissionSessions(supabase, commission) {
         buildTemplateSessionKey(monthIndex, sessionInMonth)
       );
       if (!payload) continue;
+      const insertedSlideUrls = new Set();
       if (payload.title && payload.title.trim()) {
         const updateResult = await supabase
           .from("course_sessions")
@@ -931,6 +1095,34 @@ async function regenerateCommissionSessions(supabase, commission) {
           return { error: updateResult.error.message || "No se pudo copiar el titulo desde plantilla." };
         }
       }
+      const classSlideUrl = String(payload.classSlide?.url || "").trim();
+      if (classSlideUrl) {
+        itemRows.push({
+          session_id: session.id,
+          type: "slides",
+          title: payload.classSlide?.title || "Slide de clase",
+          url: classSlideUrl,
+          exercise_id: null,
+          note: "primary_slide",
+        });
+        insertedSlideUrls.add(classSlideUrl);
+      }
+
+      const additionalSlides = Array.isArray(payload.additionalSlides) ? payload.additionalSlides : [];
+      for (const [idx, slide] of additionalSlides.entries()) {
+        const slideUrl = String(slide?.url || "").trim();
+        if (!slideUrl || insertedSlideUrls.has(slideUrl)) continue;
+        itemRows.push({
+          session_id: session.id,
+          type: "slides",
+          title: String(slide?.title || "").trim() || `Slide adicional ${idx + 1}`,
+          url: slideUrl,
+          exercise_id: null,
+          note: "extra_slide",
+        });
+        insertedSlideUrls.add(slideUrl);
+      }
+
       for (const item of payload.items) {
         const normalizedType = normalizeTemplateItemType(item.type);
         const resolvedExerciseId = normalizedType === "exercise"
@@ -939,6 +1131,11 @@ async function regenerateCommissionSessions(supabase, commission) {
         const resolvedUrl = normalizedType === "exercise"
           ? buildPracticeExerciseUrl(resolvedExerciseId, item.lesson_id || null)
           : item.url;
+        if (normalizedType === "slides") {
+          const candidateUrl = String(resolvedUrl || "").trim();
+          if (!candidateUrl || insertedSlideUrls.has(candidateUrl)) continue;
+          insertedSlideUrls.add(candidateUrl);
+        }
         itemRows.push({
           session_id: session.id,
           type: normalizedType === "slides" ? "slides" : normalizedType,
@@ -1317,6 +1514,26 @@ export async function deleteCourseTemplate(formData) {
   const templateId = getText(formData, "templateId");
   if (!templateId) return { error: "Plantilla invalida." };
 
+  let exerciseIds = [];
+  try {
+    const { data: sessionsRows, error: sessionsLookupError } = await supabase
+      .from("template_sessions")
+      .select("id")
+      .eq("template_id", templateId);
+    if (sessionsLookupError) {
+      const missingTable = getMissingTableName(sessionsLookupError);
+      if (!missingTable?.endsWith("template_sessions")) {
+        return { error: sessionsLookupError.message || "No se pudieron validar sesiones de plantilla." };
+      }
+    }
+    exerciseIds = await collectTemplateExerciseIdsBySessionIds(
+      supabase,
+      (sessionsRows || []).map((row) => row.id)
+    );
+  } catch (error) {
+    return { error: error?.message || "No se pudieron validar ejercicios de la plantilla." };
+  }
+
   const { error } = await supabase.from("course_templates").delete().eq("id", templateId);
   if (error) {
     const missingTable = getMissingTableName(error);
@@ -1324,6 +1541,17 @@ export async function deleteCourseTemplate(formData) {
       return { error: "Falta crear la tabla course_templates. Ejecuta SQL actualizado." };
     }
     return { error: error.message || "No se pudo eliminar la plantilla." };
+  }
+
+  if (exerciseIds.length) {
+    const actorId = await getAdminActorId(supabase);
+    await archiveExercisesIfOrphaned({
+      db: supabase,
+      exerciseIds,
+      actorId,
+      ignoreLessonReference: true,
+    });
+    await runExerciseGarbageCollection({ db: supabase, actorId });
   }
 
   revalidateTemplateAdminPaths();
@@ -1340,9 +1568,20 @@ export async function upsertTemplateClass(prevState, maybeFormData) {
   const templateSessionId = getText(formData, "templateSessionId");
   const templateId = getText(formData, "templateId");
   const title = getText(formData, "title");
+  const classSlideUrl = getText(formData, "classSlideUrl");
+  const classSlideTitle = getText(formData, "classSlideTitle");
+  const additionalSlidesRaw =
+    getText(formData, "additionalSlidesInput") || getText(formData, "additionalSlidesJson");
 
   if (!templateSessionId || !title) {
     return { error: "Completa el titulo de la clase." };
+  }
+
+  let additionalSlides = [];
+  try {
+    additionalSlides = parseAdditionalSlidesJson(additionalSlidesRaw || "[]");
+  } catch (error) {
+    return { error: error?.message || "Slides adicionales invalidos." };
   }
 
   const removeItemIds = new Set(getTextArray(formData, "removeItemId").filter(Boolean));
@@ -1402,7 +1641,12 @@ export async function upsertTemplateClass(prevState, maybeFormData) {
 
   const { error: updateSessionError } = await supabase
     .from("template_sessions")
-    .update({ title })
+    .update({
+      title,
+      class_slide_url: classSlideUrl || null,
+      class_slide_title: classSlideTitle || null,
+      additional_slides: additionalSlides,
+    })
     .eq("id", templateSessionId);
   if (updateSessionError) {
     const missingTable = getMissingTableName(updateSessionError);
@@ -1413,6 +1657,7 @@ export async function upsertTemplateClass(prevState, maybeFormData) {
   }
 
   if (deleteIds.length) {
+    const deletedExerciseIds = await collectTemplateExerciseIdsBySessionIds(supabase, [templateSessionId]);
     const { error: deleteItemsError } = await supabase
       .from("template_session_items")
       .delete()
@@ -1424,6 +1669,15 @@ export async function upsertTemplateClass(prevState, maybeFormData) {
         return { error: "Falta crear la tabla template_session_items. Ejecuta SQL actualizado." };
       }
       return { error: deleteItemsError.message || "No se pudieron eliminar materiales de plantilla." };
+    }
+    if (deletedExerciseIds.length) {
+      const actorId = await getAdminActorId(supabase);
+      await archiveExercisesIfOrphaned({
+        db: supabase,
+        exerciseIds: deletedExerciseIds,
+        actorId,
+        ignoreLessonReference: true,
+      });
     }
   }
 
@@ -1453,6 +1707,8 @@ export async function upsertTemplateClass(prevState, maybeFormData) {
     }
   }
 
+  const actorId = await getAdminActorId(supabase);
+  await runExerciseGarbageCollection({ db: supabase, actorId });
   revalidateTemplateAdminPaths(templateId);
   return { success: true };
 }
@@ -1467,18 +1723,42 @@ export async function upsertTemplateSession(prevState, maybeFormData) {
   const templateSessionId = getText(formData, "templateSessionId");
   const templateId = getText(formData, "templateId") || null;
   const title = getText(formData, "title");
+  const classSlideUrl = getText(formData, "classSlideUrl");
+  const classSlideTitle = getText(formData, "classSlideTitle");
+  const additionalSlidesRaw =
+    getText(formData, "additionalSlidesInput") || getText(formData, "additionalSlidesJson");
   if (!templateSessionId || !title) {
     return { error: "Completa el titulo de la sesion." };
   }
 
+  let additionalSlides = [];
+  try {
+    additionalSlides = parseAdditionalSlidesJson(additionalSlidesRaw || "[]");
+  } catch (error) {
+    return { error: error?.message || "Slides adicionales invalidos." };
+  }
+
   const { error } = await supabase
     .from("template_sessions")
-    .update({ title })
+    .update({
+      title,
+      class_slide_url: classSlideUrl || null,
+      class_slide_title: classSlideTitle || null,
+      additional_slides: additionalSlides,
+    })
     .eq("id", templateSessionId);
   if (error) {
     const missingTable = getMissingTableName(error);
     if (missingTable?.endsWith("template_sessions")) {
       return { error: "Falta crear la tabla template_sessions. Ejecuta SQL actualizado." };
+    }
+    const missingColumn = getMissingColumnFromError(error);
+    if (
+      missingColumn === "class_slide_url" ||
+      missingColumn === "class_slide_title" ||
+      missingColumn === "additional_slides"
+    ) {
+      return { error: "Falta actualizar template_sessions con campos de slide principal. Ejecuta SQL actualizado." };
     }
     return { error: error.message || "No se pudo actualizar la sesion de plantilla." };
   }
@@ -1506,6 +1786,24 @@ export async function upsertTemplateSessionItem(prevState, maybeFormData) {
     return { error: "Clase de plantilla inválida." };
   }
 
+  let previousExerciseId = null;
+  if (itemId) {
+    const { data: existingItem, error: existingItemError } = await supabase
+      .from("template_session_items")
+      .select("id, type, exercise_id")
+      .eq("id", itemId)
+      .maybeSingle();
+
+    if (existingItemError) {
+      const missingColumn = getMissingColumnFromError(existingItemError);
+      if (missingColumn !== "exercise_id") {
+        return { error: existingItemError.message || "No se pudo validar material previo." };
+      }
+    } else {
+      previousExerciseId = String(existingItem?.exercise_id || "").trim() || null;
+    }
+  }
+
   let payload = {
     template_session_id: templateSessionId,
     type,
@@ -1530,6 +1828,9 @@ export async function upsertTemplateSessionItem(prevState, maybeFormData) {
     }
     if (!exercise?.id) {
       return { error: "El ejercicio seleccionado no existe." };
+    }
+    if (String(exercise.status || "").trim().toLowerCase() === "deleted") {
+      return { error: "El ejercicio seleccionado está eliminado y no se puede asignar." };
     }
 
     const normalizedExerciseStatus = String(exercise.status || "").trim().toLowerCase();
@@ -1607,6 +1908,18 @@ export async function upsertTemplateSessionItem(prevState, maybeFormData) {
     return { error: result.error.message || "No se pudo guardar el material de plantilla." };
   }
 
+  const nextExerciseId = type === "exercise" ? String(payload.exercise_id || "").trim() : "";
+  if (previousExerciseId && previousExerciseId !== nextExerciseId) {
+    const actorId = await getAdminActorId(supabase);
+    await archiveExercisesIfOrphaned({
+      db: supabase,
+      exerciseIds: [previousExerciseId],
+      actorId,
+      ignoreLessonReference: true,
+    });
+    await runExerciseGarbageCollection({ db: supabase, actorId });
+  }
+
   revalidateTemplateAdminPaths(templateId);
   return { success: true };
 }
@@ -1623,6 +1936,10 @@ export async function createTemplateSessionExercise(prevState, maybeFormData) {
     const requestedTemplateId = getText(formData, "templateId");
     const requestedLessonId = getText(formData, "lessonId");
     const requestedType = normalizeExerciseType(getText(formData, "type"));
+    const requestedSkillTag = normalizeExerciseSkillTag(
+      getText(formData, "skillTag") || getText(formData, "skill_tag"),
+      requestedType
+    );
     const requestedStatus = normalizeExerciseStatus(getText(formData, "status"));
     const requestedTitle = getText(formData, "title");
     const contentInput = getText(formData, "contentJson");
@@ -1704,6 +2021,7 @@ export async function createTemplateSessionExercise(prevState, maybeFormData) {
       input: {
         lesson_id: lessonId,
         type: requestedType,
+        skill_tag: requestedSkillTag,
         status: requestedStatus,
         content_json: contentJson,
         ordering: 1,
@@ -1795,6 +2113,7 @@ export async function createTemplateSessionExerciseBatch(prevState, maybeFormDat
     payloadFormData.set("templateSessionId", templateSessionId);
     payloadFormData.set("lessonId", String(row.lessonId || fallbackLessonId || "").trim());
     payloadFormData.set("type", String(row.type || "cloze").trim());
+    payloadFormData.set("skillTag", String(row.skillTag || "").trim());
     payloadFormData.set("status", String(row.status || "published").trim());
     payloadFormData.set("title", String(row.title || "").trim());
 
@@ -1841,9 +2160,30 @@ export async function deleteTemplateSessionItem(formData) {
   const templateId = getText(formData, "templateId") || null;
   if (!itemId) return { error: "Material invalido." };
 
+  let linkedExerciseId = null;
+  const { data: existingItem, error: existingItemError } = await supabase
+    .from("template_session_items")
+    .select("id, exercise_id")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (!existingItemError) {
+    linkedExerciseId = String(existingItem?.exercise_id || "").trim() || null;
+  }
+
   const { error } = await supabase.from("template_session_items").delete().eq("id", itemId);
   if (error) {
     return { error: error.message || "No se pudo eliminar el material." };
+  }
+
+  if (linkedExerciseId) {
+    const actorId = await getAdminActorId(supabase);
+    await archiveExercisesIfOrphaned({
+      db: supabase,
+      exerciseIds: [linkedExerciseId],
+      actorId,
+      ignoreLessonReference: true,
+    });
+    await runExerciseGarbageCollection({ db: supabase, actorId });
   }
   revalidateTemplateAdminPaths(templateId);
   return { success: true };
@@ -2154,7 +2494,25 @@ export async function deleteLesson(formData) {
   const id = formData.get("lessonId")?.toString();
   if (!id) return;
 
-  await supabase.from("lessons").delete().eq("id", id);
+  const actorId = await getAdminActorId(supabase);
+
+  await supabase
+    .from("lessons")
+    .update({ status: "archived", updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  await supabase
+    .from("exercises")
+    .update({
+      status: "archived",
+      updated_at: new Date().toISOString(),
+      updated_by: actorId,
+      last_editor: actorId,
+    })
+    .eq("lesson_id", id)
+    .in("status", ["draft", "published"]);
+
+  await runExerciseGarbageCollection({ db: supabase, actorId });
   revalidatePath("/admin");
 }
 
@@ -2163,23 +2521,60 @@ export async function upsertExercise(formData) {
   const id = formData.get("exerciseId")?.toString();
   const lessonId = formData.get("lessonId")?.toString();
   const kind = formData.get("kind")?.toString() || "listening";
+  const requestedType = normalizeExerciseType(
+    getText(formData, "type") || (kind === "listening" ? "audio_match" : "cloze")
+  );
+  const requestedSkillTag = normalizeExerciseSkillTag(
+    getText(formData, "skillTag") || getText(formData, "skill_tag"),
+    requestedType
+  );
   const prompt = getText(formData, "prompt");
   const answer = getText(formData, "answer");
   const choicesInput = getText(formData, "choices");
   const audioUrl = getText(formData, "audioUrl");
   const r2Key = getText(formData, "r2Key");
+  const actorId = await getAdminActorId(supabase);
+
+  const choices = choicesInput
+    ? choicesInput.split("\n").map((choice) => choice.trim()).filter(Boolean)
+    : [];
+
+  const contentJson = requestedType === "audio_match"
+    ? {
+      text_target: prompt || answer || "How are you?",
+      mode: "dictation",
+      provider: "elevenlabs",
+      audio_url: audioUrl || null,
+      r2_key: r2Key || null,
+    }
+    : {
+      sentence: prompt || "Complete the sentence: ____",
+      options: choices,
+      correct_index: choices.length
+        ? Math.max(0, choices.findIndex((choice) => choice.toLowerCase() === answer.toLowerCase()))
+        : null,
+      answer: answer || (choices.length ? choices[0] : "answer"),
+    };
+
+  const normalizedPayload = await prepareExercisePayload({
+    input: {
+      lesson_id: lessonId,
+      type: requestedType,
+      skill_tag: requestedSkillTag,
+      status: normalizeExerciseStatus(getText(formData, "status") || "draft"),
+      content_json: contentJson,
+      ordering: 1,
+    },
+    actorId,
+    db: supabase,
+    forcePublishValidation: false,
+  });
 
   const payload = {
+    ...normalizedPayload,
     kind,
-    prompt,
-    lesson_id: lessonId,
-    payload: {
-      answer,
-      audio_url: audioUrl || null,
-      choices: choicesInput
-        ? choicesInput.split("\n").map((choice) => choice.trim()).filter(Boolean)
-        : [],
-    },
+    prompt: normalizedPayload.prompt || prompt,
+    payload: normalizedPayload.content_json,
     r2_key: r2Key || null,
   };
 
@@ -2197,7 +2592,24 @@ export async function deleteExercise(formData) {
   const id = formData.get("exerciseId")?.toString();
   if (!id) return;
 
-  await supabase.from("exercises").delete().eq("id", id);
+  const actorId = await getAdminActorId(supabase);
+  await supabase
+    .from("exercises")
+    .update({
+      status: "archived",
+      updated_at: new Date().toISOString(),
+      updated_by: actorId,
+      last_editor: actorId,
+    })
+    .eq("id", id);
+
+  await archiveExercisesIfOrphaned({
+    db: supabase,
+    exerciseIds: [id],
+    actorId,
+    ignoreLessonReference: true,
+  });
+  await runExerciseGarbageCollection({ db: supabase, actorId });
   revalidatePath("/admin");
 }
 
@@ -2641,5 +3053,3 @@ export async function deleteStudent(formData) {
   revalidatePath("/admin");
   return { success: true };
 }
-
-
