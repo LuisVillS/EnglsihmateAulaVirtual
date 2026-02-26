@@ -7,6 +7,7 @@ import { saveStudentProfile } from "@/lib/students";
 import { sendEnrollmentEmail } from "@/lib/brevo";
 import { deletePaymentProof, isSupabaseStorageKey } from "@/lib/proof-storage";
 import { formatBillingMonth, getCurrentBillingMonthDate } from "@/lib/payments";
+import { formatScheduleWithFrequency } from "@/lib/course-sessions";
 
 async function requireAdmin() {
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
@@ -252,7 +253,11 @@ export async function approvePreEnrollment(formData) {
       toEmail: profile.email,
       name: profile.full_name || profile.email,
       course: preEnrollment.selected_level || "Curso asignado",
-      schedule: schedule?.start_time || "Horario por confirmar",
+      schedule: formatScheduleWithFrequency({
+        modalityKey: schedule?.modality_key || preEnrollment?.modality || preEnrollment?.selected_frequency,
+        timeValue: schedule?.start_time,
+        fallback: "Horario por confirmar",
+      }),
       studentCode: profile.student_code,
       tempPassword: "",
     });

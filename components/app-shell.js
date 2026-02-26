@@ -44,7 +44,7 @@ export default function AppShell({
   );
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
+    <div className="flex h-[100dvh] overflow-x-hidden bg-background text-foreground">
       <Sidebar
         role={role}
         studyWithMeUnlocked={studyWithMeUnlocked}
@@ -60,13 +60,13 @@ export default function AppShell({
           user={headerUser}
           onOpenSidebar={() => setMobileOpen(true)}
         />
-        <main className="relative flex-1 overflow-y-auto">
+        <main className="safe-area-bottom relative flex-1 overflow-x-hidden overflow-y-auto">
           <div className="pointer-events-none absolute inset-0">
             <div className="absolute -top-24 left-16 h-72 w-72 rounded-full bg-primary/10 blur-[160px]" />
             <div className="absolute top-10 right-20 h-72 w-72 rounded-full bg-primary-2/10 blur-[160px]" />
             <div className="absolute bottom-0 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-accent/10 blur-[180px]" />
           </div>
-          <div className="relative mx-auto w-full max-w-6xl px-6 py-8">
+          <div className="app-content relative mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
             {children}
           </div>
         </main>

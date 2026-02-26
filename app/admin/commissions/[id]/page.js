@@ -3,7 +3,14 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { formatSessionDateLabel, getFrequencyReference } from "@/lib/course-sessions";
-import { ensureCommissionSessions, upsertCommission, upsertCourseSessionLinks, upsertSessionItem, deleteSessionItem } from "@/app/admin/actions";
+import {
+  deleteSessionItem,
+  ensureCommissionSessions,
+  sendManualZoomReminderForSession,
+  upsertCommission,
+  upsertCourseSessionLinks,
+  upsertSessionItem,
+} from "@/app/admin/actions";
 import CourseForm from "@/app/admin/courses/course-form";
 import StudentsManager from "./students-manager";
 
@@ -105,8 +112,11 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
     "starts_at",
     "ends_at",
     "day_label",
+    "zoom_link",
     "live_link",
     "recording_link",
+    "recording_passcode",
+    "recording_published_at",
     "status",
   ];
   let selectedColumns = [...sessionColumns];
@@ -319,7 +329,7 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
                               <label className="text-xs font-semibold uppercase tracking-wide text-muted">Link Zoom / Live</label>
                               <input suppressHydrationWarning
                                 name="liveLink"
-                                defaultValue={session.live_link || ""}
+                                defaultValue={session.zoom_link || session.live_link || ""}
                                 className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
                                 placeholder="https://zoom.us/..."
                               />
@@ -334,6 +344,29 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
                               />
                             </div>
                           </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                              Codigo de acceso (grabacion)
+                            </label>
+                            <input suppressHydrationWarning
+                              name="recordingPasscode"
+                              defaultValue={session.recording_passcode || ""}
+                              className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                              placeholder="Codigo de acceso"
+                              required={Boolean(session.recording_link)}
+                            />
+                          </div>
+                        </form>
+                        <form action={sendManualZoomReminderForSession} className="mt-3 flex justify-end">
+                          <input suppressHydrationWarning type="hidden" name="sessionId" value={session.id} />
+                          <input suppressHydrationWarning type="hidden" name="commissionId" value={commission.id} />
+                          <button suppressHydrationWarning
+                            type="submit"
+                            disabled={!session.zoom_link && !session.live_link}
+                            className="rounded-xl border border-primary/35 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Enviar correo Unirse a la clase
+                          </button>
                         </form>
 
                         <div className="mt-4 rounded-2xl border border-border bg-surface p-3">
@@ -449,4 +482,3 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
     </section>
   );
 }
-

@@ -9,9 +9,14 @@ import { STUDENT_LEVELS } from "@/lib/student-constants";
 import { normalizePreferredHourInput } from "@/lib/student-time";
 import { sendEnrollmentEmail } from "@/lib/brevo";
 import {
+  sendRecordingPublishedEmailsForSession,
+  sendZoomReminderEmailsForSession,
+} from "@/lib/course-email-automations";
+import {
   buildSessionDraftsFromCommission,
   buildFrequencySessionDrafts,
   buildLimaDateTimeIso,
+  formatScheduleWithFrequency,
   getFrequencyDurationMonths,
   getFrequencyReference,
   getSessionsPerMonth,
@@ -98,17 +103,6 @@ function parseCsv(text) {
   const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
   const rows = lines.slice(1).map((line) => line.split(",").map((cell) => cell.trim()));
   return { headers, rows };
-}
-
-function formatScheduleLabel(value) {
-  if (value == null || value === "") return "Horario a coordinar";
-  const minutes = Number(value);
-  if (!Number.isFinite(minutes)) return "Horario a coordinar";
-  const hours = Math.floor(minutes / 60)
-    .toString()
-    .padStart(2, "0");
-  const mins = minutes % 60 === 0 ? "00" : "30";
-  return `${hours}:${mins}`;
 }
 
 function normalizeModalityKey(value) {
@@ -397,23 +391,28 @@ function getDefaultExerciseContent(type) {
         prompt_native: "Yo soy estudiante",
         target_words: ["I", "am", "a", "student"],
         answer_order: [0, 1, 2, 3],
+        point_value: 10,
       };
     case "audio_match":
       return {
         text_target: "How are you?",
         mode: "dictation",
         provider: "elevenlabs",
+        point_value: 10,
       };
     case "image_match":
       return {
-        question_native: "¿Cuál es 'El Pan'?",
+        question_native: "Que palabra corresponde a la imagen?",
+        image_url: "",
         options: [
-          { vocab_id: "", image_url: "" },
-          { vocab_id: "", image_url: "" },
-          { vocab_id: "", image_url: "" },
-          { vocab_id: "", image_url: "" },
+          { label: "Bread", vocab_id: "" },
+          { label: "Water", vocab_id: "" },
+          { label: "Milk", vocab_id: "" },
+          { label: "House", vocab_id: "" },
         ],
         correct_index: 0,
+        correct_vocab_id: "",
+        point_value: 10,
       };
     case "pairs":
       return {
@@ -421,13 +420,26 @@ function getDefaultExerciseContent(type) {
           { native: "Manzana", target: "Apple" },
           { native: "Pan", target: "Bread" },
         ],
+        point_value: 10,
       };
     case "cloze":
     default:
       return {
-        sentence: "I ____ a student.",
-        options: ["am", "are", "is", "be"],
-        correct_index: 0,
+        sentence: "I [[blank_1]] a student.",
+        options_pool: [
+          { id: "opt_1", text: "am" },
+          { id: "opt_2", text: "are" },
+          { id: "opt_3", text: "is" },
+          { id: "opt_4", text: "be" },
+        ],
+        blanks: [
+          {
+            id: "blank_1",
+            correct_option_id: "opt_1",
+            new_option_ids: ["opt_1", "opt_2", "opt_3", "opt_4"],
+          },
+        ],
+        point_value: 10,
       };
   }
 }
@@ -2230,18 +2242,64 @@ export async function upsertCourseSessionLinks(formData) {
     return { error: "Sesion invalida." };
   }
 
+  const recordingLinkInput = getText(formData, "recordingLink");
+  const recordingPasscodeInput = getText(formData, "recordingPasscode");
+  if (recordingLinkInput && !recordingPasscodeInput) {
+    return { error: "Si agregas grabacion, el codigo de acceso es obligatorio." };
+  }
+
+  const existingSessionResult = await supabase
+    .from("course_sessions")
+    .select("id, commission_id, recording_link")
+    .eq("id", sessionId)
+    .maybeSingle();
+  if (existingSessionResult.error || !existingSessionResult.data?.id) {
+    return {
+      error: existingSessionResult.error?.message || "No se encontro la sesion.",
+    };
+  }
+
+  const existingSession = existingSessionResult.data;
+  const previousRecordingLink = String(existingSession?.recording_link || "").trim();
+  const nextRecordingLink = recordingLinkInput || null;
+  const shouldTriggerRecordingEmail = !previousRecordingLink && Boolean(nextRecordingLink);
+  const nowIso = new Date().toISOString();
+
   const payload = {
     day_label: getText(formData, "dayLabel") || null,
     live_link: getText(formData, "liveLink") || null,
-    recording_link: getText(formData, "recordingLink") || null,
+    zoom_link: getText(formData, "liveLink") || null,
+    recording_link: nextRecordingLink,
+    recording_passcode: nextRecordingLink ? recordingPasscodeInput : null,
     live_link_source: normalizeLinkSource(formData.get("liveLinkSource")),
     recording_link_source: normalizeLinkSource(formData.get("recordingLinkSource")),
-    updated_at: new Date().toISOString(),
+    updated_at: nowIso,
   };
+  if (shouldTriggerRecordingEmail) {
+    payload.recording_published_at = nowIso;
+  }
 
   const { error } = await supabase.from("course_sessions").update(payload).eq("id", sessionId);
   if (error) {
+    const missingColumn = getMissingColumnFromError(error);
+    if (missingColumn && ["zoom_link", "recording_passcode", "recording_published_at"].includes(missingColumn)) {
+      return {
+        error: `Falta la columna ${missingColumn} en course_sessions. Ejecuta el SQL actualizado.`,
+      };
+    }
     return { error: error.message || "No se pudo actualizar la sesion." };
+  }
+
+  if (shouldTriggerRecordingEmail && nextRecordingLink && recordingPasscodeInput) {
+    const emailClient = hasServiceRoleClient() ? getServiceSupabaseClient() : supabase;
+    try {
+      await sendRecordingPublishedEmailsForSession({
+        service: emailClient,
+        sessionId,
+      });
+    } catch (notificationError) {
+      console.error("No se pudieron enviar correos de grabacion publicada", notificationError);
+    }
   }
 
   revalidateCommissionAdminPaths();
@@ -2249,6 +2307,36 @@ export async function upsertCourseSessionLinks(formData) {
     revalidatePath(`/admin/commissions/${commissionId}`);
   }
   revalidatePath("/app/curso");
+  return { success: true };
+}
+
+export async function sendManualZoomReminderForSession(formData) {
+  const supabase = await requireAdmin();
+  const sessionId = formData.get("sessionId")?.toString();
+  const commissionId = formData.get("commissionId")?.toString();
+  if (!sessionId) {
+    return { error: "Sesion invalida." };
+  }
+
+  const emailClient = hasServiceRoleClient() ? getServiceSupabaseClient() : supabase;
+  try {
+    await sendZoomReminderEmailsForSession({
+      service: emailClient,
+      sessionId,
+    });
+  } catch (notificationError) {
+    return {
+      error:
+        notificationError instanceof Error
+          ? notificationError.message
+          : "No se pudo enviar el recordatorio manual.",
+    };
+  }
+
+  revalidateCommissionAdminPaths();
+  if (commissionId) {
+    revalidatePath(`/admin/commissions/${commissionId}`);
+  }
   return { success: true };
 }
 
@@ -2884,7 +2972,11 @@ export async function upsertStudent(prevState, maybeFormData) {
             toEmail: email.toLowerCase(),
             name: fullName || email,
             course: resolvedCourseLevel || "Curso asignado",
-            schedule: formatScheduleLabel(resolvedPreferredHour),
+            schedule: formatScheduleWithFrequency({
+              modalityKey: resolvedModality,
+              timeValue: resolvedPreferredHour,
+              fallback: "Horario a coordinar",
+            }),
             studentCode: result.student_code,
             tempPassword: result.tempPassword,
           });
@@ -2994,7 +3086,11 @@ export async function importStudentsCsv(prevState, maybeFormData) {
               toEmail: email,
               name: fullName || email,
               course: courseLevel || "Curso asignado",
-              schedule: formatScheduleLabel(normalizedPreferredHour),
+              schedule: formatScheduleWithFrequency({
+                modalityKey: normalizedModality,
+                timeValue: normalizedPreferredHour,
+                fallback: "Horario a coordinar",
+              }),
               studentCode: result.student_code,
               tempPassword: result.tempPassword,
             });

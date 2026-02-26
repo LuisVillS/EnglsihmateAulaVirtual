@@ -134,9 +134,17 @@ function LockIcon() {
   );
 }
 
-function NavItem({ item, active, collapsed, disabled = false, lockMessage = "", onLockedPress }) {
+function NavItem({
+  item,
+  active,
+  collapsed,
+  disabled = false,
+  lockMessage = "",
+  onLockedPress,
+  onNavigate,
+}) {
   const baseClasses =
-    "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition";
+    "group relative flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition";
   const activeClasses = disabled
     ? "cursor-not-allowed text-white/35"
     : active
@@ -181,6 +189,7 @@ function NavItem({ item, active, collapsed, disabled = false, lockMessage = "", 
         target="_blank"
         rel="noopener noreferrer"
         className={`${baseClasses} ${activeClasses}`}
+        onClick={onNavigate}
       >
         {content}
       </a>
@@ -188,7 +197,7 @@ function NavItem({ item, active, collapsed, disabled = false, lockMessage = "", 
   }
 
   return (
-    <Link href={item.href} className={`${baseClasses} ${activeClasses}`}>
+    <Link href={item.href} className={`${baseClasses} ${activeClasses}`} onClick={onNavigate}>
       {content}
     </Link>
   );
@@ -210,7 +219,7 @@ function SupportButton({ collapsed }) {
       href={SUPPORT_URL || "https://wa.me/"}
       target="_blank"
       rel="noopener noreferrer"
-      className="group relative flex items-center gap-3 rounded-2xl border border-white/15 bg-white/8 px-3 py-3 text-sm font-semibold text-white transition hover:border-accent/70 hover:bg-accent/20"
+      className="group relative flex min-h-11 items-center gap-3 rounded-2xl border border-white/15 bg-white/8 px-3 py-3 text-sm font-semibold text-white transition hover:border-accent/70 hover:bg-accent/20"
     >
       {content}
     </a>
@@ -221,7 +230,7 @@ function LogoutButton({ collapsed }) {
   return (
     <button
       type="button"
-      className="group relative flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-white/70 transition hover:bg-white/10 hover:text-white"
+      className="group relative flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-white/70 transition hover:bg-white/10 hover:text-white"
       onClick={async () => {
         try {
           const supabase = getSupabaseBrowserClient();
@@ -276,6 +285,11 @@ export default function Sidebar({
     if (!window.matchMedia("(max-width: 767px)").matches) return;
     setMobileLockedMessage(String(message || "Acceso bloqueado."));
   };
+  const handleNavigate = () => {
+    if (typeof window === "undefined") return;
+    if (!window.matchMedia("(max-width: 767px)").matches) return;
+    onCloseMobile?.();
+  };
 
   useEffect(() => {
     if (!mobileLockedMessage) return;
@@ -292,7 +306,7 @@ export default function Sidebar({
         onClick={onCloseMobile}
       />
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-full flex-col border-r border-white/10 bg-[#1F202E] px-3 py-5 text-white backdrop-blur transition-transform duration-300 md:static md:flex-none md:translate-x-0 ${widthClass} ${
+        className={`safe-area-top safe-area-bottom fixed inset-y-0 left-0 z-40 flex w-full flex-col border-r border-white/10 bg-[#1F202E] px-3 py-5 text-white backdrop-blur transition-transform duration-300 md:static md:flex-none md:translate-x-0 ${widthClass} ${
           mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
       >
@@ -309,7 +323,7 @@ export default function Sidebar({
           <button
             type="button"
             onClick={onCloseMobile}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:bg-white/20 md:hidden"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:bg-white/20 md:hidden"
             aria-label="Cerrar menu"
           >
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
@@ -319,7 +333,7 @@ export default function Sidebar({
           <button
             type="button"
             onClick={onToggleCollapsed}
-            className="hidden h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/75 transition hover:bg-white/20 md:flex"
+            className="hidden h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/75 transition hover:bg-white/20 md:flex"
             aria-label="Colapsar sidebar"
           >
             <span className={collapsed ? "rotate-180 transition" : "transition"}>
@@ -342,6 +356,7 @@ export default function Sidebar({
               collapsed={collapsed}
               lockMessage={item.href === "/app/study-with-me" ? studyWithMeLockMessage : ""}
               onLockedPress={handleLockedPress}
+              onNavigate={handleNavigate}
               disabled={
                 isLockedRole
                   ? item.href !== "/app/matricula"
@@ -360,6 +375,7 @@ export default function Sidebar({
               item={item}
               active={isActive(item.href)}
               collapsed={collapsed}
+              onNavigate={handleNavigate}
               disabled={isLockedRole}
             />
           ))}

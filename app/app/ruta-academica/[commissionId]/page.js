@@ -187,6 +187,7 @@ export default async function RutaAcademicaDetailPage({ params: paramsPromise })
     "day_label",
     "live_link",
     "recording_link",
+    "recording_passcode",
   ];
   let sessionsResult = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -231,6 +232,7 @@ export default async function RutaAcademicaDetailPage({ params: paramsPromise })
       day_label: draft.day_label,
       live_link: null,
       recording_link: null,
+      recording_passcode: null,
       starts_at: buildLimaDateTimeIso(draft.session_date, commission.start_time),
       ends_at: buildLimaDateTimeIso(draft.session_date, commission.end_time),
       __draft: true,

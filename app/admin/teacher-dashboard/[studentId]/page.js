@@ -71,7 +71,7 @@ function getFlashMessage(searchParams) {
     return { type: "error", text: error };
   }
   if (saved === "grade") {
-    return { type: "success", text: "Nota actualizada correctamente." };
+    return { type: "success", text: "Nota guardada" };
   }
   if (saved === "listening") {
     return { type: "success", text: "Listening actualizado correctamente." };
@@ -178,11 +178,11 @@ export default async function TeacherStudentProfilePage({
       revalidatePath("/admin/teacher-dashboard");
       revalidatePath(`/admin/teacher-dashboard/${studentId}`);
       revalidatePath("/app");
-      redirect(`/admin/teacher-dashboard/${studentId}?saved=grade`);
     } catch (error) {
       const message = encodeURIComponent(error?.message || "No se pudo actualizar nota.");
       redirect(`/admin/teacher-dashboard/${studentId}?error=${message}`);
     }
+    redirect(`/admin/teacher-dashboard/${studentId}?saved=grade`);
   }
 
   async function updateListeningAction(formData) {
@@ -199,11 +199,11 @@ export default async function TeacherStudentProfilePage({
       revalidatePath("/admin/teacher-dashboard");
       revalidatePath(`/admin/teacher-dashboard/${studentId}`);
       revalidatePath("/app");
-      redirect(`/admin/teacher-dashboard/${studentId}?saved=listening`);
     } catch (error) {
       const message = encodeURIComponent(error?.message || "No se pudo actualizar listening.");
       redirect(`/admin/teacher-dashboard/${studentId}?error=${message}`);
     }
+    redirect(`/admin/teacher-dashboard/${studentId}?saved=listening`);
   }
 
   async function closeLevelAction(formData) {
@@ -222,11 +222,11 @@ export default async function TeacherStudentProfilePage({
       revalidatePath("/admin/teacher-dashboard");
       revalidatePath(`/admin/teacher-dashboard/${studentId}`);
       revalidatePath("/app");
-      redirect(`/admin/teacher-dashboard/${studentId}?saved=close-level`);
     } catch (error) {
       const message = encodeURIComponent(error?.message || "No se pudo cerrar nivel.");
       redirect(`/admin/teacher-dashboard/${studentId}?error=${message}`);
     }
+    redirect(`/admin/teacher-dashboard/${studentId}?saved=close-level`);
   }
 
   const student = profileData.student;
@@ -313,7 +313,7 @@ export default async function TeacherStudentProfilePage({
                 min={0}
                 max={100}
                 step="0.01"
-                defaultValue={student.current_grade ?? ""}
+                defaultValue={student.admin_grade ?? student.current_grade ?? ""}
                 required
                 className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
               />
@@ -338,7 +338,7 @@ export default async function TeacherStudentProfilePage({
         <Sparkline data={profileData.test_evolution || []} />
 
         <div className="mt-5 overflow-x-auto">
-          <table className="min-w-[680px] w-full text-sm">
+          <table className="w-full min-w-[640px] text-sm md:min-w-[680px]">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-muted">
                 <th className="px-2 py-2">Fecha</th>
@@ -390,7 +390,7 @@ export default async function TeacherStudentProfilePage({
         </div>
 
         <div className="mt-4 overflow-x-auto">
-          <table className="min-w-[980px] w-full text-sm">
+          <table className="w-full min-w-[760px] text-sm md:min-w-[980px]">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-muted">
                 <th className="px-2 py-2">Nivel</th>

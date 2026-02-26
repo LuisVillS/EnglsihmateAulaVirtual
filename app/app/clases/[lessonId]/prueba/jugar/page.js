@@ -83,6 +83,10 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
 
   const published = exercises || [];
   const totalExercises = published.length;
+  const exercisePointValues = published.map((exercise) => {
+    const parsed = Number(exercise?.content_json?.point_value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  });
   if (!totalExercises) {
     redirect(`/app/clases/${lesson.id}/prueba`);
   }
@@ -176,6 +180,7 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
             currentIndex={currentIndex}
             totalExercises={totalExercises}
             exercise={currentExercise}
+            exercisePointValues={exercisePointValues}
           />
         </article>
       </div>

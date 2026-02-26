@@ -36,8 +36,8 @@ export default function AdminNavbar() {
   const pathname = usePathname();
 
   return (
-    <nav className="sticky top-0 z-40 border-b border-white/10 bg-[#1F202E]/95 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-4 text-white">
+    <nav className="safe-area-top sticky top-0 z-40 border-b border-white/10 bg-[#1F202E]/95 backdrop-blur">
+      <div className="safe-area-x mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 text-white sm:px-6 sm:py-4">
         <div className="flex flex-wrap items-center gap-2">
           {NAV_LINKS.map((link) => {
             const active = isLinkActive(pathname, link.href);
@@ -46,7 +46,7 @@ export default function AdminNavbar() {
                 key={link.href}
                 href={link.href}
                 aria-current={active ? "page" : undefined}
-                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                className={`inline-flex min-h-11 items-center rounded-full px-4 py-2 text-xs font-semibold transition ${
                   active
                     ? "bg-primary text-primary-foreground"
                     : "text-white/70 hover:bg-white/10 hover:text-white"
@@ -59,7 +59,7 @@ export default function AdminNavbar() {
         </div>
         <button
           type="button"
-          className="rounded-full border border-white/20 px-4 py-2 text-xs font-semibold text-white/75 transition hover:border-white/35 hover:text-white"
+          className="inline-flex min-h-11 items-center rounded-full border border-white/20 px-4 py-2 text-xs font-semibold text-white/75 transition hover:border-white/35 hover:text-white"
           onClick={async () => {
             try {
               const supabase = getSupabaseBrowserClient();

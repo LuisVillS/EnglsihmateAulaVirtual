@@ -48,22 +48,35 @@ function computeExerciseWeight(totalExercises, exerciseIndex) {
   return round2(100 - (base * (total - 1)));
 }
 
+function computeExerciseWeightFromPoints(totalExercises, exerciseIndex, exercisePointValues = []) {
+  const total = Math.max(1, Number(totalExercises) || 1);
+  const index = Math.max(0, Number(exerciseIndex) || 0);
+  const points = normalizeArray(exercisePointValues)
+    .slice(0, total)
+    .map((value) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    });
+
+  const hasCustomPoints = points.length === total && points.some((value) => value > 0);
+  if (!hasCustomPoints) {
+    return computeExerciseWeight(total, index);
+  }
+
+  const totalPoints = points.reduce((sum, value) => sum + value, 0);
+  if (!Number.isFinite(totalPoints) || totalPoints <= 0) {
+    return computeExerciseWeight(total, index);
+  }
+
+  const raw = (points[index] / totalPoints) * 100;
+  return round2(raw);
+}
+
 function computeExerciseScore(weight, wrongAttempts, finalStatus) {
   if (finalStatus !== "passed") return 0;
   const wrong = Math.max(0, Math.min(2, Number(wrongAttempts) || 0));
   const multipliers = [1, 0.8, 0.6];
   return round2((Number(weight) || 0) * multipliers[wrong]);
-}
-
-function splitSentenceWithBlank(sentence) {
-  const text = String(sentence || "");
-  const match = text.match(/_{2,}/);
-  if (match?.index !== 0 && !match?.index) {
-    return { before: text, after: "" };
-  }
-  const before = text.slice(0, match.index);
-  const after = text.slice(match.index + match[0].length);
-  return { before, after };
 }
 
 function isArrayEqual(a = [], b = []) {
@@ -91,6 +104,58 @@ function buildScrambleSolutionIds(answerWords = [], chips = []) {
   return result;
 }
 
+function buildShuffledScrambleWords(words = [], answerWords = []) {
+  const source = normalizeArray(words).map((word) => String(word || "").trim()).filter(Boolean);
+  if (source.length <= 1) return source;
+
+  const expected = normalizeArray(answerWords).map((word) => String(word || "").trim()).filter(Boolean);
+  let shuffled = [...source];
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    shuffled = shuffleList(source);
+    if (!isArrayEqual(shuffled, expected)) {
+      return shuffled;
+    }
+  }
+  return shuffled;
+}
+
+function extractBlankTokens(sentence = "") {
+  const text = String(sentence || "");
+  const regex = /\[\[\s*(blank_[a-z0-9_-]+)\s*\]\]/gi;
+  const tokens = [];
+  const seen = new Set();
+  let match = regex.exec(text);
+  while (match) {
+    const key = String(match[1] || "").trim().toLowerCase();
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      tokens.push(key);
+    }
+    match = regex.exec(text);
+  }
+  return tokens;
+}
+
+function splitSentenceByBlankTokens(sentence = "") {
+  const text = String(sentence || "");
+  const regex = /\[\[\s*(blank_[a-z0-9_-]+)\s*\]\]/gi;
+  const segments = [];
+  let lastIndex = 0;
+  let match = regex.exec(text);
+  while (match) {
+    if (match.index > lastIndex) {
+      segments.push({ kind: "text", value: text.slice(lastIndex, match.index) });
+    }
+    segments.push({ kind: "blank", key: String(match[1] || "").trim().toLowerCase() });
+    lastIndex = match.index + match[0].length;
+    match = regex.exec(text);
+  }
+  if (lastIndex < text.length) {
+    segments.push({ kind: "text", value: text.slice(lastIndex) });
+  }
+  return segments.length ? segments : [{ kind: "text", value: text }];
+}
+
 function getDefaultExplanation(type, data) {
   if (type === "cloze") return "Se usa la opcion gramatical correcta para completar la frase.";
   if (type === "scramble") return "El orden correcto sigue sujeto + verbo + complemento.";
@@ -107,11 +172,194 @@ function resolveExerciseData(exercise) {
   const explanation = String(content.explanation || "").trim();
 
   if (type === "cloze") {
-    const options = normalizeArray(content.options).map((value) => String(value || "").trim()).filter(Boolean);
-    const sentence = String(content.sentence || exercise?.prompt || "I ____ a student.");
-    const correctByIndex = options[Math.max(0, Number(content.correct_index) || 0)] || "";
-    const correctAnswer = String(content.correct || content.answer || correctByIndex || "").trim();
-    return { type, explanation, sentence, options, correctAnswer };
+    let sentence = String(content.sentence || exercise?.prompt || "").trim();
+    const optionsPool = [];
+    const appendPoolOption = (text = "") => {
+      const used = new Set(optionsPool.map((option) => option.id));
+      let next = 1;
+      while (used.has(`opt_${next}`)) next += 1;
+      const optionId = `opt_${next}`;
+      optionsPool.push({ id: optionId, text: String(text || "").trim() });
+      return optionId;
+    };
+    const ensurePoolOption = (optionId, fallbackText = "") => {
+      const rawOptionId = String(optionId || "").trim().toLowerCase();
+      const safeId = rawOptionId
+        ? (rawOptionId.startsWith("opt_") ? rawOptionId : `opt_${rawOptionId}`)
+        : "";
+      if (!safeId) return appendPoolOption(fallbackText);
+      const existing = optionsPool.find((option) => option.id === safeId);
+      if (existing) {
+        if (!String(existing.text || "").trim() && String(fallbackText || "").trim()) {
+          existing.text = String(fallbackText || "").trim();
+        }
+        return safeId;
+      }
+      optionsPool.push({ id: safeId, text: String(fallbackText || "").trim() });
+      return safeId;
+    };
+    const normalizeOptionIds = (values, minCount = 0) => {
+      const ids = Array.from(
+        new Set(
+          normalizeArray(values)
+            .map((value) => String(value || "").trim())
+            .filter(Boolean)
+            .map((value) => ensurePoolOption(value, ""))
+        )
+      );
+      while (ids.length < minCount) {
+        ids.push(appendPoolOption(""));
+      }
+      return ids;
+    };
+
+    const rawPool = normalizeArray(content.options_pool || content.optionsPool);
+    rawPool.forEach((entry) => {
+      if (typeof entry === "string") {
+        appendPoolOption(entry);
+        return;
+      }
+      const source = entry && typeof entry === "object" ? entry : {};
+      ensurePoolOption(
+        source.id || source.option_id || source.optionId || "",
+        source.text || source.value || source.label || ""
+      );
+    });
+
+    const rawBlanks = normalizeArray(content.blanks);
+    const hasPoolShape =
+      rawPool.length > 0 ||
+      rawBlanks.some((blank) => {
+        const source = blank && typeof blank === "object" ? blank : {};
+        return (
+          source.correct_option_id != null ||
+          source.correctOptionId != null ||
+          source.new_option_ids != null ||
+          source.newOptionIds != null
+        );
+      });
+
+    let blanks = [];
+
+    if (hasPoolShape) {
+      blanks = rawBlanks.map((blank, idx) => {
+        const source = blank && typeof blank === "object" ? blank : {};
+        const key = String(source.id || source.key || `blank_${idx + 1}`).trim().toLowerCase();
+        const minOptions = idx === 0 ? 4 : 2;
+        let newOptionIds = normalizeOptionIds(source.new_option_ids || source.newOptionIds, minOptions);
+        if (!newOptionIds.length && optionsPool.length) {
+          newOptionIds = normalizeOptionIds(
+            optionsPool.slice(0, minOptions).map((option) => option.id),
+            minOptions
+          );
+        }
+
+        let correctOptionId = String(source.correct_option_id || source.correctOptionId || "").trim();
+        if (correctOptionId) {
+          correctOptionId = ensurePoolOption(correctOptionId, "");
+        }
+        if (!correctOptionId && newOptionIds.length) {
+          const fromIndex = Math.max(0, Math.min(newOptionIds.length - 1, Number(source.correct_index) || 0));
+          correctOptionId = newOptionIds[fromIndex];
+        }
+        if (!correctOptionId) {
+          const answerText = String(source.answer || source.correct || "").trim();
+          if (answerText) {
+            const byText = optionsPool.find(
+              (option) => normalizeText(option.text) === normalizeText(answerText)
+            );
+            correctOptionId = byText?.id || appendPoolOption(answerText);
+            if (!newOptionIds.includes(correctOptionId)) {
+              newOptionIds.push(correctOptionId);
+            }
+          }
+        }
+        if (!correctOptionId) {
+          correctOptionId = newOptionIds[0] || appendPoolOption("");
+        }
+        if (idx > 0 && !newOptionIds.includes(correctOptionId)) {
+          correctOptionId = newOptionIds[0] || appendPoolOption("");
+        }
+
+        return {
+          key,
+          correctOptionId,
+          newOptionIds: Array.from(new Set(newOptionIds)),
+        };
+      });
+    }
+
+    if (!blanks.length) {
+      const legacyBlanks = rawBlanks.length
+        ? rawBlanks
+        : [{
+          key: "blank_1",
+          options: normalizeArray(content.options).map((value) => String(value || "").trim()).filter(Boolean),
+          correct_index: Number(content.correct_index || 0),
+          answer: String(content.answer || content.correct || "").trim(),
+        }];
+
+      blanks = legacyBlanks.map((blank, idx) => {
+        const source = blank && typeof blank === "object" ? blank : {};
+        const key = String(source.key || source.id || `blank_${idx + 1}`).trim().toLowerCase();
+        const minOptions = idx === 0 ? 4 : 2;
+        const optionTexts = normalizeArray(source.options).map((value) => String(value || "").trim());
+        const answerText = String(source.answer || source.correct || "").trim();
+        if (answerText && !optionTexts.some((value) => normalizeText(value) === normalizeText(answerText))) {
+          optionTexts.push(answerText);
+        }
+        while (optionTexts.length < minOptions) {
+          optionTexts.push("");
+        }
+        const optionIds = optionTexts.map((text) => appendPoolOption(text));
+        const correctIndex = Math.max(0, Math.min(optionIds.length - 1, Number(source.correct_index) || 0));
+        const correctOptionId = optionIds[correctIndex] || optionIds[0] || appendPoolOption("");
+        return {
+          key,
+          correctOptionId,
+          newOptionIds: optionIds,
+        };
+      });
+    }
+
+    if (!sentence) sentence = "I ____ a student.";
+    if (!extractBlankTokens(sentence).length && blanks.length) {
+      if (/_{2,}/.test(sentence)) {
+        sentence = sentence.replace(/_{2,}/, `[[${blanks[0].key || "blank_1"}]]`);
+      } else {
+        sentence = `${sentence} [[${blanks[0].key || "blank_1"}]]`.trim();
+      }
+    }
+
+    const orderedKeys = extractBlankTokens(sentence);
+    const blankByKey = new Map(blanks.map((blank) => [blank.key, blank]));
+    const orderedBlanks = orderedKeys.map((key, idx) => {
+      const current = blankByKey.get(key) || {};
+      const minOptions = idx === 0 ? 4 : 2;
+      const newOptionIds = normalizeOptionIds(current.newOptionIds || current.new_option_ids, minOptions);
+      let correctOptionId = String(current.correctOptionId || current.correct_option_id || "").trim();
+      if (correctOptionId) {
+        correctOptionId = ensurePoolOption(correctOptionId, "");
+      }
+      if (!correctOptionId || (idx > 0 && !newOptionIds.includes(correctOptionId))) {
+        correctOptionId = newOptionIds[0] || appendPoolOption("");
+      }
+      return {
+        key,
+        correctOptionId,
+        newOptionIds,
+      };
+    });
+
+    const segments = splitSentenceByBlankTokens(sentence);
+    return {
+      type,
+      explanation,
+      sentence,
+      segments,
+      blanks: orderedBlanks,
+      optionsPool,
+    };
   }
 
   if (type === "scramble") {
@@ -124,8 +372,12 @@ function resolveExerciseData(exercise) {
     if (!answerWords.length && targetWords.length) answerWords = [...targetWords];
 
     let scrambledWords = normalizeArray(content.scrambled).map((value) => String(value || "").trim()).filter(Boolean);
-    if (!scrambledWords.length && targetWords.length) scrambledWords = [...targetWords];
-    if (!scrambledWords.length && answerWords.length) scrambledWords = shuffleList(answerWords);
+    if (!scrambledWords.length && targetWords.length) {
+      scrambledWords = buildShuffledScrambleWords(targetWords, answerWords);
+    }
+    if (!scrambledWords.length && answerWords.length) {
+      scrambledWords = buildShuffledScrambleWords(answerWords, answerWords);
+    }
 
     return {
       type,
@@ -149,23 +401,34 @@ function resolveExerciseData(exercise) {
   }
 
   if (type === "image_match") {
-    const options = normalizeArray(content.options).map((option, idx) => ({
-      id: String(idx),
-      imageUrl: String(option?.image_url || "").trim(),
-      vocabId: String(option?.vocab_id || "").trim(),
-      label: String(
-        option?.label || option?.word_native || option?.word_target || option?.vocab_id || `Opcion ${idx + 1}`
-      ).trim(),
-    }));
+    const options = normalizeArray(content.options).map((option, idx) => {
+      if (typeof option === "string") {
+        return {
+          id: String(idx),
+          vocabId: "",
+          label: String(option || "").trim(),
+          imageUrl: "",
+        };
+      }
+      return {
+        id: String(idx),
+        imageUrl: String(option?.image_url || "").trim(),
+        vocabId: String(option?.vocab_id || "").trim(),
+        label: String(
+          option?.label || option?.word_native || option?.word_target || option?.text || option?.vocab_id || `Opcion ${idx + 1}`
+        ).trim(),
+      };
+    });
     const correctByIndex = Math.max(0, Math.min(options.length - 1, Number(content.correct_index) || 0));
     const correctByVocab = String(content.correct_vocab_id || "").trim();
-    const correctIndex = correctByVocab
-      ? Math.max(0, options.findIndex((option) => option.vocabId === correctByVocab))
-      : correctByIndex;
+    const indexByVocab = correctByVocab ? options.findIndex((option) => option.vocabId === correctByVocab) : -1;
+    const correctIndex = indexByVocab >= 0 ? indexByVocab : correctByIndex;
+    const imageUrl = String(content.image_url || content.imageUrl || "").trim() || options[correctIndex]?.imageUrl || "";
     return {
       type,
       explanation,
-      question: String(content.question_native || exercise?.prompt || "Selecciona la imagen correcta."),
+      question: String(content.question_native || exercise?.prompt || "Que palabra corresponde a la imagen?"),
+      imageUrl,
       options,
       correctIndex,
     };
@@ -197,7 +460,22 @@ function resolveExerciseData(exercise) {
 }
 
 function buildCorrectAnswerText(type, data) {
-  if (type === "cloze") return data.correctAnswer || "-";
+  if (type === "cloze") {
+    const blanks = normalizeArray(data.blanks);
+    const poolMap = new Map(
+      normalizeArray(data.optionsPool).map((option) => [
+        String(option?.id || "").trim(),
+        String(option?.text || "").trim(),
+      ])
+    );
+    if (!blanks.length) return "-";
+    return blanks
+      .map((blank, idx) => {
+        const correct = poolMap.get(String(blank.correctOptionId || "").trim()) || "-";
+        return `Blank ${idx + 1}: ${correct}`;
+      })
+      .join(" | ");
+  }
   if (type === "scramble") return normalizeArray(data.answerWords).join(" ");
   if (type === "pairs") {
     return normalizeArray(data.pairs)
@@ -221,12 +499,18 @@ function TypeBadge({ type }) {
   );
 }
 
-export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercises, exercise }) {
+export default function LessonQuizPlayer({
+  lessonId,
+  currentIndex,
+  totalExercises,
+  exercise,
+  exercisePointValues = [],
+}) {
   const data = useMemo(() => resolveExerciseData(exercise), [exercise]);
   const type = data.type;
   const exerciseWeight = useMemo(
-    () => computeExerciseWeight(totalExercises, currentIndex),
-    [totalExercises, currentIndex]
+    () => computeExerciseWeightFromPoints(totalExercises, currentIndex, exercisePointValues),
+    [totalExercises, currentIndex, exercisePointValues]
   );
 
   const [wrongAttempts, setWrongAttempts] = useState(0);
@@ -236,8 +520,8 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
   const [errorFlash, setErrorFlash] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [placedOption, setPlacedOption] = useState(null);
-  const [draggedClozeOption, setDraggedClozeOption] = useState(null);
+  const [clozeSelections, setClozeSelections] = useState({});
+  const [activeClozeBlank, setActiveClozeBlank] = useState(null);
 
   const [selectedScrambleIds, setSelectedScrambleIds] = useState([]);
 
@@ -249,8 +533,6 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
 
   const [audioInput, setAudioInput] = useState("");
   const [selectedAudioOption, setSelectedAudioOption] = useState(null);
-
-  const clozeResetTimerRef = useRef(null);
 
   const pairBoardRef = useRef(null);
   const leftPairRefs = useRef(new Map());
@@ -280,6 +562,14 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
 
   const correctAnswerText = useMemo(() => buildCorrectAnswerText(type, data), [type, data]);
   const explanationText = String(data.explanation || getDefaultExplanation(type, data)).trim();
+  const resolvedActiveClozeBlank = useMemo(() => {
+    const blankKeys = normalizeArray(data.blanks).map((blank, idx) =>
+      String(blank?.key || `blank_${idx + 1}`).toLowerCase()
+    );
+    if (!blankKeys.length) return "";
+    const selected = String(activeClozeBlank || "").toLowerCase();
+    return blankKeys.includes(selected) ? selected : blankKeys[0];
+  }, [activeClozeBlank, data.blanks]);
 
   const isResolved = finalStatus === "passed" || finalStatus === "failed";
   const isFailed = finalStatus === "failed";
@@ -290,12 +580,6 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [type]);
-
-  useEffect(() => {
-    return () => {
-      if (clozeResetTimerRef.current) clearTimeout(clozeResetTimerRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     if (type !== "pairs") return undefined;
@@ -379,25 +663,71 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
     if (typeof onRetry === "function") onRetry();
   }
 
-  function handleClozeOption(option) {
+  function assignClozeOption(blankKey, optionId) {
     if (type !== "cloze" || isResolved) return;
-    clearIncorrectFeedback();
-    if (clozeResetTimerRef.current) clearTimeout(clozeResetTimerRef.current);
-
-    const safeOption = String(option || "").trim();
-    if (!safeOption) return;
-    if (normalizeText(placedOption) === normalizeText(safeOption)) {
-      setPlacedOption(null);
-      return;
-    }
-    setPlacedOption(safeOption);
+    const safeKey = String(blankKey || "").trim().toLowerCase();
+    const safeOptionId = String(optionId || "").trim().toLowerCase();
+    if (!safeKey) return;
+    if (!safeOptionId) return;
+    setActiveClozeBlank(safeKey);
+    setClozeSelections((current) => {
+      const next = { ...current };
+      Object.keys(next).forEach((key) => {
+        if (String(next[key] || "").toLowerCase() === safeOptionId) {
+          delete next[key];
+        }
+      });
+      next[safeKey] = safeOptionId;
+      return next;
+    });
   }
 
-  function handleClozeDrop(event) {
+  function handleClozeOption(optionId) {
+    if (type !== "cloze" || isResolved) return;
+    clearIncorrectFeedback();
+    const safeOptionId = String(optionId || "").trim().toLowerCase();
+    if (!safeOptionId) return;
+
+    setClozeSelections((current) => {
+      const selectedEntries = Object.entries(current);
+      const selectedBlank = selectedEntries.find(([, value]) => String(value || "").toLowerCase() === safeOptionId);
+      if (selectedBlank) {
+        const next = { ...current };
+        delete next[selectedBlank[0]];
+        return next;
+      }
+
+      const blanks = normalizeArray(data.blanks).map((blank, idx) =>
+        String(blank?.key || `blank_${idx + 1}`).toLowerCase()
+      );
+      const activeKey = String(resolvedActiveClozeBlank || "").toLowerCase();
+      let targetKey = blanks.find((key) => key === activeKey) || "";
+      if (!targetKey) {
+        targetKey = blanks.find((key) => !current[key]) || blanks[0] || "";
+      }
+      if (!targetKey) return current;
+      return { ...current, [targetKey]: safeOptionId };
+    });
+  }
+
+  function handleClozeDrop(event, blankKey) {
     event.preventDefault();
-    if (!draggedClozeOption) return;
-    handleClozeOption(draggedClozeOption);
-    setDraggedClozeOption(null);
+    const draggedOptionId =
+      String(event.dataTransfer?.getData("application/x-option-id") || "").trim().toLowerCase() ||
+      String(event.dataTransfer?.getData("text/plain") || "").trim().toLowerCase();
+    if (!draggedOptionId) return;
+    clearIncorrectFeedback();
+    const safeKey = String(blankKey || "").trim().toLowerCase();
+    const sameSelection = String(clozeSelections[safeKey] || "").toLowerCase() === draggedOptionId;
+    if (sameSelection) {
+      setClozeSelections((current) => {
+        const next = { ...current };
+        delete next[safeKey];
+        return next;
+      });
+      return;
+    }
+    assignClozeOption(safeKey, draggedOptionId);
   }
 
   function handleScrambleToggle(chipId) {
@@ -463,22 +793,36 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
     if (isResolved) return;
 
     if (type === "cloze") {
-      if (!placedOption) {
+      const blanks = normalizeArray(data.blanks);
+      if (!blanks.length) {
         showIncompleteResponse();
         return;
       }
-      if (normalizeText(placedOption) === normalizeText(data.correctAnswer)) {
+      const unresolved = blanks.some(
+        (blank) => !String(clozeSelections[String(blank.key || "").toLowerCase()] || "").trim()
+      );
+      if (unresolved) {
+        showIncompleteResponse();
+        return;
+      }
+      const allCorrect = blanks.every((blank) => {
+        const key = String(blank.key || "").toLowerCase();
+        const selected = String(clozeSelections[key] || "").toLowerCase();
+        const expected = String(blank.correctOptionId || "").toLowerCase();
+        return Boolean(expected && selected && selected === expected);
+      });
+      if (allCorrect) {
         markPassed();
         return;
       }
       registerIncorrect({
-        onRetry: () => {
-          clozeResetTimerRef.current = window.setTimeout(() => {
-            setPlacedOption(null);
-          }, 430);
-        },
         onReveal: () => {
-          setPlacedOption(data.correctAnswer);
+          const solved = {};
+          blanks.forEach((blank) => {
+            const key = String(blank.key || "").toLowerCase();
+            solved[key] = String(blank.correctOptionId || "").toLowerCase();
+          });
+          setClozeSelections(solved);
         },
       });
       return;
@@ -584,68 +928,133 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
     setIsSubmitting(true);
   }
 
-  const { before: clozeBefore, after: clozeAfter } = useMemo(
-    () => splitSentenceWithBlank(data.sentence),
-    [data.sentence]
+  const clozeSegments = useMemo(
+    () => (type === "cloze" ? normalizeArray(data.segments) : []),
+    [type, data.segments]
   );
+  const clozeBlankWeight = useMemo(() => {
+    if (type !== "cloze") return null;
+    const blanksCount = Math.max(0, normalizeArray(data.blanks).length);
+    if (!blanksCount) return null;
+    return round2(exerciseWeight / blanksCount);
+  }, [type, data.blanks, exerciseWeight]);
 
   const isAudioDictation = type === "audio_match" && (!data.options?.length || data.mode === "dictation");
   const remainingErrors = Math.max(0, MAX_WRONG_ATTEMPTS - wrongAttempts);
 
   function renderCloze() {
+    const blanks = normalizeArray(data.blanks);
+    const optionsPool = normalizeArray(data.optionsPool);
+    const optionById = new Map(
+      optionsPool.map((option) => [
+        String(option?.id || "").trim().toLowerCase(),
+        String(option?.text || "").trim(),
+      ])
+    );
+    const blankByKey = new Map(
+      blanks.map((blank, idx) => [
+        String(blank?.key || `blank_${idx + 1}`).toLowerCase(),
+        blank,
+      ])
+    );
+    const activeKey = String(resolvedActiveClozeBlank || "").toLowerCase();
+    const selectedOptionIds = new Set(
+      Object.values(clozeSelections)
+        .map((value) => String(value || "").toLowerCase())
+        .filter(Boolean)
+    );
+
     return (
       <div className="space-y-5">
-        <p className="text-sm text-muted">Arrastra la opcion correcta al espacio en blanco.</p>
+        <p className="text-sm text-muted">Completa todos los espacios. Puedes resolver cualquier blank en cualquier orden.</p>
         <div
           className={`rounded-2xl border bg-surface-2 px-4 py-5 text-lg font-semibold transition ${
             errorFlash ? "border-danger/70" : "border-border"
           }`}
         >
-          <span>{clozeBefore}</span>
-          <span
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={handleClozeDrop}
-            onClick={() => {
-              if (!isResolved && placedOption) {
-                clearIncorrectFeedback();
-                setPlacedOption(null);
-              }
-            }}
-            className={`mx-2 inline-flex min-h-12 min-w-28 items-center justify-center rounded-xl border-2 px-3 py-2 align-middle text-base font-bold transition ${
-              isResolved && !isFailed
-                ? "border-success bg-success/15 text-success"
-                : isFailed
-                ? "border-danger/70 bg-danger/12 text-danger"
-                : "cursor-pointer border-dashed border-primary/55 bg-primary/10 text-foreground"
-            }`}
-          >
-            {placedOption || "____"}
-          </span>
-          <span>{clozeAfter}</span>
-        </div>
+          {clozeSegments.map((segment, idx) => {
+            if (segment.kind !== "blank") {
+              return <span key={`segment-text-${idx}`}>{segment.value}</span>;
+            }
+            const key = String(segment.key || "").toLowerCase();
+            const blank = blankByKey.get(key) || null;
+            const selectedOptionId = String(clozeSelections[key] || "").toLowerCase();
+            const selectedValue = optionById.get(selectedOptionId) || "";
+            const resolvedCorrectOptionId = String(blank?.correctOptionId || "").toLowerCase();
+            const resolvedCorrectValue = optionById.get(resolvedCorrectOptionId) || "";
+            const selectedCorrect = selectedOptionId && selectedOptionId === resolvedCorrectOptionId;
+            const selectedWrong = selectedOptionId && resolvedCorrectOptionId && selectedOptionId !== resolvedCorrectOptionId;
+            const isActive = !isResolved && activeKey === key;
 
-        <div className="flex flex-wrap gap-2">
-          {normalizeArray(data.options).map((option, idx) => {
-            const selected = normalizeText(option) === normalizeText(placedOption);
             return (
-              <button
-                key={`cloze-option-${idx}`}
-                type="button"
-                draggable={!isResolved}
-                onDragStart={() => setDraggedClozeOption(option)}
-                onDragEnd={() => setDraggedClozeOption(null)}
-                onClick={() => handleClozeOption(option)}
-                disabled={isResolved}
-                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                  selected
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
-                } disabled:cursor-not-allowed disabled:opacity-85`}
+              <span
+                key={`segment-blank-${key}-${idx}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => setActiveClozeBlank(key)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setActiveClozeBlank(key);
+                  }
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => handleClozeDrop(event, key)}
+                className={`mx-2 my-1 inline-flex min-h-12 min-w-28 items-center justify-center rounded-xl border-2 px-3 py-2 align-middle text-base font-bold transition ${
+                  isResolved && !isFailed
+                    ? "border-success bg-success/15 text-success"
+                    : isFailed
+                    ? "border-danger/70 bg-danger/12 text-danger"
+                    : selectedCorrect
+                    ? "border-success/60 bg-success/12 text-success"
+                    : selectedWrong
+                    ? "border-danger/70 bg-danger/12 text-danger"
+                    : "border-dashed border-primary/55 bg-primary/10 text-foreground"
+                } ${isActive ? "ring-2 ring-primary/40" : ""}`}
               >
-                {option}
-              </button>
+                {selectedValue || "____"}
+              </span>
             );
           })}
+        </div>
+
+        {clozeBlankWeight != null ? (
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Cada blank vale aproximadamente {clozeBlankWeight} puntos.
+          </p>
+        ) : null}
+
+        <div className="rounded-xl border border-border bg-surface-2 p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Pool global de opciones</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {optionsPool.map((option, optionIdx) => {
+              const optionId = String(option?.id || `opt_${optionIdx + 1}`).trim().toLowerCase();
+              const selectedInActiveBlank = String(clozeSelections[activeKey] || "").toLowerCase() === optionId;
+              const selectedElsewhere = selectedOptionIds.has(optionId) && !selectedInActiveBlank;
+              return (
+                <button
+                  key={`cloze-pool-option-${optionId}-${optionIdx}`}
+                  type="button"
+                  draggable={!isResolved}
+                  onDragStart={(event) => {
+                    event.dataTransfer?.setData("application/x-option-id", optionId);
+                    event.dataTransfer?.setData("text/plain", optionId);
+                  }}
+                  onClick={() => handleClozeOption(optionId)}
+                  disabled={isResolved}
+                  className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
+                    selectedInActiveBlank
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : selectedElsewhere
+                      ? "border-accent/60 bg-accent/12 text-foreground"
+                      : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
+                  } disabled:cursor-not-allowed disabled:opacity-85`}
+                >
+                  {String(option?.text || "").trim() || "(sin texto)"}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     );
@@ -795,7 +1204,17 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
   function renderImageMatch() {
     return (
       <div className="space-y-4">
-        <p className="text-sm text-muted">{data.question || "Selecciona la opcion correcta."}</p>
+        <p className="text-sm text-muted">{data.question || "Que palabra corresponde a la imagen?"}</p>
+        <div className="overflow-hidden rounded-2xl border border-border bg-surface-2">
+          {data.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={data.imageUrl} alt="Imagen del ejercicio" className="h-56 w-full object-cover sm:h-64" />
+          ) : (
+            <div className="flex h-56 items-center justify-center text-sm text-muted sm:h-64">
+              Imagen no disponible
+            </div>
+          )}
+        </div>
         <div className={`grid gap-3 sm:grid-cols-2 ${errorFlash ? "shake-soft" : ""}`}>
           {normalizeArray(data.options).map((option, idx) => {
             const selected = selectedImageIndex === idx;
@@ -820,13 +1239,7 @@ export default function LessonQuizPlayer({ lessonId, currentIndex, totalExercise
                     : "border-border bg-surface hover:border-primary hover:bg-surface-2"
                 } disabled:cursor-not-allowed`}
               >
-                {option.imageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={option.imageUrl} alt={option.label || `opcion-${idx + 1}`} className="h-32 w-full object-cover" />
-                ) : (
-                  <div className="flex h-32 items-center justify-center bg-surface-2 text-xs text-muted">Imagen {idx + 1}</div>
-                )}
-                <div className="px-3 py-2 text-sm font-semibold text-foreground">{option.label || `Opcion ${idx + 1}`}</div>
+                <div className="px-3 py-3 text-sm font-semibold text-foreground">{option.label || `Opcion ${idx + 1}`}</div>
               </button>
             );
           })}

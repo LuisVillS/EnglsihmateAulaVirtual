@@ -51,6 +51,53 @@ function formatDateCaps(isoDate) {
   return formatted.replace(/\./g, "").toUpperCase();
 }
 
+function toSafeDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getLimaDayKey(value) {
+  const date = toSafeDate(value);
+  if (!date) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const map = parts.reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  if (!map.year || !map.month || !map.day) return "";
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+function formatDateTimeLima(value) {
+  const date = toSafeDate(value);
+  if (!date) return "-";
+  const weekdayRaw = new Intl.DateTimeFormat("es-PE", {
+    timeZone: "America/Lima",
+    weekday: "long",
+  }).format(date);
+  const weekdayLabel = weekdayRaw ? `${weekdayRaw.charAt(0).toUpperCase()}${weekdayRaw.slice(1)}` : "";
+  const dayMonthLabel = new Intl.DateTimeFormat("es-PE", {
+    timeZone: "America/Lima",
+    day: "2-digit",
+    month: "short",
+  })
+    .format(date)
+    .replace(/\./g, "");
+  const timeLabel = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/Lima",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+  return `${weekdayLabel} ${dayMonthLabel} a las ${timeLabel}`.trim();
+}
+
 function formatMonthLabel(monthKey) {
   if (!monthKey) return "Mes";
   const date = new Date(`${monthKey}T00:00:00.000Z`);
@@ -69,6 +116,30 @@ function toSlidesEmbedUrl(url) {
   const match = url.match(/presentation\/d\/([a-zA-Z0-9_-]+)/);
   if (!match?.[1]) return null;
   return `https://docs.google.com/presentation/d/${match[1]}/embed?start=false&loop=false&delayms=3000`;
+}
+
+function toVimeoEmbedUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.includes("vimeo.com")) return null;
+
+    const playerMatch = parsed.pathname.match(/\/video\/(\d+)/i);
+    if (playerMatch?.[1]) {
+      const hashParam = parsed.searchParams.get("h");
+      return `https://player.vimeo.com/video/${playerMatch[1]}${hashParam ? `?h=${encodeURIComponent(hashParam)}` : ""}`;
+    }
+
+    const idMatch = parsed.pathname.match(/(?:^|\/)(\d+)(?:$|\/)/);
+    if (!idMatch?.[1]) return null;
+    const hashParam = parsed.searchParams.get("h");
+    return `https://player.vimeo.com/video/${idMatch[1]}${hashParam ? `?h=${encodeURIComponent(hashParam)}` : ""}`;
+  } catch {
+    return null;
+  }
 }
 
 function FolderIcon() {
@@ -103,19 +174,17 @@ function LockIcon() {
 }
 
 function StatusDot({ completed, live }) {
+  const baseClass = "inline-flex h-4 w-4 rounded-full border sm:h-5 sm:w-5";
+
   if (completed) {
-    return (
-      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-success/20 text-success">
-        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.4">
-          <path d="M5 13l4 4L19 7" />
-        </svg>
-      </span>
-    );
+    return <span className={`${baseClass} border-blue-500 bg-blue-500`} />;
   }
 
-  return (
-    <span className={`inline-flex h-5 w-5 rounded-full border ${live ? "border-success bg-success/15" : "border-border bg-surface-2"}`} />
-  );
+  if (live) {
+    return <span className={`${baseClass} border-red-500 bg-red-500`} />;
+  }
+
+  return <span className={`${baseClass} border-border bg-surface-2`} />;
 }
 
 function getGroupStatus(group, nowMs) {
@@ -280,6 +349,7 @@ export default function CourseSessionList({
   allowedMonths = [],
 }) {
   const [openSessionId, setOpenSessionId] = useState(null);
+  const [viewerType, setViewerType] = useState("slide");
   const [openCycleMap, setOpenCycleMap] = useState({});
   const [expandedSessionMap, setExpandedSessionMap] = useState({});
   const nowMs = new Date(nowIso || "1970-01-01T00:00:00.000Z").getTime();
@@ -295,14 +365,17 @@ export default function CourseSessionList({
   );
 
   const hydratedSessions = useMemo(
-    () =>
-      (sessions || []).map((session, idx) => {
+    () => {
+      const todayLimaKey = getLimaDayKey(new Date(nowMs));
+      return (sessions || []).map((session, idx) => {
         const { startsAt, endsAt } = normalizeSessionTimes(session, commissionTimes);
         const startsAtMs = startsAt ? new Date(startsAt).getTime() : Number.NaN;
         const endsAtMs = endsAt ? new Date(endsAt).getTime() : Number.NaN;
         const beforeStart = Number.isFinite(startsAtMs) ? nowMs < startsAtMs : false;
         const inLiveWindow = Number.isFinite(startsAtMs) && Number.isFinite(endsAtMs) ? nowMs >= startsAtMs && nowMs <= endsAtMs : false;
         const afterEnd = Number.isFinite(endsAtMs) ? nowMs > endsAtMs : false;
+        const classLimaDayKey = getLimaDayKey(startsAt || session.session_date);
+        const isClassDay = Boolean(classLimaDayKey) && classLimaDayKey === todayLimaKey;
         const cycleMonthRaw = normalizeMonthKey(session?.cycle_month);
         const cycleKey = cycleMonthRaw || formatMonthKeyFromDate(startsAt || session.session_date);
         return {
@@ -314,11 +387,14 @@ export default function CourseSessionList({
           beforeStart,
           inLiveWindow,
           afterEnd,
+          isClassDay,
+          nextClassDateTimeLabel: formatDateTimeLima(startsAt || session.session_date),
           cycleKey,
           smallDateLabel: formatDateCaps(startsAt || session.session_date),
           title: session.day_label || `Clase ${String((session.session_in_cycle || session.session_index || idx + 1)).padStart(2, "0")}`,
         };
-      }),
+      });
+    },
     [sessions, commissionTimes, nowMs]
   );
 
@@ -378,42 +454,17 @@ export default function CourseSessionList({
   const selectedSession = hydratedSessions.find((session) => session.id === openSessionId) || null;
   const selectedItems = selectedSession ? itemsBySession[selectedSession.id] || [] : [];
   const selectedSlidesItems = selectedItems.filter((item) => isSlidesItem(item));
+  const primarySlides = selectedSlidesItems.filter((item) => isPrimarySlideItem(item));
   const slidesItem =
-    selectedSlidesItems.find((item) => isPrimarySlideItem(item)) ||
-    selectedSlidesItems[0] ||
-    null;
-  const selectedNonExerciseItems = [
-    ...selectedSlidesItems.filter((item) => item.id !== slidesItem?.id),
-    ...selectedItems.filter((item) => !isExerciseItem(item) && !isSlidesItem(item)),
-  ];
-  const selectedExerciseGroups = groupExerciseItems(selectedItems.filter((item) => isExerciseItem(item)));
-  const selectedResources = [
-    ...(slidesItem
-      ? [
-          {
-            ...slidesItem,
-            id: slidesItem.id || `primary-slide:${selectedSession?.id || "session"}`,
-            title: slidesItem.title || "Slide principal",
-            resource_kind: "primary_slide",
-          },
-        ]
-      : []),
-    ...selectedNonExerciseItems.map((item) => ({ ...item, resource_kind: "item" })),
-    ...selectedExerciseGroups.map((group) => ({
-      id: `exercise-group:${group.key}`,
-      title: group.title,
-      type: "prueba",
-      url: group.url,
-      note: group.note,
-      exercise_count: group.count,
-      has_linked_exercise: group.hasLinkedExercise,
-      resource_kind: "exercise_group",
-    })),
-  ];
-  const firstExerciseGroupUrl = selectedExerciseGroups[0]?.url || null;
-  const primaryResourceUrl = selectedResources[0]?.url || null;
-  const resolvedPrimaryUrl = slidesItem?.url || firstExerciseGroupUrl || primaryResourceUrl;
-  const embedUrl = toSlidesEmbedUrl(slidesItem?.url);
+    primarySlides[0] ||
+    (selectedSlidesItems.length === 1 ? selectedSlidesItems[0] : null);
+  const selectedSlideUrl = String(slidesItem?.url || "").trim();
+  const selectedPresentationTitle = String(slidesItem?.title || "").trim() || "Presentacion de clase";
+  const selectedClassTitle = String(selectedSession?.title || "").trim() || "Slide de la clase";
+  const selectedRecordingLink = String(selectedSession?.recording_link || "").trim();
+  const selectedRecordingPasscode = String(selectedSession?.recording_passcode || "").trim();
+  const embedUrl = toSlidesEmbedUrl(selectedSlideUrl);
+  const recordingEmbedUrl = toVimeoEmbedUrl(selectedRecordingLink);
 
   function toggleMonth(monthKey) {
     setOpenCycleMap((previous) => ({ ...previous, [monthKey]: !previous[monthKey] }));
@@ -424,9 +475,27 @@ export default function CourseSessionList({
     setExpandedSessionMap((previous) => ({ ...previous, [sessionId]: !previous[sessionId] }));
   }
 
-  function openMaterial(sessionId, disabled) {
+  function openSlide(sessionId, disabled) {
     if (disabled) return;
+    setViewerType("slide");
     setOpenSessionId(sessionId);
+  }
+
+  function openRecording(sessionId, disabled) {
+    if (disabled) return;
+    setViewerType("recording");
+    setOpenSessionId(sessionId);
+  }
+
+  function closeViewer() {
+    setOpenSessionId(null);
+    setViewerType("slide");
+  }
+
+  function openInAnotherWindow(url) {
+    const safeUrl = String(url || "").trim();
+    if (!safeUrl) return;
+    window.open(safeUrl, "_blank", "noopener,noreferrer");
   }
 
   function handleCardClick(event, sessionId, disabled) {
@@ -489,15 +558,19 @@ export default function CourseSessionList({
                       classMaterialItems.length ||
                         exerciseGroups.length
                     );
-                    const hasLiveLink = Boolean(session.live_link) && !monthLocked;
-                    const hasRecordingLink = Boolean(session.recording_link) && !monthLocked;
+                    const hasRecordingLink = Boolean(session.recording_link);
+                    const canOpenRecording = hasRecordingLink && !monthLocked;
+                    const hasLiveLink = Boolean(session.live_link) && !monthLocked && !hasRecordingLink;
+                    const showJoinClass = hasLiveLink && Boolean(session.isClassDay);
+                    const showNextClassInfo = !session.isClassDay && session.beforeStart;
+                    const nextClassLabel = session.nextClassDateTimeLabel || session.smallDateLabel || "-";
 
                     return (
                       <div key={session.id} className="relative pl-8">
                         {idx < group.rows.length - 1 ? (
-                          <span className="absolute left-[11px] top-8 h-[calc(100%-10px)] w-px bg-primary/25" />
+                          <span className="absolute left-[9px] top-7 h-[calc(100%-8px)] w-px bg-primary/25 sm:left-[11px] sm:top-8 sm:h-[calc(100%-10px)]" />
                         ) : null}
-                        <span className="absolute left-0 top-6 inline-flex h-6 w-6 items-center justify-center rounded-full border border-border bg-surface">
+                        <span className="absolute left-0 top-6 inline-flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface sm:h-6 sm:w-6">
                           <StatusDot completed={session.afterEnd} live={session.inLiveWindow} />
                         </span>
 
@@ -515,7 +588,27 @@ export default function CourseSessionList({
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2">
-                              {hasLiveLink ? (
+                              {hasRecordingLink ? (
+                                canOpenRecording ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openRecording(session.id, monthLocked)}
+                                    data-no-toggle="true"
+                                    className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                                  >
+                                    Ver grabación
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled
+                                    data-no-toggle="true"
+                                    className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary/70 disabled:cursor-not-allowed disabled:opacity-85"
+                                  >
+                                    Ver grabación
+                                  </button>
+                                )
+                              ) : showJoinClass ? (
                                 <a
                                   data-no-toggle="true"
                                   href={session.live_link}
@@ -525,6 +618,15 @@ export default function CourseSessionList({
                                 >
                                   Unirse a la clase
                                 </a>
+                              ) : showNextClassInfo ? (
+                                <button
+                                  type="button"
+                                  disabled
+                                  data-no-toggle="true"
+                                  className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary/70 disabled:cursor-not-allowed disabled:opacity-85"
+                                >
+                                  Proxima clase {nextClassLabel}
+                                </button>
                               ) : (
                                 <button
                                   type="button"
@@ -536,25 +638,13 @@ export default function CourseSessionList({
                                 </button>
                               )}
 
-                              {hasRecordingLink ? (
-                                <a
-                                  data-no-toggle="true"
-                                  href={session.recording_link}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition hover:bg-primary/20"
-                                >
-                                  Ver grabacion
-                                </a>
-                              ) : null}
-
                               <button
                                 type="button"
-                                onClick={() => openMaterial(session.id, monthLocked)}
+                                onClick={() => openSlide(session.id, monthLocked)}
                                 disabled={monthLocked}
                                 data-no-toggle="true"
                                 className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-primary/30 bg-primary/5 text-primary transition hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
-                                aria-label="Ver material"
+                                aria-label="Ver slide"
                               >
                                 <FolderIcon />
                               </button>
@@ -666,85 +756,82 @@ export default function CourseSessionList({
 
       <AppModal
         open={Boolean(selectedSession)}
-        onClose={() => setOpenSessionId(null)}
-        title={selectedSession ? selectedSession.title : "Material de clase"}
-        widthClass="max-w-5xl"
+        onClose={closeViewer}
+        title={viewerType === "recording" ? "Grabación de clase" : "Slide de la clase"}
+        widthClass="max-w-6xl"
       >
-        <div className="space-y-4">
-          {embedUrl ? (
-            <div className="overflow-hidden rounded-2xl border border-border bg-surface-2">
-              <iframe
-                title="Google Slides"
-                src={embedUrl}
-                className="h-[420px] w-full"
-                allowFullScreen
-              />
+        {viewerType === "slide" ? (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <p className="text-lg font-semibold text-foreground">{selectedPresentationTitle}</p>
+              <p className="text-sm text-muted">{selectedClassTitle || "Slide de la clase"}</p>
             </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
-              No hay Google Slides embebible para esta clase.
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted">Recursos</p>
-            {selectedResources.length ? (
-              <ul className="space-y-2">
-                {selectedResources.map((item) => (
-                  <li key={item.id} className="rounded-xl border border-border bg-surface-2 px-3 py-2">
-                    <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                    <p className="text-[11px] uppercase tracking-wide text-muted">
-                      {item.resource_kind === "exercise_group"
-                        ? `prueba (${item.exercise_count} ejercicio${item.exercise_count === 1 ? "" : "s"})`
-                        : item.resource_kind === "primary_slide"
-                          ? "slide principal"
-                        : formatResourceTypeLabel(item.type)}
-                    </p>
-                    {item.note ? <p className="text-xs text-muted">{item.note}</p> : null}
-                    {item.url ? (
-                      <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-primary underline-offset-2 hover:underline"
-                      >
-                        {item.resource_kind === "exercise_group" && item.has_linked_exercise
-                          ? "Realizar prueba"
-                          : getResourceActionLabel(item)}
-                      </a>
-                    ) : (
-                      <p className="text-xs text-muted">Sin URL para este recurso.</p>
-                    )}
-                  </li>
-                ))}
-              </ul>
+            {embedUrl ? (
+              <div className="relative w-full aspect-[16/9] overflow-hidden rounded-2xl border border-border bg-surface-2">
+                <iframe
+                  title="Slide principal"
+                  src={embedUrl}
+                  className="absolute inset-0 h-full w-full"
+                  allowFullScreen
+                />
+              </div>
             ) : (
-              <p className="text-sm text-muted">Esta clase aun no tiene material cargado.</p>
+              <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
+                Slide principal no disponible aún.
+              </div>
             )}
+            <div className="flex justify-end border-t border-border pt-3">
+              <button
+                type="button"
+                onClick={() => openInAnotherWindow(selectedSlideUrl)}
+                disabled={!selectedSlideUrl}
+                className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Ver slide en otra ventana
+              </button>
+            </div>
           </div>
-
-          <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3">
-            <button
-              type="button"
-              onClick={() => setOpenSessionId(null)}
-              className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-            >
-              Cerrar
-            </button>
-            <a
-              href={resolvedPrimaryUrl || "#"}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={`rounded-xl px-4 py-2 text-xs font-semibold transition ${
-                resolvedPrimaryUrl
-                  ? "bg-primary text-primary-foreground hover:bg-primary-2"
-                  : "pointer-events-none border border-border text-muted"
-              }`}
-            >
-              Abrir en otra ventana
-            </a>
+        ) : (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <p className="text-lg font-semibold text-foreground">{selectedClassTitle}</p>
+            </div>
+            {selectedRecordingLink ? (
+              recordingEmbedUrl ? (
+                <div className="relative w-full aspect-[16/9] overflow-hidden rounded-2xl border border-border bg-surface-2">
+                  <iframe
+                    title="Grabación Vimeo"
+                    src={recordingEmbedUrl}
+                    className="absolute inset-0 h-full w-full"
+                    allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+                    allowFullScreen
+                  />
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-border bg-surface-2 px-4 py-4 text-sm text-muted">
+                  No se puede embeber esta grabación en el aula.
+                </div>
+              )
+            ) : (
+              <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
+                Grabación no disponible aún.
+              </div>
+            )}
+            {selectedRecordingLink ? (
+              <p className="text-sm font-medium text-foreground">Contraseña: {selectedRecordingPasscode || "-"}</p>
+            ) : null}
+            <div className="flex justify-end border-t border-border pt-3">
+              <button
+                type="button"
+                onClick={() => openInAnotherWindow(selectedRecordingLink)}
+                disabled={!selectedRecordingLink}
+                className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Ver grabación en otra ventana
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </AppModal>
     </>
   );

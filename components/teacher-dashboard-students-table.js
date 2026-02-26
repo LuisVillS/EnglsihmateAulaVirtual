@@ -35,7 +35,7 @@ function statusBadge(status) {
 function SkillChip({ label, value }) {
   const width = clampScore(value) ?? 0;
   return (
-    <div className="min-w-[130px]">
+    <div className="min-w-[120px] sm:min-w-[130px]">
       <div className="mb-1 flex items-center justify-between text-[11px]">
         <span className="text-muted">{label}</span>
         <span className="font-semibold text-foreground">{formatScore(value)}</span>
@@ -50,7 +50,11 @@ function SkillChip({ label, value }) {
 function GradePanel({ student, onClose, onSaved }) {
   const router = useRouter();
   const [grade, setGrade] = useState(
-    clampScore(student?.course_average) != null ? String(Math.round(clampScore(student.course_average))) : ""
+    clampScore(student?.admin_grade) != null
+      ? String(Math.round(clampScore(student.admin_grade)))
+      : clampScore(student?.course_average) != null
+        ? String(Math.round(clampScore(student.course_average)))
+        : ""
   );
   const [comment, setComment] = useState("");
   const [pending, setPending] = useState(false);
@@ -90,7 +94,7 @@ function GradePanel({ student, onClose, onSaved }) {
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/45">
       <button type="button" className="flex-1 cursor-default" onClick={onClose} aria-label="Cerrar panel" />
-      <aside className="w-full max-w-md border-l border-border bg-surface p-5 shadow-2xl">
+      <aside className="safe-area-bottom w-full max-w-md border-l border-border bg-surface p-5 shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.22em] text-muted">Editar nota</p>
@@ -173,7 +177,7 @@ export default function TeacherDashboardStudentsTable({ students = [] }) {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="min-w-[980px] w-full text-sm">
+        <table className="w-full min-w-[760px] text-sm md:min-w-[980px]">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wide text-muted">
               <th className="px-3 py-2">Alumno</th>
@@ -214,17 +218,17 @@ export default function TeacherDashboardStudentsTable({ students = [] }) {
                   </div>
                 </td>
                 <td className="px-3 py-3">
-                  <div className="flex justify-end gap-2">
+                  <div className="flex flex-wrap justify-end gap-2">
                     <Link
                       href={`/admin/teacher-dashboard/${student.id}`}
-                      className="rounded-xl border border-border px-3 py-1.5 text-xs font-semibold text-foreground hover:border-primary"
+                      className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-1.5 text-xs font-semibold text-foreground hover:border-primary"
                     >
                       Ver perfil
                     </Link>
                     <button
                       type="button"
                       onClick={() => setEditingStudentId(student.id)}
-                      className="rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-2"
+                      className="inline-flex min-h-11 items-center rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-2"
                     >
                       Editar nota
                     </button>

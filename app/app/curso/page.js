@@ -230,6 +230,7 @@ export default async function CourseGatePage() {
     "day_label",
     "live_link",
     "recording_link",
+    "recording_passcode",
   ];
   let sessionsResult = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -309,6 +310,7 @@ export default async function CourseGatePage() {
       cycle_month: draft.cycle_month,
       live_link: null,
       recording_link: null,
+      recording_passcode: null,
       starts_at: draft.starts_at,
       ends_at: draft.ends_at,
       __draft: true,

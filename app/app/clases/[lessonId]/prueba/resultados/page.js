@@ -53,6 +53,23 @@ function computeExerciseWeight(totalExercises, exerciseIndex) {
   return round2(100 - (base * (total - 1)));
 }
 
+function computeExerciseWeightFromPoints(totalExercises, exerciseIndex, pointValues = []) {
+  const total = Math.max(1, Number(totalExercises) || 1);
+  const index = Math.max(0, Number(exerciseIndex) || 0);
+  const values = normalizeArray(pointValues)
+    .slice(0, total)
+    .map((value) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    });
+  const hasCustom = values.length === total && values.some((value) => value > 0);
+  if (!hasCustom) return computeExerciseWeight(total, index);
+
+  const sum = values.reduce((acc, value) => acc + value, 0);
+  if (!Number.isFinite(sum) || sum <= 0) return computeExerciseWeight(total, index);
+  return round2((values[index] / sum) * 100);
+}
+
 function isMissingUserProgressQuizColumnsError(error) {
   const message = String(error?.message || "").toLowerCase();
   return (
@@ -97,7 +114,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
 
   const { data: exercises, error: exercisesError } = await supabase
     .from("exercises")
-    .select("id, type, prompt, ordering")
+    .select("id, type, prompt, ordering, content_json")
     .eq("lesson_id", lesson.id)
     .eq("status", "published")
     .order("ordering", { ascending: true })
@@ -109,6 +126,10 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
 
   const published = exercises || [];
   const totalExercises = published.length;
+  const exercisePointValues = published.map((exercise) => {
+    const parsed = Number(exercise?.content_json?.point_value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  });
 
   let attemptRow = null;
   let attemptError = null;
@@ -281,7 +302,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
             {published.map((exercise, idx) => {
               const progress = progressByExercise.get(String(exercise.id || "").trim()) || null;
               const hasResult = progress != null;
-              const weight = computeExerciseWeight(totalExercises, idx);
+              const weight = computeExerciseWeightFromPoints(totalExercises, idx, exercisePointValues);
               const wrongAttempts = hasResult ? Math.max(0, toInt(progress.wrong_attempts, toInt(progress.attempts, 1) - 1)) : null;
               const finalStatus = hasResult
                 ? String(progress.final_status || (progress.is_correct ? "passed" : "failed")).toLowerCase()

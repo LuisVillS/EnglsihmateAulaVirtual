@@ -1,6 +1,7 @@
 import { Montserrat, Poppins } from "next/font/google";
 import "./globals.css";
 import { ensureDefaultAdminUser } from "@/lib/default-admin";
+import FormErrorFocus from "@/components/form-error-focus";
 
 const bodyFont = Poppins({
   variable: "--font-body",
@@ -24,6 +25,7 @@ export default async function RootLayout({ children }) {
   return (
     <html lang="es">
       <body className={`${bodyFont.variable} ${headingFont.variable} bg-background text-foreground antialiased`}>
+        <FormErrorFocus />
         {children}
       </body>
     </html>

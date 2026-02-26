@@ -140,7 +140,7 @@ export default function UserAvatarMenu({ name, email, avatarUrl }) {
             <div className="my-3 h-px w-full bg-border" />
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-foreground/90 transition hover:bg-surface-2"
+              className="flex min-h-11 w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-foreground/90 transition hover:bg-surface-2"
               onClick={async () => {
                 closeMenu();
                 try {
@@ -171,7 +171,7 @@ export default function UserAvatarMenu({ name, email, avatarUrl }) {
         type="button"
         ref={buttonRef}
         onClick={toggleMenu}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold text-white shadow-inner"
+        className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold text-white shadow-inner"
         aria-haspopup="menu"
         aria-expanded={open}
       >
