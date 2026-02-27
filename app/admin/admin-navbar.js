@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 const NAV_LINKS = [
   { href: "/admin", label: "Inicio" },
@@ -57,26 +56,12 @@ export default function AdminNavbar() {
             );
           })}
         </div>
-        <button
-          type="button"
+        <Link
+          href="/api/auth/logout"
           className="inline-flex min-h-11 items-center rounded-full border border-white/20 px-4 py-2 text-xs font-semibold text-white/75 transition hover:border-white/35 hover:text-white"
-          onClick={async () => {
-            try {
-              const supabase = getSupabaseBrowserClient();
-              await supabase.auth.signOut();
-            } catch (error) {
-              console.error("No se pudo cerrar sesion en el cliente", error);
-            }
-            try {
-              await fetch("/api/auth/logout", { method: "POST" });
-            } catch (error) {
-              console.error("No se pudo cerrar sesion en el servidor", error);
-            }
-            window.location.href = "/";
-          }}
         >
           Cerrar sesion
-        </button>
+        </Link>
       </div>
     </nav>
   );

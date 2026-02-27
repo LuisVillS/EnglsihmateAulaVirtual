@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { submitLessonQuizStep } from "../actions";
 
-const MAX_WRONG_ATTEMPTS = 3;
+const MAX_WRONG_ATTEMPTS = 1;
 
 const TYPE_LABELS = {
   scramble: "Scrambled Sentence",
@@ -490,12 +490,12 @@ function buildCorrectAnswerText(type, data) {
   return "-";
 }
 
-function TypeBadge({ type }) {
+function ExerciseTypeHeading({ type }) {
   const label = TYPE_LABELS[String(type || "").trim()] || "Ejercicio";
   return (
-    <span className="inline-flex rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
+    <p className="text-lg font-semibold text-foreground sm:text-xl">
       {label}
-    </span>
+    </p>
   );
 }
 
@@ -981,9 +981,6 @@ export default function LessonQuizPlayer({
             const selectedOptionId = String(clozeSelections[key] || "").toLowerCase();
             const selectedValue = optionById.get(selectedOptionId) || "";
             const resolvedCorrectOptionId = String(blank?.correctOptionId || "").toLowerCase();
-            const resolvedCorrectValue = optionById.get(resolvedCorrectOptionId) || "";
-            const selectedCorrect = selectedOptionId && selectedOptionId === resolvedCorrectOptionId;
-            const selectedWrong = selectedOptionId && resolvedCorrectOptionId && selectedOptionId !== resolvedCorrectOptionId;
             const isActive = !isResolved && activeKey === key;
 
             return (
@@ -1005,10 +1002,8 @@ export default function LessonQuizPlayer({
                     ? "border-success bg-success/15 text-success"
                     : isFailed
                     ? "border-danger/70 bg-danger/12 text-danger"
-                    : selectedCorrect
-                    ? "border-success/60 bg-success/12 text-success"
-                    : selectedWrong
-                    ? "border-danger/70 bg-danger/12 text-danger"
+                    : selectedOptionId
+                    ? "border-primary/70 bg-primary/12 text-foreground"
                     : "border-dashed border-primary/55 bg-primary/10 text-foreground"
                 } ${isActive ? "ring-2 ring-primary/40" : ""}`}
               >
@@ -1063,7 +1058,9 @@ export default function LessonQuizPlayer({
   function renderScramble() {
     return (
       <div className="space-y-5">
-        <p className="text-sm text-muted">{data.prompt || "Ordena la oracion."}</p>
+        <p className="text-xl font-bold leading-snug text-foreground sm:text-2xl">
+          {data.prompt || "Ordena la oracion."}
+        </p>
 
         <div className={`rounded-2xl border bg-surface-2 px-4 py-4 transition ${errorFlash ? "border-danger/70" : "border-border"}`}>
           <p className="mb-2 text-xs uppercase tracking-wide text-muted">Tu respuesta</p>
@@ -1116,12 +1113,15 @@ export default function LessonQuizPlayer({
   function renderPairs() {
     const assignedRightIds = new Set(Object.values(pairAssignments).filter(Boolean));
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         <p className="text-sm text-muted">Selecciona un termino de cada columna para emparejarlos.</p>
 
-        <div ref={pairBoardRef} className={`relative rounded-2xl border bg-surface-2 p-3 transition ${errorFlash ? "border-danger/70" : "border-border"}`}>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
+        <div
+          ref={pairBoardRef}
+          className={`relative rounded-2xl border bg-surface-2 p-4 transition sm:p-5 ${errorFlash ? "border-danger/70" : "border-border"}`}
+        >
+          <div className="grid grid-cols-2 gap-5 sm:gap-6">
+            <div className="space-y-3">
               <p className="px-1 text-xs uppercase tracking-wide text-muted">Idioma A</p>
               {leftPairCards.map((card) => {
                 const paired = Boolean(pairAssignments[card.pairId]);
@@ -1136,7 +1136,7 @@ export default function LessonQuizPlayer({
                     type="button"
                     disabled={isResolved}
                     onClick={() => handlePairCard("left", card.pairId)}
-                    className={`w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
+                    className={`w-full rounded-xl border px-3 py-3 text-left text-sm font-semibold transition ${
                       selected
                         ? "border-primary bg-primary text-primary-foreground"
                         : paired
@@ -1150,7 +1150,7 @@ export default function LessonQuizPlayer({
               })}
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               <p className="px-1 text-xs uppercase tracking-wide text-muted">Idioma B</p>
               {rightPairCards.map((card) => {
                 const paired = assignedRightIds.has(card.pairId);
@@ -1165,7 +1165,7 @@ export default function LessonQuizPlayer({
                     type="button"
                     disabled={isResolved}
                     onClick={() => handlePairCard("right", card.pairId)}
-                    className={`w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
+                    className={`w-full rounded-xl border px-3 py-3 text-left text-sm font-semibold transition ${
                       selected
                         ? "border-primary bg-primary text-primary-foreground"
                         : paired
@@ -1319,10 +1319,10 @@ export default function LessonQuizPlayer({
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <TypeBadge type={type} />
-        <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
+        <ExerciseTypeHeading type={type} />
+        <p className="text-sm font-semibold text-muted">
           Errores disponibles: {remainingErrors}
-        </span>
+        </p>
       </div>
 
       {renderBodyByType()}

@@ -10,6 +10,12 @@ import CourseSessionList from "@/components/course-session-list";
 import { formatMonthKeyFromDate } from "@/lib/class-format";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { buildWeightedCourseGrade } from "@/lib/course-grade";
+import CourseBreadcrumbs from "@/components/course-breadcrumbs";
+import {
+  isMissingLessonQuizRestartColumnError,
+  isMissingLessonQuizTableError,
+  normalizeAttemptRow,
+} from "@/lib/lesson-quiz";
 
 function getMissingTableName(error) {
   const message = String(error?.message || "");
@@ -406,20 +412,52 @@ export default async function CourseGatePage() {
     )
   );
   let quizAttemptRows = [];
+  let quizAttemptsByLesson = {};
   if (assignedQuizLessonIds.length) {
-    const { data: attempts, error: attemptsError } = await supabase
+    let attempts = [];
+    let attemptsError = null;
+
+    const primary = await supabase
       .from("lesson_quiz_attempts")
-      .select("lesson_id, attempt_status, score_percent")
+      .select("lesson_id, attempt_status, score_percent, restart_count, completed_count, total_exercises")
       .eq("user_id", user.id)
-      .eq("attempt_status", "completed")
       .in("lesson_id", assignedQuizLessonIds);
-    if (attemptsError) {
-      const missingTable = getMissingTableName(attemptsError);
-      if (!missingTable?.endsWith("lesson_quiz_attempts")) {
-        console.error("No se pudo cargar progreso de pruebas asignadas", attemptsError);
+
+    if (!primary.error) {
+      attempts = primary.data || [];
+    } else if (isMissingLessonQuizRestartColumnError(primary.error)) {
+      const fallback = await supabase
+        .from("lesson_quiz_attempts")
+        .select("lesson_id, attempt_status, score_percent, completed_count, total_exercises")
+        .eq("user_id", user.id)
+        .in("lesson_id", assignedQuizLessonIds);
+      if (!fallback.error) {
+        attempts = (fallback.data || []).map((row) => ({ ...row, restart_count: 0 }));
+      } else {
+        attemptsError = fallback.error;
       }
     } else {
-      quizAttemptRows = attempts || [];
+      attemptsError = primary.error;
+    }
+
+    if (attemptsError) {
+      if (!isMissingLessonQuizTableError(attemptsError)) {
+        console.error("No se pudo cargar progreso de tests asignados", attemptsError);
+      }
+    } else {
+      const normalizedAttempts = (attempts || []).map((row) => ({
+        ...row,
+        ...normalizeAttemptRow(row, row?.total_exercises ?? 0),
+      }));
+      quizAttemptsByLesson = normalizedAttempts.reduce((acc, row) => {
+        const lessonId = String(row.lesson_id || "").trim();
+        if (!lessonId) return acc;
+        acc[lessonId] = row;
+        return acc;
+      }, {});
+      quizAttemptRows = normalizedAttempts.filter(
+        (row) => String(row.attempt_status || "").trim().toLowerCase() === "completed"
+      );
     }
   }
 
@@ -442,6 +480,7 @@ export default async function CourseGatePage() {
 
   return (
     <section className="space-y-6 text-foreground">
+      <CourseBreadcrumbs items={[{ label: "Curso", href: "/app/curso" }]} />
       <header className="rounded-3xl border border-border bg-surface p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-2">
@@ -514,6 +553,7 @@ export default async function CourseGatePage() {
         <CourseSessionList
           sessions={sessions}
           itemsBySession={itemsBySession}
+          quizAttemptsByLesson={quizAttemptsByLesson}
           commissionTimes={{
             startTime: commission.start_time,
             endTime: commission.end_time,

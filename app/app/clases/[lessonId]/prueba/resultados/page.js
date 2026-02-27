@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import RestartLessonQuizButton from "@/components/restart-lesson-quiz-button";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
   LESSON_QUIZ_MAX_RESTARTS,
+  LESSON_QUIZ_MAX_TOTAL_ATTEMPTS,
   LESSON_QUIZ_STATUS,
   formatDurationSeconds,
+  getUsedQuizAttempts,
   isMissingLessonQuizRestartColumnError,
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
@@ -45,6 +48,55 @@ function round2(value) {
   return Math.round((toNumber(value, 0) + Number.EPSILON) * 100) / 100;
 }
 
+async function loadLessonTestMeta(supabase, lesson, exercises = []) {
+  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
+  const fallbackTitle = String(lesson?.title || "").trim() || "Test de clase";
+  const exerciseIds = Array.from(
+    new Set((exercises || []).map((exercise) => String(exercise?.id || "").trim()).filter(Boolean))
+  );
+  if (!exerciseIds.length) {
+    return {
+      testTitle: fallbackTitle,
+      testNumber: fallbackNumber,
+    };
+  }
+
+  const { data: itemRows, error: itemError } = await supabase
+    .from("session_items")
+    .select("title, session_id, exercise_id")
+    .in("exercise_id", exerciseIds)
+    .eq("type", "exercise")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (itemError || !itemRows?.length) {
+    return {
+      testTitle: fallbackTitle,
+      testNumber: fallbackNumber,
+    };
+  }
+
+  const firstItem = itemRows[0];
+  let testNumber = fallbackNumber;
+  const sessionId = String(firstItem?.session_id || "").trim();
+  if (sessionId) {
+    const { data: sessionRow } = await supabase
+      .from("course_sessions")
+      .select("session_in_cycle")
+      .eq("id", sessionId)
+      .maybeSingle();
+    const sessionNumber = toInt(sessionRow?.session_in_cycle, 0);
+    if (sessionNumber > 0) {
+      testNumber = sessionNumber;
+    }
+  }
+
+  return {
+    testTitle: String(firstItem?.title || "").trim() || fallbackTitle,
+    testNumber,
+  };
+}
+
 function computeExerciseWeight(totalExercises, exerciseIndex) {
   const total = Math.max(1, Number(totalExercises) || 1);
   const index = Math.max(0, Number(exerciseIndex) || 0);
@@ -81,7 +133,7 @@ function isMissingUserProgressQuizColumnsError(error) {
 }
 
 export const metadata = {
-  title: "Resultados de prueba | Aula Virtual",
+  title: "Resultados de test | Aula Virtual",
 };
 
 export default async function LessonQuizResultsPage({ params: paramsPromise, searchParams: searchParamsPromise }) {
@@ -107,7 +159,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
 
   const { data: lesson } = await supabase
     .from("lessons")
-    .select("id, title, level")
+    .select("id, title, level, unit_id, ordering")
     .eq("id", lessonId)
     .maybeSingle();
   if (!lesson?.id) notFound();
@@ -126,6 +178,9 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
 
   const published = exercises || [];
   const totalExercises = published.length;
+  const testMeta = await loadLessonTestMeta(supabase, lesson, published);
+  const testTitle = testMeta.testTitle;
+  const testNumber = testMeta.testNumber;
   const exercisePointValues = published.map((exercise) => {
     const parsed = Number(exercise?.content_json?.point_value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -205,10 +260,15 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
   const durationLabel = formatDurationSeconds(attempt.duration_seconds);
   const scoreValue = attempt.score_percent != null ? round2(attempt.score_percent) : null;
   const repeatCount = Math.max(0, toInt(attempt.restart_count, 0));
+  const attemptsUsed = getUsedQuizAttempts({
+    status: attempt.attempt_status,
+    restartCount: repeatCount,
+    completedCount: attempt.completed_count,
+  });
+  const remainingAttempts = Math.max(0, LESSON_QUIZ_MAX_TOTAL_ATTEMPTS - attemptsUsed);
   const remainingRestarts = Math.max(0, LESSON_QUIZ_MAX_RESTARTS - repeatCount);
   const canRepeat = remainingRestarts > 0;
   const repeatLimitWarning = searchParams?.repeat_limit === "1";
-
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-4 py-8 text-foreground sm:px-6 sm:py-10">
       <div className="pointer-events-none absolute inset-0">
@@ -226,8 +286,8 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
               Volver
             </Link>
             <div>
-              <h1 className="text-2xl font-semibold sm:text-3xl">Resultados - {lesson.title}</h1>
-              <p className="text-sm text-muted">Resumen final de la prueba de clase.</p>
+              <h1 className="text-2xl font-semibold sm:text-3xl">{`Test ${testNumber} - ${testTitle}`}</h1>
+              <p className="text-sm text-muted">Resultados finales del test.</p>
             </div>
           </div>
           {lesson.level ? (
@@ -238,7 +298,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
         </header>
         {repeatLimitWarning ? (
           <div className="rounded-2xl border border-danger/45 bg-danger/12 px-4 py-3 text-sm text-danger">
-            Alcanzaste el maximo de 2 repeticiones para esta prueba.
+            Alcanzaste el maximo de {LESSON_QUIZ_MAX_TOTAL_ATTEMPTS} intentos para este test.
           </div>
         ) : null}
 
@@ -249,7 +309,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
             </span>
             <div className="space-y-1">
               <p className="text-xs uppercase tracking-[0.3em] text-muted">Completado</p>
-              <h2 className="text-2xl font-black">Prueba completada</h2>
+              <h2 className="text-2xl font-black">Test completado</h2>
               <p className="text-sm text-muted">
                 {attempt.completed_count} de {totalExercises} ejercicios finalizados.
               </p>
@@ -276,23 +336,19 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
               href={`/app/clases/${lesson.id}/prueba`}
               className="inline-flex w-full items-center justify-center rounded-2xl border border-border bg-surface px-5 py-3 text-base font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
             >
-              Volver a prueba
+              Volver al test
             </Link>
-            <form action={restartLessonQuizAttempt} className="w-full">
-              <input type="hidden" name="lessonId" value={lesson.id} />
-              <button
-                type="submit"
-                disabled={!canRepeat}
-                className="inline-flex w-full items-center justify-center rounded-2xl bg-primary px-5 py-3 text-base font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {canRepeat
-                  ? `Repetir prueba (${remainingRestarts} restantes)`
-                  : "Repeticiones agotadas"}
-              </button>
-            </form>
+            <RestartLessonQuizButton
+              action={restartLessonQuizAttempt}
+              lessonId={lesson.id}
+              canRepeat={canRepeat}
+              remainingAttempts={remainingAttempts}
+              attemptsUsed={attemptsUsed}
+              maxAttempts={LESSON_QUIZ_MAX_TOTAL_ATTEMPTS}
+            />
           </div>
           <p className="mt-2 text-xs text-muted">
-            Repeticiones usadas: {repeatCount}/{LESSON_QUIZ_MAX_RESTARTS}
+            Intentos usados: {attemptsUsed}/{LESSON_QUIZ_MAX_TOTAL_ATTEMPTS}
           </p>
         </article>
 
@@ -354,7 +410,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
               );
             })}
             {!published.length ? (
-              <p className="text-sm text-muted">Prueba completada.</p>
+              <p className="text-sm text-muted">Test completado.</p>
             ) : null}
           </div>
         </section>

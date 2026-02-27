@@ -265,13 +265,14 @@ function normalizeExerciseType(value) {
 
 function defaultSkillTagByType(type) {
   const normalizedType = normalizeExerciseType(type);
-  if (normalizedType === "audio_match") return "speaking";
+  if (normalizedType === "audio_match") return "listening";
   if (normalizedType === "image_match" || normalizedType === "pairs") return "reading";
   return "grammar";
 }
 
 function normalizeExerciseSkillTag(value, type) {
-  const raw = String(value || "").trim().toLowerCase();
+  let raw = String(value || "").trim().toLowerCase();
+  if (raw === "speaking") raw = "listening";
   if (EXERCISE_SKILL_TAG_VALUES.includes(raw)) return raw;
   return defaultSkillTagByType(type);
 }
@@ -381,6 +382,75 @@ function buildPracticeExerciseUrl(exerciseId, lessonId = null) {
   }
   if (!id) return "/app/curso";
   return "/app/curso";
+}
+
+function normalizeQuizTitleValue(value) {
+  const raw = String(value || "").trim();
+  return raw || "Prueba de clase";
+}
+
+function parseQuizEstimatedTimeMinutes(value) {
+  if (value == null || value === "") return null;
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(1, parsed);
+}
+
+function parseExerciseBatchRows(rawBatch) {
+  let rows = [];
+  try {
+    const parsed = JSON.parse(String(rawBatch || "[]"));
+    rows = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    throw new Error("Formato invalido de ejercicios (batchJson).");
+  }
+
+  return rows
+    .map((row) => (row && typeof row === "object" && !Array.isArray(row) ? row : {}))
+    .filter(Boolean);
+}
+
+function parseBatchExerciseContent(contentCandidate, quizEstimatedTimeMinutes) {
+  let parsed = {};
+  if (typeof contentCandidate === "string") {
+    try {
+      parsed = JSON.parse(contentCandidate || "{}");
+    } catch {
+      throw new Error("contentJson debe ser JSON válido.");
+    }
+  } else if (contentCandidate && typeof contentCandidate === "object" && !Array.isArray(contentCandidate)) {
+    parsed = contentCandidate;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("contentJson debe ser un objeto JSON válido.");
+  }
+
+  const next = { ...parsed };
+  delete next.estimatedTimeMinutes;
+  if (quizEstimatedTimeMinutes == null) {
+    delete next.estimated_time_minutes;
+  } else {
+    next.estimated_time_minutes = quizEstimatedTimeMinutes;
+  }
+  return next;
+}
+
+async function archiveReleasedExercises({ supabase, actorId, exerciseIds = [] }) {
+  const releasedIds = Array.from(
+    new Set((exerciseIds || []).map((value) => String(value || "").trim()).filter(Boolean))
+  );
+  if (!releasedIds.length) {
+    return;
+  }
+
+  await archiveExercisesIfOrphaned({
+    db: supabase,
+    exerciseIds: releasedIds,
+    actorId,
+    ignoreLessonReference: true,
+  });
+  await runExerciseGarbageCollection({ db: supabase, actorId });
 }
 
 function getDefaultExerciseContent(type) {
@@ -611,6 +681,178 @@ async function ensureTemplateSessionLessonId(supabase, { templateId, templateSes
 
   if (insertLessonError || !insertedLesson?.id) {
     throw new Error(insertLessonError?.message || "No se pudo crear la lección de la clase.");
+  }
+
+  return insertedLesson.id;
+}
+
+async function ensureCommissionExerciseUnitId(supabase, commissionId) {
+  const safeCommissionId = String(commissionId || "").trim();
+  if (!safeCommissionId) {
+    throw new Error("Comision invalida para crear ejercicios.");
+  }
+
+  const slug = `duolingo-commission-${safeCommissionId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 24)}`;
+
+  const { data: existingCourse, error: existingCourseError } = await supabase
+    .from("courses")
+    .select("id")
+    .eq("slug", slug)
+    .maybeSingle();
+
+  if (existingCourseError) {
+    throw new Error(existingCourseError.message || "No se pudo validar curso base de la comision.");
+  }
+
+  let courseId = existingCourse?.id || null;
+
+  if (!courseId) {
+    const { data: commission, error: commissionError } = await supabase
+      .from("course_commissions")
+      .select("id, course_level, commission_number")
+      .eq("id", safeCommissionId)
+      .maybeSingle();
+
+    if (commissionError || !commission?.id) {
+      throw new Error(commissionError?.message || "No se pudo cargar la comision para crear ejercicios.");
+    }
+
+    const { data: insertedCourse, error: insertCourseError } = await supabase
+      .from("courses")
+      .insert({
+        slug,
+        title: `Comision ${commission.course_level || ""} #${commission.commission_number || ""}`.trim(),
+        level: commission.course_level || null,
+        description: `Contenedor automatico de ejercicios para comision ${commission.id}.`,
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (insertCourseError || !insertedCourse?.id) {
+      if (insertCourseError?.code === "23505") {
+        const { data: raceCourse } = await supabase
+          .from("courses")
+          .select("id")
+          .eq("slug", slug)
+          .maybeSingle();
+        if (raceCourse?.id) {
+          courseId = raceCourse.id;
+        } else {
+          throw new Error(insertCourseError?.message || "No se pudo crear curso base para comision.");
+        }
+      } else {
+        throw new Error(insertCourseError?.message || "No se pudo crear curso base para comision.");
+      }
+    } else {
+      courseId = insertedCourse.id;
+    }
+  }
+
+  if (!courseId) {
+    throw new Error("No se pudo resolver curso base para ejercicios de comision.");
+  }
+
+  const { data: existingUnit, error: existingUnitError } = await supabase
+    .from("units")
+    .select("id")
+    .eq("course_id", courseId)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingUnitError) {
+    throw new Error(existingUnitError.message || "No se pudo validar unidad base de la comision.");
+  }
+
+  if (existingUnit?.id) {
+    return existingUnit.id;
+  }
+
+  const { data: insertedUnit, error: insertUnitError } = await supabase
+    .from("units")
+    .insert({
+      course_id: courseId,
+      title: "Commission Exercises",
+      position: 1,
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (insertUnitError || !insertedUnit?.id) {
+    throw new Error(insertUnitError?.message || "No se pudo crear unidad base para comision.");
+  }
+
+  return insertedUnit.id;
+}
+
+async function ensureCourseSessionLessonId(supabase, { commissionId, courseSessionId, title }) {
+  const safeCommissionId = String(commissionId || "").trim();
+  const safeSessionId = String(courseSessionId || "").trim();
+  if (!safeCommissionId || !safeSessionId) {
+    throw new Error("Faltan datos para crear la leccion de la clase.");
+  }
+
+  const marker = `commission:${safeCommissionId}:session:${safeSessionId}`;
+  const { data: existingLesson, error: existingLessonError } = await supabase
+    .from("lessons")
+    .select("id, status")
+    .eq("description", marker)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingLessonError) {
+    throw new Error(existingLessonError.message || "No se pudo validar leccion de la clase.");
+  }
+
+  if (existingLesson?.id) {
+    if (String(existingLesson.status || "").trim().toLowerCase() !== "published") {
+      const { error: publishExistingLessonError } = await supabase
+        .from("lessons")
+        .update({ status: "published", updated_at: new Date().toISOString() })
+        .eq("id", existingLesson.id);
+      if (publishExistingLessonError) {
+        throw new Error(publishExistingLessonError.message || "No se pudo publicar la leccion de la clase.");
+      }
+    }
+    return existingLesson.id;
+  }
+
+  const unitId = await ensureCommissionExerciseUnitId(supabase, safeCommissionId);
+  const { data: latestLesson } = await supabase
+    .from("lessons")
+    .select("ordering, position")
+    .eq("unit_id", unitId)
+    .order("ordering", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nextOrdering = Math.max(
+    1,
+    Number(latestLesson?.ordering || latestLesson?.position || 0) + 1
+  );
+
+  const lessonTitle = title && title.trim()
+    ? `Comision - ${title.trim()}`
+    : `Comision - Clase ${safeSessionId.slice(0, 8)}`;
+
+  const nowIso = new Date().toISOString();
+  const { data: insertedLesson, error: insertLessonError } = await supabase
+    .from("lessons")
+    .insert({
+      unit_id: unitId,
+      title: lessonTitle,
+      description: marker,
+      ordering: nextOrdering,
+      position: nextOrdering,
+      status: "published",
+      created_at: nowIso,
+      updated_at: nowIso,
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (insertLessonError || !insertedLesson?.id) {
+    throw new Error(insertLessonError?.message || "No se pudo crear la leccion de la clase.");
   }
 
   return insertedLesson.id;
@@ -2088,82 +2330,376 @@ export async function createTemplateSessionExercise(prevState, maybeFormData) {
   }
 }
 
-export async function createTemplateSessionExerciseBatch(prevState, maybeFormData) {
+async function saveExerciseBatchForContainer({
+  supabase,
+  actorId,
+  rows,
+  lessonId,
+  title,
+  containerType,
+  containerId,
+  existingItems,
+}) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const existingItemMap = new Map(
+    (existingItems || []).map((item) => [String(item?.id || "").trim(), item])
+  );
+  const requestedExerciseIds = Array.from(
+    new Set(safeRows.map((row) => String(row?.exerciseId || "").trim()).filter(Boolean))
+  );
+
+  const existingExerciseMap = new Map();
+  if (requestedExerciseIds.length) {
+    const { data: exerciseRows, error: exercisesError } = await supabase
+      .from("exercises")
+      .select("id, revision")
+      .in("id", requestedExerciseIds);
+    if (exercisesError) {
+      throw new Error(exercisesError.message || "No se pudieron cargar ejercicios existentes.");
+    }
+    (exerciseRows || []).forEach((exercise) => {
+      existingExerciseMap.set(String(exercise.id), exercise);
+    });
+  }
+
+  const keptItemIds = new Set();
+  const releasedExerciseIds = [];
+  let created = 0;
+  let updated = 0;
+
+  for (let index = 0; index < safeRows.length; index += 1) {
+    const row = safeRows[index] || {};
+    const requestedType = normalizeExerciseType(row.type);
+    if (!requestedType) {
+      throw new Error(`Ejercicio ${index + 1}: tipo inválido.`);
+    }
+
+    const requestedSkillTag = normalizeExerciseSkillTag(row.skillTag, requestedType);
+    const requestedStatus = normalizeExerciseStatus(row.status || "published");
+    const contentJson =
+      row.contentJson && typeof row.contentJson === "object" && !Array.isArray(row.contentJson)
+        ? row.contentJson
+        : parseBatchExerciseContent(row.contentJson, null);
+    const existingExerciseId = String(row.exerciseId || "").trim();
+    const currentExercise = existingExerciseMap.get(existingExerciseId) || null;
+
+    const payload = await prepareExercisePayload({
+      input: {
+        lesson_id: lessonId,
+        type: requestedType,
+        skill_tag: requestedSkillTag,
+        status: requestedStatus,
+        content_json: contentJson,
+        ordering: index + 1,
+        revision: currentExercise ? Number(currentExercise.revision || 0) + 1 : 1,
+      },
+      actorId,
+      db: supabase,
+      forcePublishValidation: true,
+    });
+
+    let savedExerciseId = existingExerciseId;
+    if (currentExercise?.id) {
+      const { error: updateExerciseError } = await supabase
+        .from("exercises")
+        .update(payload)
+        .eq("id", currentExercise.id);
+      if (updateExerciseError) {
+        throw new Error(updateExerciseError.message || `No se pudo actualizar el ejercicio ${index + 1}.`);
+      }
+      updated += 1;
+    } else {
+      const nowIso = new Date().toISOString();
+      const { data: insertedExercise, error: insertExerciseError } = await supabase
+        .from("exercises")
+        .insert({
+          ...payload,
+          created_by: actorId,
+          created_at: nowIso,
+        })
+        .select("id")
+        .maybeSingle();
+      if (insertExerciseError || !insertedExercise?.id) {
+        throw new Error(insertExerciseError?.message || `No se pudo crear el ejercicio ${index + 1}.`);
+      }
+      savedExerciseId = insertedExercise.id;
+      created += 1;
+    }
+
+    const itemPayload = containerType === "template"
+      ? {
+        template_session_id: containerId,
+        type: "exercise",
+        title,
+        url: buildPracticeExerciseUrl(savedExerciseId, lessonId),
+        exercise_id: savedExerciseId,
+      }
+      : {
+        session_id: containerId,
+        type: "exercise",
+        title,
+        url: buildPracticeExerciseUrl(savedExerciseId, lessonId),
+        exercise_id: savedExerciseId,
+        note: null,
+        updated_at: new Date().toISOString(),
+      };
+
+    const existingItemId = String(row.itemId || "").trim();
+    const previousItem = existingItemMap.get(existingItemId) || null;
+    let persistedItemId = existingItemId;
+
+    if (previousItem?.id) {
+      const tableName = containerType === "template" ? "template_session_items" : "session_items";
+      const { error: updateItemError } = await supabase.from(tableName).update(itemPayload).eq("id", previousItem.id);
+      if (updateItemError) {
+        const missingColumn = getMissingColumnFromError(updateItemError);
+        if (missingColumn === "exercise_id") {
+          throw new Error(
+            containerType === "template"
+              ? "Falta la columna exercise_id en template_session_items. Ejecuta SQL actualizado."
+              : "Falta la columna exercise_id en session_items. Ejecuta SQL actualizado."
+          );
+        }
+        throw new Error(updateItemError.message || `No se pudo actualizar el item ${index + 1}.`);
+      }
+      const previousExerciseId = String(previousItem.exercise_id || "").trim();
+      if (previousExerciseId && previousExerciseId !== savedExerciseId) {
+        releasedExerciseIds.push(previousExerciseId);
+      }
+    } else {
+      const tableName = containerType === "template" ? "template_session_items" : "session_items";
+      const { data: insertedItem, error: insertItemError } = await supabase
+        .from(tableName)
+        .insert(itemPayload)
+        .select("id")
+        .maybeSingle();
+      if (insertItemError || !insertedItem?.id) {
+        const missingColumn = getMissingColumnFromError(insertItemError);
+        if (missingColumn === "exercise_id") {
+          throw new Error(
+            containerType === "template"
+              ? "Falta la columna exercise_id en template_session_items. Ejecuta SQL actualizado."
+              : "Falta la columna exercise_id en session_items. Ejecuta SQL actualizado."
+          );
+        }
+        throw new Error(insertItemError?.message || `No se pudo crear el item ${index + 1}.`);
+      }
+      persistedItemId = insertedItem.id;
+    }
+
+    if (persistedItemId) {
+      keptItemIds.add(persistedItemId);
+    }
+  }
+
+  const removedItems = (existingItems || []).filter((item) => !keptItemIds.has(String(item?.id || "").trim()));
+  if (removedItems.length) {
+    const tableName = containerType === "template" ? "template_session_items" : "session_items";
+    const removedIds = removedItems.map((item) => item.id);
+    const { error: deleteItemsError } = await supabase.from(tableName).delete().in("id", removedIds);
+    if (deleteItemsError) {
+      throw new Error(deleteItemsError.message || "No se pudieron quitar ejercicios eliminados de la prueba.");
+    }
+    removedItems.forEach((item) => {
+      const exerciseId = String(item?.exercise_id || "").trim();
+      if (exerciseId) {
+        releasedExerciseIds.push(exerciseId);
+      }
+    });
+  }
+
+  await archiveReleasedExercises({ supabase, actorId, exerciseIds: releasedExerciseIds });
+
+  return { created, updated };
+}
+
+export async function saveTemplateSessionExerciseBatch(prevState, maybeFormData) {
   const formData = resolveFormDataArg(prevState, maybeFormData);
   if (!formData) {
     return { error: "No se recibieron datos de la prueba." };
   }
 
-  const templateId = getText(formData, "templateId");
-  const templateSessionId = getText(formData, "templateSessionId");
-  const fallbackLessonId = getText(formData, "lessonId");
-  const rawBatch = getText(formData, "batchJson");
-
-  if (!templateId || !templateSessionId) {
-    return { error: "Clase de plantilla invalida." };
-  }
-
-  let rows = [];
   try {
-    const parsed = JSON.parse(rawBatch || "[]");
-    rows = Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return { error: "Formato invalido de ejercicios (batchJson)." };
-  }
+    const supabase = await requireAdmin();
+    const actorId = await getAdminActorId(supabase);
+    const templateId = getText(formData, "templateId");
+    const templateSessionId = getText(formData, "templateSessionId");
+    const quizTitle = normalizeQuizTitleValue(getText(formData, "quizTitle"));
+    const quizEstimatedTimeMinutes = parseQuizEstimatedTimeMinutes(getText(formData, "quizEstimatedTimeMinutes"));
+    const rows = parseExerciseBatchRows(getText(formData, "batchJson"));
 
-  if (!rows.length) {
-    return { error: "Agrega al menos un ejercicio para crear la prueba." };
-  }
-
-  let created = 0;
-  const errors = [];
-
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index] || {};
-    const payloadFormData = new FormData();
-    payloadFormData.set("templateId", templateId);
-    payloadFormData.set("templateSessionId", templateSessionId);
-    payloadFormData.set("lessonId", String(row.lessonId || fallbackLessonId || "").trim());
-    payloadFormData.set("type", String(row.type || "cloze").trim());
-    payloadFormData.set("skillTag", String(row.skillTag || "").trim());
-    payloadFormData.set("status", String(row.status || "published").trim());
-    payloadFormData.set("title", String(row.title || "").trim());
-
-    const contentCandidate = row.contentJson;
-    if (typeof contentCandidate === "string") {
-      payloadFormData.set("contentJson", contentCandidate);
-    } else {
-      payloadFormData.set("contentJson", JSON.stringify(contentCandidate || {}));
+    if (!templateId || !templateSessionId) {
+      return { error: "Clase de plantilla invalida." };
+    }
+    if (!rows.length) {
+      return { error: "Agrega al menos un ejercicio para crear la prueba." };
     }
 
-    const result = await createTemplateSessionExercise(payloadFormData);
-    if (result?.success) {
-      created += 1;
-      continue;
+    const { data: templateSession, error: templateSessionError } = await supabase
+      .from("template_sessions")
+      .select("id, template_id, title")
+      .eq("id", templateSessionId)
+      .maybeSingle();
+
+    if (templateSessionError || !templateSession?.id) {
+      const missingTable = getMissingTableName(templateSessionError);
+      if (missingTable?.endsWith("template_sessions")) {
+        return { error: "Falta crear la tabla template_sessions. Ejecuta SQL actualizado." };
+      }
+      return { error: templateSessionError?.message || "No se encontró la clase de plantilla." };
     }
 
-    errors.push(`Ejercicio ${index + 1}: ${result?.error || "No se pudo crear."}`);
-  }
+    const lessonId = await ensureTemplateSessionLessonId(supabase, {
+      templateId: templateId || templateSession.template_id,
+      templateSessionId,
+      title: templateSession.title,
+    });
 
-  revalidateTemplateAdminPaths(templateId);
+    let existingItemsResult = await supabase
+      .from("template_session_items")
+      .select("id, exercise_id")
+      .eq("template_session_id", templateSessionId)
+      .eq("type", "exercise")
+      .order("created_at", { ascending: true });
 
-  if (!created) {
-    return { error: errors.join(" ") || "No se pudo crear la prueba." };
-  }
+    if (existingItemsResult.error) {
+      const missingTable = getMissingTableName(existingItemsResult.error);
+      if (missingTable?.endsWith("template_session_items")) {
+        return { error: "Falta crear la tabla template_session_items. Ejecuta SQL actualizado." };
+      }
+      const missingColumn = getMissingColumnFromError(existingItemsResult.error);
+      if (missingColumn === "exercise_id") {
+        return { error: "Falta la columna exercise_id en template_session_items. Ejecuta SQL actualizado." };
+      }
+      return { error: existingItemsResult.error.message || "No se pudieron cargar ejercicios de la clase." };
+    }
 
-  if (errors.length) {
+    const normalizedRows = rows.map((row) => ({
+      ...row,
+      contentJson: parseBatchExerciseContent(row.contentJson, quizEstimatedTimeMinutes),
+    }));
+
+    const result = await saveExerciseBatchForContainer({
+      supabase,
+      actorId,
+      rows: normalizedRows,
+      lessonId,
+      title: quizTitle,
+      containerType: "template",
+      containerId: templateSessionId,
+      existingItems: existingItemsResult.data || [],
+    });
+
+    revalidateTemplateAdminPaths(templateId);
+    revalidatePath(`/admin/courses/templates/${templateId}/sessions/${templateSessionId}/exercises`);
+
     return {
       success: true,
-      warning: `Se crearon ${created} ejercicios, pero hubo errores: ${errors.join(" ")}`,
-      created,
+      created: result.created,
+      message:
+        result.created > 0 && result.updated > 0
+          ? `Prueba guardada. ${result.created} ejercicio(s) nuevos y ${result.updated} actualizados.`
+          : result.created > 0
+            ? `Prueba guardada. ${result.created} ejercicio(s) creados.`
+            : `Prueba actualizada. ${result.updated} ejercicio(s) editados.`,
     };
+  } catch (error) {
+    return { error: error?.message || "No se pudo guardar la prueba de la clase." };
+  }
+}
+
+export async function createTemplateSessionExerciseBatch(prevState, maybeFormData) {
+  return saveTemplateSessionExerciseBatch(prevState, maybeFormData);
+}
+
+export async function saveCourseSessionExerciseBatch(prevState, maybeFormData) {
+  const formData = resolveFormDataArg(prevState, maybeFormData);
+  if (!formData) {
+    return { error: "No se recibieron datos de la prueba." };
   }
 
-  return {
-    success: true,
-    message: `Se crearon ${created} ejercicios para la clase.`,
-    created,
-  };
+  try {
+    const supabase = await requireAdmin();
+    const actorId = await getAdminActorId(supabase);
+    const commissionId = getText(formData, "commissionId");
+    const courseSessionId = getText(formData, "courseSessionId");
+    const quizTitle = normalizeQuizTitleValue(getText(formData, "quizTitle"));
+    const quizEstimatedTimeMinutes = parseQuizEstimatedTimeMinutes(getText(formData, "quizEstimatedTimeMinutes"));
+    const rows = parseExerciseBatchRows(getText(formData, "batchJson"));
+
+    if (!commissionId || !courseSessionId) {
+      return { error: "Clase de comision invalida." };
+    }
+    if (!rows.length) {
+      return { error: "Agrega al menos un ejercicio para crear la prueba." };
+    }
+
+    const { data: session, error: sessionError } = await supabase
+      .from("course_sessions")
+      .select("id, commission_id, day_label")
+      .eq("id", courseSessionId)
+      .eq("commission_id", commissionId)
+      .maybeSingle();
+
+    if (sessionError || !session?.id) {
+      return { error: sessionError?.message || "No se encontró la clase de la comision." };
+    }
+
+    const lessonId = await ensureCourseSessionLessonId(supabase, {
+      commissionId,
+      courseSessionId,
+      title: session.day_label,
+    });
+
+    const { data: existingItems, error: existingItemsError } = await supabase
+      .from("session_items")
+      .select("id, exercise_id")
+      .eq("session_id", courseSessionId)
+      .eq("type", "exercise")
+      .order("created_at", { ascending: true });
+
+    if (existingItemsError) {
+      const missingColumn = getMissingColumnFromError(existingItemsError);
+      if (missingColumn === "exercise_id") {
+        return { error: "Falta la columna exercise_id en session_items. Ejecuta SQL actualizado." };
+      }
+      return { error: existingItemsError.message || "No se pudieron cargar ejercicios de la clase." };
+    }
+
+    const normalizedRows = rows.map((row) => ({
+      ...row,
+      contentJson: parseBatchExerciseContent(row.contentJson, quizEstimatedTimeMinutes),
+    }));
+
+    const result = await saveExerciseBatchForContainer({
+      supabase,
+      actorId,
+      rows: normalizedRows,
+      lessonId,
+      title: quizTitle,
+      containerType: "commission",
+      containerId: courseSessionId,
+      existingItems: existingItems || [],
+    });
+
+    revalidateCommissionAdminPaths();
+    revalidatePath(`/admin/commissions/${commissionId}`);
+    revalidatePath(`/admin/commissions/${commissionId}/sessions/${courseSessionId}/exercises`);
+    revalidatePath("/app/curso");
+
+    return {
+      success: true,
+      created: result.created,
+      message:
+        result.created > 0 && result.updated > 0
+          ? `Prueba guardada. ${result.created} ejercicio(s) nuevos y ${result.updated} actualizados.`
+          : result.created > 0
+            ? `Prueba guardada. ${result.created} ejercicio(s) creados.`
+            : `Prueba actualizada. ${result.updated} ejercicio(s) editados.`,
+    };
+  } catch (error) {
+    return { error: error?.message || "No se pudo guardar la prueba de la comision." };
+  }
 }
 
 export async function deleteTemplateSessionItem(formData) {

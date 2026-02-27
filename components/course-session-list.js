@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import AppModal from "@/components/app-modal";
 import { formatMonthKeyFromDate } from "@/lib/class-format";
+import { getRemainingQuizRestarts, normalizeAttemptRow } from "@/lib/lesson-quiz";
 
 function parseTimeToMinutes(value) {
   if (!value) return null;
@@ -335,6 +336,10 @@ function groupExerciseItems(items = []) {
       title: resolveExerciseGroupTitle(group.items),
       url: group.url,
       count: group.items.length,
+      lessonId:
+        group.items
+          .map((item) => String(item?.lesson_id || "").trim())
+          .find(Boolean) || "",
       note,
       hasLinkedExercise,
     };
@@ -344,6 +349,7 @@ function groupExerciseItems(items = []) {
 export default function CourseSessionList({
   sessions,
   itemsBySession = {},
+  quizAttemptsByLesson = {},
   commissionTimes = {},
   nowIso,
   allowedMonths = [],
@@ -704,36 +710,95 @@ export default function CourseSessionList({
                                 <div className="space-y-2">
                                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Test de clase</p>
                                   {exerciseGroups.map((group) => (
-                                    <div
-                                      key={group.key}
-                                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/15 bg-surface px-3 py-2"
-                                    >
-                                      <div>
-                                        <p className="text-sm font-semibold text-foreground">{group.title || "Test de clase"}</p>
-                                        <p className="text-xs text-muted">
-                                          {group.count} ejercicio{group.count === 1 ? "" : "s"}
-                                        </p>
-                                        {group.note ? <p className="text-xs text-muted">{group.note}</p> : null}
-                                      </div>
-                                      {group.url ? (
-                                        <a
-                                          href={group.url}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                                    (() => {
+                                      const lessonId = String(group.lessonId || "").trim();
+                                      const rawAttempt = lessonId ? quizAttemptsByLesson[lessonId] || null : null;
+                                      const normalizedAttempt = rawAttempt
+                                        ? normalizeAttemptRow(rawAttempt, rawAttempt?.total_exercises ?? 0)
+                                        : null;
+                                      const isCompleted =
+                                        String(normalizedAttempt?.attempt_status || "").trim().toLowerCase() === "completed";
+                                      const scoreValue =
+                                        normalizedAttempt?.score_percent != null
+                                          ? Math.round(Number(normalizedAttempt.score_percent))
+                                          : null;
+                                      const canRetry = isCompleted && getRemainingQuizRestarts(normalizedAttempt) > 0;
+                                      const resultsUrl = lessonId ? `/app/clases/${lessonId}/prueba/resultados` : null;
+                                      const retryUrl = lessonId ? `/app/clases/${lessonId}/prueba` : null;
+
+                                      return (
+                                        <div
+                                          key={group.key}
+                                          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/15 bg-surface px-3 py-2"
                                         >
-                                          {group.hasLinkedExercise ? "Realizar prueba" : "Abrir recurso"}
-                                        </a>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          disabled
-                                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted disabled:cursor-not-allowed"
-                                        >
-                                          Sin enlace
-                                        </button>
-                                      )}
-                                    </div>
+                                          <div>
+                                            <p className="text-sm font-semibold text-foreground">{group.title || "Test de clase"}</p>
+                                            <p className="text-xs text-muted">
+                                              {group.count} ejercicio{group.count === 1 ? "" : "s"}
+                                            </p>
+                                            {group.note ? <p className="text-xs text-muted">{group.note}</p> : null}
+                                          </div>
+
+                                          {group.hasLinkedExercise ? (
+                                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                              {isCompleted && resultsUrl ? (
+                                                <a
+                                                  href={resultsUrl}
+                                                  className="rounded-md border border-success/30 bg-success/10 px-3 py-1.5 text-xs font-semibold text-success transition hover:bg-success/20"
+                                                >
+                                                  {`Ver resultados${scoreValue != null ? ` [${scoreValue}%]` : ""}`}
+                                                </a>
+                                              ) : null}
+
+                                              {canRetry && retryUrl ? (
+                                                <a
+                                                  href={retryUrl}
+                                                  className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                                                >
+                                                  Intentar de nuevo
+                                                </a>
+                                              ) : null}
+
+                                              {!isCompleted && group.url ? (
+                                                <a
+                                                  href={group.url}
+                                                  className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                                                >
+                                                  Realizar test
+                                                </a>
+                                              ) : null}
+
+                                              {!group.url && !resultsUrl ? (
+                                                <button
+                                                  type="button"
+                                                  disabled
+                                                  className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted disabled:cursor-not-allowed"
+                                                >
+                                                  Sin enlace
+                                                </button>
+                                              ) : null}
+                                            </div>
+                                          ) : group.url ? (
+                                            <a
+                                              href={group.url}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                                            >
+                                              Abrir recurso
+                                            </a>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              disabled
+                                              className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted disabled:cursor-not-allowed"
+                                            >
+                                              Sin enlace
+                                            </button>
+                                          )}
+                                        </div>
+                                      );
+                                    })()
                                   ))}
                                 </div>
                               ) : null}

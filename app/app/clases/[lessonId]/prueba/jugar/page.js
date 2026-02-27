@@ -17,29 +17,62 @@ function ArrowLeftIcon() {
   );
 }
 
-function ExerciseTypeBadge({ type }) {
-  const labels = {
-    scramble: "Scrambled Sentence",
-    audio_match: "Audio Match",
-    image_match: "Image Match",
-    pairs: "Pairs",
-    cloze: "Fill in the blanks",
-  };
-  const label = labels[String(type || "").trim()] || "Ejercicio";
-  return (
-    <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
-      {label}
-    </span>
-  );
-}
-
 function toInt(value, fallback = 0) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+async function loadLessonTestMeta(supabase, lesson, exercises = []) {
+  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
+  const fallbackTitle = String(lesson?.title || "").trim() || "Test de clase";
+  const exerciseIds = Array.from(
+    new Set((exercises || []).map((exercise) => String(exercise?.id || "").trim()).filter(Boolean))
+  );
+  if (!exerciseIds.length) {
+    return {
+      testTitle: fallbackTitle,
+      testNumber: fallbackNumber,
+    };
+  }
+
+  const { data: itemRows, error: itemError } = await supabase
+    .from("session_items")
+    .select("title, session_id, exercise_id")
+    .in("exercise_id", exerciseIds)
+    .eq("type", "exercise")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (itemError || !itemRows?.length) {
+    return {
+      testTitle: fallbackTitle,
+      testNumber: fallbackNumber,
+    };
+  }
+
+  const firstItem = itemRows[0];
+  let testNumber = fallbackNumber;
+  const sessionId = String(firstItem?.session_id || "").trim();
+  if (sessionId) {
+    const { data: sessionRow } = await supabase
+      .from("course_sessions")
+      .select("session_in_cycle")
+      .eq("id", sessionId)
+      .maybeSingle();
+    const sessionNumber = toInt(sessionRow?.session_in_cycle, 0);
+    if (sessionNumber > 0) {
+      testNumber = sessionNumber;
+    }
+  }
+
+  return {
+    testTitle: String(firstItem?.title || "").trim() || fallbackTitle,
+    testNumber,
+  };
+}
+
 export const metadata = {
-  title: "Resolver prueba | Aula Virtual",
+  title: "Resolver test | Aula Virtual",
 };
 
 export default async function LessonQuizPlayPage({ params: paramsPromise }) {
@@ -64,7 +97,7 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
 
   const { data: lesson } = await supabase
     .from("lessons")
-    .select("id, title, level")
+    .select("id, title, level, unit_id, ordering")
     .eq("id", lessonId)
     .maybeSingle();
   if (!lesson?.id) notFound();
@@ -83,6 +116,9 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
 
   const published = exercises || [];
   const totalExercises = published.length;
+  const testMeta = await loadLessonTestMeta(supabase, lesson, published);
+  const testTitle = testMeta.testTitle;
+  const testNumber = testMeta.testNumber;
   const exercisePointValues = published.map((exercise) => {
     const parsed = Number(exercise?.content_json?.point_value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -124,7 +160,6 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
     completedCount: attempt.completed_count,
     totalExercises,
   });
-
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-4 py-8 text-foreground sm:px-6 sm:py-10">
       <div className="pointer-events-none absolute inset-0">
@@ -139,10 +174,10 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
               className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
             >
               <ArrowLeftIcon />
-              Volver a prueba
+              Volver al test
             </Link>
             <div>
-              <h1 className="text-2xl font-semibold sm:text-3xl">Prueba de la clase {lesson.title}</h1>
+              <h1 className="text-2xl font-semibold sm:text-3xl">{`Test ${testNumber} - ${testTitle}`}</h1>
               <p className="text-sm text-muted">
                 Ejercicio {currentIndex + 1} de {totalExercises}
               </p>
@@ -157,10 +192,8 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
 
         <div className="space-y-2 rounded-2xl border border-border bg-surface p-4">
           <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted">
-            <span>En progreso</span>
-            <span>
-              {attempt.completed_count} de {totalExercises}
-            </span>
+            <span>Progreso: {attempt.completed_count} de {totalExercises}</span>
+            <span>{progressPercent}%</span>
           </div>
           <div className="h-3 w-full overflow-hidden rounded-full bg-surface-2">
             <div
@@ -171,10 +204,6 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
         </div>
 
         <article className="rounded-[2rem] border border-border bg-surface p-5 shadow-2xl shadow-black/20 sm:p-7">
-          <div className="mb-5 flex items-center justify-between gap-3">
-            <ExerciseTypeBadge type={currentExercise.type} />
-          </div>
-
           <LessonQuizPlayer
             lessonId={lesson.id}
             currentIndex={currentIndex}

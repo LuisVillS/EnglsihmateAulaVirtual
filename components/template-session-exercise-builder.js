@@ -2,7 +2,7 @@
 
 import { useActionState, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createTemplateSessionExerciseBatch } from "@/app/admin/actions";
+import { saveCourseSessionExerciseBatch, saveTemplateSessionExerciseBatch } from "@/app/admin/actions";
 
 const EXERCISE_TYPE_OPTIONS = [
   { value: "scramble", label: "Scrambled Sentence" },
@@ -24,6 +24,11 @@ const EXERCISE_STATUS_OPTIONS = [
 ];
 
 const INITIAL_STATE = { success: false, message: null, warning: null, error: null, created: 0 };
+
+function normalizeQuizTitle(value) {
+  const raw = String(value || "").trim();
+  return raw || "Prueba de clase";
+}
 
 function toPrettyJson(value) {
   try {
@@ -63,6 +68,13 @@ function normalizePointValue(value, fallback = 10) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return round2(Math.max(0, Math.min(100, parsed)));
+}
+
+function normalizeEstimatedTimeMinutes(value) {
+  if (value == null || value === "") return null;
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(1, parsed);
 }
 
 function normalizeBlankKey(value, fallbackIndex = 1) {
@@ -179,6 +191,9 @@ function normalizeContent(type, rawObject) {
   const base = getDefaultContent(type);
   const raw = rawObject && typeof rawObject === "object" ? rawObject : {};
   const pointValue = normalizePointValue(raw.point_value ?? raw.pointValue, normalizePointValue(base.point_value, 10));
+  const estimatedTimeMinutes = normalizeEstimatedTimeMinutes(
+    raw.estimated_time_minutes ?? raw.estimatedTimeMinutes ?? base.estimated_time_minutes
+  );
 
   if (type === "cloze") {
     const fallbackContent = getDefaultContent("cloze");
@@ -374,6 +389,7 @@ function normalizeContent(type, rawObject) {
       blanks: normalizedBlanks.length ? normalizedBlanks : fallbackContent.blanks,
       options_pool: optionsPool,
       point_value: pointValue,
+      estimated_time_minutes: estimatedTimeMinutes,
     };
   }
 
@@ -390,6 +406,7 @@ function normalizeContent(type, rawObject) {
       target_words: targetWords.length ? targetWords : base.target_words,
       answer_order: answerOrder.length ? answerOrder : defaultOrder,
       point_value: pointValue,
+      estimated_time_minutes: estimatedTimeMinutes,
     };
   }
 
@@ -400,6 +417,7 @@ function normalizeContent(type, rawObject) {
       provider: "elevenlabs",
       audio_url: String(raw.audio_url || ""),
       point_value: pointValue,
+      estimated_time_minutes: estimatedTimeMinutes,
     };
   }
 
@@ -450,6 +468,7 @@ function normalizeContent(type, rawObject) {
       correct_index: Number.isFinite(correctIndex) ? correctIndex : 0,
       correct_vocab_id: options[correctIndex]?.vocab_id || "",
       point_value: pointValue,
+      estimated_time_minutes: estimatedTimeMinutes,
     };
   }
 
@@ -464,6 +483,7 @@ function normalizeContent(type, rawObject) {
     return {
       pairs: pairs.length ? pairs : base.pairs,
       point_value: pointValue,
+      estimated_time_minutes: estimatedTimeMinutes,
     };
   }
 
@@ -485,6 +505,8 @@ function createDraft(overrides = {}) {
 
   return {
     localId: createLocalId(),
+    itemId: overrides.itemId || "",
+    exerciseId: overrides.exerciseId || "",
     type,
     status: overrides.status || "published",
     title: overrides.title || "",
@@ -1049,19 +1071,39 @@ function GuidedEditor({ item, content, onPatch }) {
   return null;
 }
 
-export default function TemplateSessionExerciseBuilder({ templateId, templateSessionId }) {
+export default function TemplateSessionExerciseBuilder({
+  templateId = "",
+  templateSessionId = "",
+  commissionId = "",
+  courseSessionId = "",
+  initialItems = [],
+  initialQuizTitle = "",
+  initialEstimatedTimeMinutes = null,
+  scope = "template",
+}) {
   const router = useRouter();
-  const [state, formAction, pending] = useActionState(createTemplateSessionExerciseBatch, INITIAL_STATE);
-  const [items, setItems] = useState([createDraft()]);
+  const submitAction = scope === "commission" ? saveCourseSessionExerciseBatch : saveTemplateSessionExerciseBatch;
+  const [state, formAction, pending] = useActionState(submitAction, INITIAL_STATE);
+  const [items, setItems] = useState(() =>
+    Array.isArray(initialItems) && initialItems.length
+      ? initialItems.map((item) => createDraft(item))
+      : [createDraft()]
+  );
+  const [quizTitle, setQuizTitle] = useState(() => normalizeQuizTitle(initialQuizTitle));
+  const [quizEstimatedTimeMinutes, setQuizEstimatedTimeMinutes] = useState(() =>
+    normalizeEstimatedTimeMinutes(initialEstimatedTimeMinutes)
+  );
   const [pointWarning, setPointWarning] = useState(null);
 
   const batchJson = useMemo(
     () =>
       JSON.stringify(
         items.map((item) => ({
+          itemId: item.itemId || "",
+          exerciseId: item.exerciseId || "",
           type: item.type,
           status: item.status,
-          title: item.title,
+          lessonId: item.lessonId || "",
           skillTag: item.skillTag || "",
           contentJson: item.contentJson,
         }))
@@ -1091,7 +1133,7 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
     setItems((prev) => {
       const current = prev.find((item) => item.localId === localId);
       if (!current) return prev;
-      return [...prev, createDraft(current)];
+      return [...prev, createDraft({ ...current, itemId: "", exerciseId: "" })];
     });
   }
 
@@ -1154,33 +1196,65 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
     >
       <input type="hidden" name="templateId" value={templateId} />
       <input type="hidden" name="templateSessionId" value={templateSessionId} />
+      <input type="hidden" name="commissionId" value={commissionId} />
+      <input type="hidden" name="courseSessionId" value={courseSessionId} />
       <input type="hidden" name="batchJson" value={batchJson} />
 
-      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-surface p-3">
-        <button
-          type="button"
-          onClick={addItem}
-          className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
-        >
-          + Agregar ejercicio
-        </button>
-        <button
-          type="button"
-          onClick={() => setItems((prev) => [...prev, createDraft(), createDraft()])}
-          className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-        >
-          + Agregar 2 mas
-        </button>
-        <p className="text-xs text-muted">Editor guiado: ya no necesitas escribir JSON para lo basico.</p>
-        <span
-          className={`ml-auto rounded-full border px-3 py-1 text-xs font-semibold ${
-            totalPointValue <= 100.0001
-              ? "border-success/40 bg-success/12 text-success"
-              : "border-danger/45 bg-danger/12 text-danger"
-          }`}
-        >
-          Total asignado: {totalPointValue}/100
-        </span>
+      <div className="grid gap-4 rounded-2xl border border-border bg-surface p-4">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1.2fr)_220px]">
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo de la prueba</label>
+            <input
+              name="quizTitle"
+              value={quizTitle}
+              onChange={(event) => setQuizTitle(event.target.value)}
+              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+              placeholder="Prueba de clase"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Tiempo estimado global (min)
+            </label>
+            <input
+              name="quizEstimatedTimeMinutes"
+              type="number"
+              min={1}
+              step={1}
+              value={quizEstimatedTimeMinutes ?? ""}
+              onChange={(event) => setQuizEstimatedTimeMinutes(normalizeEstimatedTimeMinutes(event.target.value))}
+              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+              placeholder="Opcional"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={addItem}
+            className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+          >
+            + Agregar ejercicio
+          </button>
+          <button
+            type="button"
+            onClick={() => setItems((prev) => [...prev, createDraft(), createDraft()])}
+            className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+          >
+            + Agregar 2 mas
+          </button>
+          <p className="text-xs text-muted">Los datos de arriba se aplican a toda la prueba, no a un ejercicio individual.</p>
+          <span
+            className={`ml-auto rounded-full border px-3 py-1 text-xs font-semibold ${
+              totalPointValue <= 100.0001
+                ? "border-success/40 bg-success/12 text-success"
+                : "border-danger/45 bg-danger/12 text-danger"
+            }`}
+          >
+            Total asignado: {totalPointValue}/100
+          </span>
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -1200,7 +1274,18 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
               className="rounded-2xl border border-border bg-surface p-4 shadow-sm"
             >
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted">Ejercicio #{index + 1}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted">Ejercicio #{index + 1}</p>
+                  {item.exerciseId ? (
+                    <span className="rounded-full border border-success/35 bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+                      Guardado
+                    </span>
+                  ) : (
+                    <span className="rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-muted">
+                      Nuevo
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -1320,17 +1405,8 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
                 </div>
               </div>
 
-              <div className="mt-3 grid gap-3">
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo (opcional)</label>
-                  <input
-                    value={item.title}
-                    onChange={(event) => updateItem(item.localId, { title: event.target.value })}
-                    className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-                    placeholder="Prueba de clase"
-                  />
-                </div>
-                <p className="text-xs text-muted">La leccion se asigna automaticamente a esta clase.</p>
+              <div className="mt-3 rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+                Este ejercicio se guarda dentro de la prueba &quot;{normalizeQuizTitle(quizTitle)}&quot;.
               </div>
 
               <div className="mt-3 rounded-xl border border-border bg-surface p-3">
@@ -1414,9 +1490,11 @@ export default function TemplateSessionExerciseBuilder({ templateId, templateSes
           disabled={pending || Boolean(invalidCount) || isOverPointBudget}
           className="rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"
         >
-          {pending ? "Creando prueba..." : `Crear prueba (${items.length} ejercicio${items.length === 1 ? "" : "s"})`}
+          {pending
+            ? "Guardando prueba..."
+            : `Guardar prueba (${items.length} ejercicio${items.length === 1 ? "" : "s"})`}
         </button>
-        <p className="text-xs text-muted">Puedes crear una sola tarjeta o una serie completa de ejercicios.</p>
+        <p className="text-xs text-muted">Puedes crear, editar o quitar ejercicios desde el mismo editor.</p>
       </div>
     </form>
   );

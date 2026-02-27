@@ -11,6 +11,8 @@ import {
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
 
+const LESSON_QUIZ_MAX_WRONG_ATTEMPTS = 1;
+
 function getText(formData, key) {
   const value = formData?.get(key);
   return value ? String(value).trim() : "";
@@ -232,11 +234,18 @@ export async function submitLessonQuizStep(formData) {
   const exerciseId = getText(formData, "exerciseId");
   const submittedIndex = Math.max(0, toInt(getText(formData, "currentIndex"), 0));
   const submittedTotal = Math.max(0, toInt(getText(formData, "totalExercises"), 0));
-  const submittedWrongAttempts = clamp(toInt(getText(formData, "wrongAttempts"), 0), 0, 3);
+  const submittedWrongAttempts = clamp(
+    toInt(getText(formData, "wrongAttempts"), 0),
+    0,
+    LESSON_QUIZ_MAX_WRONG_ATTEMPTS
+  );
   const submittedFinalStatus = getText(formData, "finalStatus").toLowerCase();
   const submittedScoreAwarded = round2(toNumber(getText(formData, "scoreAwarded"), 0));
 
-  const finalStatus = submittedWrongAttempts >= 3 || submittedFinalStatus === "failed" ? "failed" : "passed";
+  const finalStatus =
+    submittedWrongAttempts >= LESSON_QUIZ_MAX_WRONG_ATTEMPTS || submittedFinalStatus === "failed"
+      ? "failed"
+      : "passed";
   const isCorrect = finalStatus === "passed";
   const scoreAwarded = isCorrect ? clamp(submittedScoreAwarded, 0, 100) : 0;
 

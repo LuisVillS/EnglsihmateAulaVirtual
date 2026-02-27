@@ -4,7 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
 import TemplateSessionExerciseBuilder from "@/components/template-session-exercise-builder";
 
 export const metadata = {
-  title: "Editar prueba | Plantilla",
+  title: "Editar prueba | Comision",
 };
 
 function getMissingColumnFromError(error) {
@@ -25,10 +25,10 @@ function readEstimatedTimeMinutes(content) {
   return Math.max(1, parsed);
 }
 
-export default async function TemplateSessionExercisePage({ params: paramsPromise }) {
+export default async function CommissionSessionExercisePage({ params: paramsPromise }) {
   const params = await paramsPromise;
-  const templateId = params?.id?.toString();
-  const templateSessionId = params?.sessionId?.toString();
+  const commissionId = params?.id?.toString();
+  const sessionId = params?.sessionId?.toString();
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
@@ -42,29 +42,29 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
     .maybeSingle();
   if (!adminRecord?.id) redirect("/admin/login");
 
-  const { data: template } = await supabase
-    .from("course_templates")
-    .select("id, template_name, course_level")
-    .eq("id", templateId)
+  const { data: commission } = await supabase
+    .from("course_commissions")
+    .select("id, course_level, commission_number")
+    .eq("id", commissionId)
     .maybeSingle();
-  if (!template?.id) redirect("/admin/courses/templates");
+  if (!commission?.id) redirect("/admin/commissions");
 
   const { data: session } = await supabase
-    .from("template_sessions")
-    .select("id, template_id, title, month_index, session_in_month, session_in_cycle")
-    .eq("id", templateSessionId)
-    .eq("template_id", template.id)
+    .from("course_sessions")
+    .select("id, commission_id, session_date, session_in_cycle, day_label, cycle_month")
+    .eq("id", sessionId)
+    .eq("commission_id", commission.id)
     .maybeSingle();
-  if (!session?.id) redirect(`/admin/courses/templates/${template.id}`);
+  if (!session?.id) redirect(`/admin/commissions/${commission.id}`);
 
   let itemRows = [];
   let itemsError = null;
   let missingExerciseColumn = false;
 
   const itemsResult = await supabase
-    .from("template_session_items")
-    .select("id, template_session_id, type, title, url, exercise_id")
-    .eq("template_session_id", session.id)
+    .from("session_items")
+    .select("id, session_id, type, title, url, exercise_id")
+    .eq("session_id", session.id)
     .eq("type", "exercise")
     .order("created_at", { ascending: true });
 
@@ -138,17 +138,17 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
       <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-muted">Admin / Plantillas / Clase</p>
+            <p className="text-xs uppercase tracking-[0.3em] text-muted">Admin / Comisiones / Clase</p>
             <h1 className="text-3xl font-semibold">Editar prueba</h1>
             <p className="text-sm text-muted">
-              {template.template_name || template.course_level} - {session.title || "Clase sin titulo"}
+              {commission.course_level} - Comision #{commission.commission_number} - {session.day_label || "Clase sin titulo"}
             </p>
           </div>
           <Link
-            href={`/admin/courses/templates/${template.id}`}
+            href={`/admin/commissions/${commission.id}`}
             className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
           >
-            Volver a plantilla
+            Volver a comision
           </Link>
         </header>
 
@@ -156,24 +156,23 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
           <p className="text-xs uppercase tracking-[0.24em] text-muted">Clase</p>
           <div className="mt-2 grid gap-3 text-sm sm:grid-cols-3">
             <div>
-              <p className="text-xs text-muted">Mes</p>
-              <p className="font-semibold">{session.month_index || "-"}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted">Sesion en mes</p>
-              <p className="font-semibold">{session.session_in_month || "-"}</p>
+              <p className="text-xs text-muted">Fecha</p>
+              <p className="font-semibold">{session.session_date || "-"}</p>
             </div>
             <div>
               <p className="text-xs text-muted">Indice global</p>
               <p className="font-semibold">{session.session_in_cycle || "-"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted">Mes</p>
+              <p className="font-semibold">{session.cycle_month || "-"}</p>
             </div>
           </div>
         </div>
 
         {missingExerciseColumn ? (
           <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-            Falta la columna `exercise_id` en `template_session_items`. Ejecuta el SQL actualizado antes de editar
-            pruebas.
+            Falta la columna `exercise_id` en `session_items`. Ejecuta el SQL actualizado antes de editar pruebas.
           </div>
         ) : null}
 
@@ -192,15 +191,15 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
         {!missingExerciseColumn ? (
           <div className="rounded-2xl border border-border bg-surface p-5">
             <p className="text-xs uppercase tracking-[0.24em] text-muted">Editor de prueba</p>
-            <h2 className="mt-1 text-xl font-semibold">Toda la prueba se edita en un solo flujo</h2>
+            <h2 className="mt-1 text-xl font-semibold">La prueba de esta clase se edita como un bloque</h2>
             <p className="mt-1 text-sm text-muted">
-              El titulo y el tiempo estimado son globales. Los ejercicios ya guardados cargan en el mismo editor guiado.
+              Usa el mismo flujo del editor de plantillas, pero guardando especificamente para esta comision.
             </p>
             <div className="mt-4">
               <TemplateSessionExerciseBuilder
-                scope="template"
-                templateId={template.id}
-                templateSessionId={session.id}
+                scope="commission"
+                commissionId={commission.id}
+                courseSessionId={session.id}
                 initialItems={initialItems}
                 initialQuizTitle={initialQuizTitle}
                 initialEstimatedTimeMinutes={initialEstimatedTimeMinutes}

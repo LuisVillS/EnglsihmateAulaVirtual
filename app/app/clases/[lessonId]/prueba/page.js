@@ -1,31 +1,24 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import MonthlyLessonQuizzesModalButton from "@/components/monthly-lesson-quizzes-modal-button";
+import RestartLessonQuizButton from "@/components/restart-lesson-quiz-button";
 import {
   LESSON_QUIZ_MAX_RESTARTS,
+  LESSON_QUIZ_MAX_TOTAL_ATTEMPTS,
   LESSON_QUIZ_STATUS,
-  estimateLessonQuizMinutes,
   getLessonQuizProgressPercent,
+  getUsedQuizAttempts,
   isMissingLessonQuizRestartColumnError,
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
-  summarizeLessonQuizTypes,
 } from "@/lib/lesson-quiz";
+import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { restartLessonQuizAttempt, startLessonQuizAttempt } from "./actions";
 
 function ArrowLeftIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M15 5l-7 7 7 7" />
-    </svg>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M7 10V7a5 5 0 1 1 10 0v3" />
-      <rect x="5" y="10" width="14" height="10" rx="2" />
     </svg>
   );
 }
@@ -41,6 +34,96 @@ function CheckIcon() {
 function toInt(value, fallback = 0) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseDateMs(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return Number.NaN;
+  return date.getTime();
+}
+
+function parseLessonIdFromQuizUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/\/app\/clases\/([^/]+)\/prueba/i);
+  return String(match?.[1] || "").trim();
+}
+
+function formatSessionSubtitle(session) {
+  const baseDate = session?.starts_at || session?.session_date;
+  const date = new Date(baseDate || "");
+  if (Number.isNaN(date.getTime())) {
+    const idx = toInt(session?.session_in_cycle, 0);
+    return idx > 0 ? `Clase ${idx}` : "";
+  }
+  const formatted = new Intl.DateTimeFormat("es-PE", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "America/Lima",
+  })
+    .format(date)
+    .replace(/\./g, "");
+  return `Clase ${session?.session_in_cycle || "-"} • ${formatted}`;
+}
+
+function getEstimatedMinutesFromExercises(exercises = []) {
+  for (const exercise of exercises) {
+    const content = exercise?.content_json || {};
+    const candidate = Number(content.estimated_time_minutes ?? content.estimatedTimeMinutes);
+    if (Number.isFinite(candidate) && candidate > 0) {
+      return Math.round(candidate);
+    }
+  }
+  return null;
+}
+
+async function loadLessonTestMeta(supabase, lesson, exercises = []) {
+  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
+  const fallbackTitle = String(lesson?.title || "").trim() || "Test de clase";
+  const exerciseIds = Array.from(
+    new Set((exercises || []).map((exercise) => String(exercise?.id || "").trim()).filter(Boolean))
+  );
+  if (!exerciseIds.length) {
+    return {
+      testTitle: fallbackTitle,
+      testNumber: fallbackNumber,
+    };
+  }
+
+  const { data: itemRows, error: itemError } = await supabase
+    .from("session_items")
+    .select("title, session_id, exercise_id")
+    .in("exercise_id", exerciseIds)
+    .eq("type", "exercise")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (itemError || !itemRows?.length) {
+    return {
+      testTitle: fallbackTitle,
+      testNumber: fallbackNumber,
+    };
+  }
+
+  const firstItem = itemRows[0];
+  let testNumber = fallbackNumber;
+  const sessionId = String(firstItem?.session_id || "").trim();
+  if (sessionId) {
+    const { data: sessionRow } = await supabase
+      .from("course_sessions")
+      .select("session_in_cycle")
+      .eq("id", sessionId)
+      .maybeSingle();
+    const sessionNumber = toInt(sessionRow?.session_in_cycle, 0);
+    if (sessionNumber > 0) {
+      testNumber = sessionNumber;
+    }
+  }
+
+  return {
+    testTitle: String(firstItem?.title || "").trim() || fallbackTitle,
+    testNumber,
+  };
 }
 
 async function loadFallbackProgress(supabase, userId, exerciseIds = []) {
@@ -110,13 +193,12 @@ async function loadAttemptRow(supabase, userId, lessonId) {
   }
 
   if (isMissingLessonQuizTableError(error)) {
-      return { trackingAvailable: false, attempt: null };
+    return { trackingAvailable: false, attempt: null };
   }
   throw new Error(error.message || "No se pudo cargar el tracking de la prueba.");
 }
 
-function deriveState({ isLocked, totalExercises, attemptStatus, completedCount }) {
-  if (isLocked) return LESSON_QUIZ_STATUS.LOCKED;
+function deriveState({ totalExercises, attemptStatus, completedCount }) {
   if (!totalExercises) return LESSON_QUIZ_STATUS.READY;
   if (attemptStatus === LESSON_QUIZ_STATUS.COMPLETED || completedCount >= totalExercises) {
     return LESSON_QUIZ_STATUS.COMPLETED;
@@ -127,8 +209,168 @@ function deriveState({ isLocked, totalExercises, attemptStatus, completedCount }
   return LESSON_QUIZ_STATUS.READY;
 }
 
+async function loadCurrentMonthAvailableQuizzes({
+  supabase,
+  userId,
+  commissionId,
+  nowIso,
+}) {
+  const safeCommissionId = String(commissionId || "").trim();
+  if (!safeCommissionId) return [];
+
+  const nowMs = parseDateMs(nowIso);
+  if (!Number.isFinite(nowMs)) return [];
+
+  const { data: sessions, error: sessionError } = await supabase
+    .from("course_sessions")
+    .select("id, cycle_month, session_date, starts_at, session_in_cycle, day_label")
+    .eq("commission_id", safeCommissionId)
+    .order("starts_at", { ascending: true, nullsFirst: false })
+    .order("session_date", { ascending: true });
+  if (sessionError) return [];
+
+  const sessionById = new Map((sessions || []).map((session) => [String(session.id || "").trim(), session]));
+  const sessionIds = (sessions || []).map((session) => String(session.id || "").trim()).filter(Boolean);
+  if (!sessionIds.length) return [];
+
+  const { data: itemRows, error: itemsError } = await supabase
+    .from("session_items")
+    .select("id, session_id, title, url, exercise_id, type")
+    .in("session_id", sessionIds)
+    .eq("type", "exercise")
+    .order("created_at", { ascending: true });
+  if (itemsError) return [];
+
+  const exerciseIds = Array.from(
+    new Set(
+      (itemRows || [])
+        .map((item) => String(item.exercise_id || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  let lessonIdByExerciseId = new Map();
+  if (exerciseIds.length) {
+    const { data: exerciseRows, error: exercisesError } = await supabase
+      .from("exercises")
+      .select("id, lesson_id")
+      .in("id", exerciseIds);
+    if (!exercisesError) {
+      lessonIdByExerciseId = new Map(
+        (exerciseRows || []).map((row) => [String(row.id || "").trim(), String(row.lesson_id || "").trim()])
+      );
+    }
+  }
+
+  const grouped = new Map();
+  for (const item of itemRows || []) {
+    const sessionId = String(item.session_id || "").trim();
+    const session = sessionById.get(sessionId);
+    if (!session) continue;
+
+    const startsMs = parseDateMs(session.starts_at || session.session_date);
+    if (!Number.isFinite(startsMs)) continue;
+
+    const lessonIdFromExercise = lessonIdByExerciseId.get(String(item.exercise_id || "").trim()) || "";
+    const lessonId = lessonIdFromExercise || parseLessonIdFromQuizUrl(item.url);
+    if (!lessonId) continue;
+
+    const current = grouped.get(lessonId) || {
+      lessonId,
+      startsMs,
+      session,
+      itemTitle: "",
+    };
+    if (Number.isFinite(startsMs) && startsMs < current.startsMs) {
+      current.startsMs = startsMs;
+      current.session = session;
+    }
+    if (!current.itemTitle) {
+      current.itemTitle = String(item.title || "").trim();
+    }
+    grouped.set(lessonId, current);
+  }
+
+  const groupedRows = Array.from(grouped.values());
+  if (!groupedRows.length) return [];
+
+  const lessonIds = groupedRows.map((row) => row.lessonId);
+  const { data: lessonRows } = await supabase
+    .from("lessons")
+    .select("id, title")
+    .in("id", lessonIds);
+  const lessonTitleMap = new Map(
+    (lessonRows || []).map((row) => [String(row.id || "").trim(), String(row.title || "").trim()])
+  );
+
+  let attemptRows = [];
+  {
+    const primary = await supabase
+      .from("lesson_quiz_attempts")
+      .select("lesson_id, attempt_status, current_index, completed_count, total_exercises, score_percent, restart_count")
+      .eq("user_id", userId)
+      .in("lesson_id", lessonIds);
+
+    if (!primary.error) {
+      attemptRows = primary.data || [];
+    } else if (isMissingLessonQuizRestartColumnError(primary.error)) {
+      const fallback = await supabase
+        .from("lesson_quiz_attempts")
+        .select("lesson_id, attempt_status, current_index, completed_count, total_exercises, score_percent")
+        .eq("user_id", userId)
+        .in("lesson_id", lessonIds);
+      if (!fallback.error) {
+        attemptRows = (fallback.data || []).map((row) => ({ ...row, restart_count: 0 }));
+      }
+    }
+  }
+
+  const attemptByLessonId = new Map(
+    (attemptRows || []).map((row) => [String(row.lesson_id || "").trim(), row])
+  );
+
+  return groupedRows
+    .map((row) => {
+      const attempt = normalizeAttemptRow(attemptByLessonId.get(row.lessonId), toInt(attemptByLessonId.get(row.lessonId)?.total_exercises, 0));
+      const state = deriveState({
+        totalExercises: toInt(attempt.total_exercises, 0) || 1,
+        attemptStatus: attempt.attempt_status,
+        completedCount: attempt.completed_count,
+      });
+
+      const status =
+        state === LESSON_QUIZ_STATUS.COMPLETED
+          ? "completed"
+          : state === LESSON_QUIZ_STATUS.IN_PROGRESS
+          ? "in_progress"
+          : "ready";
+      const actionUrl =
+        status === "completed"
+          ? `/app/clases/${row.lessonId}/prueba/resultados`
+          : status === "in_progress"
+          ? `/app/clases/${row.lessonId}/prueba/jugar?i=${Math.max(0, toInt(attempt.current_index, 0))}`
+          : `/app/clases/${row.lessonId}/prueba`;
+
+      const title =
+        lessonTitleMap.get(row.lessonId) ||
+        row.itemTitle ||
+        `Test ${row.session?.session_in_cycle || "-"} - Clase`;
+
+      return {
+        lessonId: row.lessonId,
+        title,
+        subtitle: formatSessionSubtitle(row.session),
+        status,
+        actionUrl,
+        scorePercent: attempt.score_percent,
+        startsMs: row.startsMs,
+      };
+    })
+    .sort((a, b) => a.startsMs - b.startsMs);
+}
+
 export const metadata = {
-  title: "Prueba por clase | Aula Virtual",
+  title: "Test por clase | Aula Virtual",
 };
 
 export default async function LessonQuizPage({ params: paramsPromise, searchParams: searchParamsPromise }) {
@@ -145,7 +387,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, role, status")
+    .select("id, role, status, commission_id")
     .eq("id", user.id)
     .maybeSingle();
   if (!profile?.id || profile.role !== "student") {
@@ -161,7 +403,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
 
   const { data: publishedExercises, error: exerciseError } = await supabase
     .from("exercises")
-    .select("id, type, status, ordering, prompt")
+    .select("id, type, status, ordering, prompt, content_json")
     .eq("lesson_id", lesson.id)
     .eq("status", "published")
     .order("ordering", { ascending: true })
@@ -173,20 +415,10 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
 
   const exercises = publishedExercises || [];
   const totalExercises = exercises.length;
-  const estimatedMinutes = estimateLessonQuizMinutes(totalExercises);
-  const typeSummary = summarizeLessonQuizTypes(exercises);
-
-  const previousLessonQuery = await supabase
-    .from("lessons")
-    .select("id, title")
-    .eq("unit_id", lesson.unit_id)
-    .eq("status", "published")
-    .lt("ordering", lesson.ordering || 0)
-    .order("ordering", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const previousLesson = previousLessonQuery.data || null;
+  const estimatedMinutes = getEstimatedMinutesFromExercises(exercises);
+  const testMeta = await loadLessonTestMeta(supabase, lesson, exercises);
+  const testTitle = testMeta.testTitle;
+  const testNumber = testMeta.testNumber;
 
   const currentAttemptResult = await loadAttemptRow(supabase, profile.id, lesson.id);
   let trackingAvailable = currentAttemptResult.trackingAvailable;
@@ -210,33 +442,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
     );
   }
 
-  let isLocked = false;
-  if (previousLesson?.id) {
-    const { data: previousExercises } = await supabase
-      .from("exercises")
-      .select("id")
-      .eq("lesson_id", previousLesson.id)
-      .eq("status", "published");
-    const previousTotal = (previousExercises || []).length;
-    if (previousTotal > 0) {
-      const previousAttemptResult = await loadAttemptRow(supabase, profile.id, previousLesson.id);
-      if (previousAttemptResult.trackingAvailable) {
-        const previousAttempt = normalizeAttemptRow(previousAttemptResult.attempt, previousTotal);
-        isLocked = previousAttempt.attempt_status !== LESSON_QUIZ_STATUS.COMPLETED;
-      } else {
-        trackingAvailable = false;
-        const fallback = await loadFallbackProgress(
-          supabase,
-          profile.id,
-          (previousExercises || []).map((exercise) => exercise.id)
-        );
-        isLocked = fallback.completedCount < previousTotal;
-      }
-    }
-  }
-
   const quizState = deriveState({
-    isLocked,
     totalExercises,
     attemptStatus: currentAttempt.attempt_status,
     completedCount: currentAttempt.completed_count,
@@ -247,13 +453,41 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
     totalExercises,
   });
   const currentIndex = Math.max(0, Math.min(Math.max(0, totalExercises - 1), toInt(currentAttempt.current_index, 0)));
-  const canStart = totalExercises > 0 && !isLocked && trackingAvailable;
+  const canStart = totalExercises > 0 && trackingAvailable;
   const canContinue = canStart && quizState === LESSON_QUIZ_STATUS.IN_PROGRESS;
   const repeatCount = Math.max(0, toInt(currentAttempt.restart_count, 0));
+  const attemptsUsed = getUsedQuizAttempts({
+    status: quizState,
+    restartCount: repeatCount,
+    completedCount: currentAttempt.completed_count,
+  });
+  const remainingAttempts = Math.max(0, LESSON_QUIZ_MAX_TOTAL_ATTEMPTS - attemptsUsed);
   const remainingRestarts = Math.max(0, LESSON_QUIZ_MAX_RESTARTS - repeatCount);
-  const canRepeat = trackingAvailable && remainingRestarts > 0;
+  const canRepeat = trackingAvailable && quizState === LESSON_QUIZ_STATUS.COMPLETED && remainingRestarts > 0;
   const trackingWarning = !trackingAvailable || searchParams?.tracking === "missing";
   const repeatLimitWarning = searchParams?.repeat_limit === "1";
+
+  const nowIso = new Date().toISOString();
+  let monthlyQuizzes = await loadCurrentMonthAvailableQuizzes({
+    supabase,
+    userId: profile.id,
+    commissionId: profile.commission_id,
+    nowIso,
+  });
+  if (canContinue && !monthlyQuizzes.some((quiz) => quiz.lessonId === lesson.id)) {
+    monthlyQuizzes = [
+      {
+        lessonId: lesson.id,
+        title: `Test ${testNumber} - ${testTitle}`,
+        subtitle: "Disponible",
+        status: "in_progress",
+        actionUrl: `/app/clases/${lesson.id}/prueba/jugar?i=${currentIndex}`,
+        scorePercent: currentAttempt.score_percent,
+        startsMs: parseDateMs(nowIso),
+      },
+      ...monthlyQuizzes,
+    ];
+  }
 
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-4 py-8 text-foreground sm:px-6 sm:py-10">
@@ -272,7 +506,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
               Volver
             </Link>
             <div>
-              <h1 className="text-2xl font-semibold sm:text-3xl">Prueba de la clase {lesson.title}</h1>
+              <h1 className="text-2xl font-semibold sm:text-3xl">{`Test ${testNumber} - ${testTitle}`}</h1>
               <p className="text-sm text-muted">Evalua lo aprendido en esta clase.</p>
             </div>
           </div>
@@ -285,100 +519,75 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
 
         {trackingWarning ? (
           <div className="rounded-2xl border border-accent/45 bg-accent/12 px-4 py-3 text-sm text-accent">
-            Falta activar el tracking de prueba. Ejecuta el SQL de `lesson_quiz_attempts` para habilitar inicio, reanudar y repetir.
+            Falta activar el tracking del test. Ejecuta el SQL de `lesson_quiz_attempts` para habilitar inicio, reanudar y repetir.
           </div>
         ) : null}
         {repeatLimitWarning ? (
           <div className="rounded-2xl border border-danger/45 bg-danger/12 px-4 py-3 text-sm text-danger">
-            Alcanzaste el maximo de 2 repeticiones para esta prueba.
+            Alcanzaste el maximo de {LESSON_QUIZ_MAX_TOTAL_ATTEMPTS} intentos para este test.
           </div>
         ) : null}
 
-        <article
-          className={`quiz-hero-card-enter rounded-[2rem] border border-border bg-surface p-5 shadow-2xl shadow-black/20 sm:p-7 ${
-            quizState === LESSON_QUIZ_STATUS.LOCKED ? "opacity-80" : ""
-          }`}
-        >
+        <article className="quiz-hero-card-enter rounded-[2rem] border border-border bg-surface p-5 shadow-2xl shadow-black/20 sm:p-7">
           <div className="space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.32em] text-muted">Prueba</p>
-                <h2 className="mt-1 text-3xl font-black sm:text-4xl">Prueba</h2>
+                <p className="text-xs uppercase tracking-[0.32em] text-muted">{`Test ${testNumber}`}</p>
+                <h2 className="mt-1 text-3xl font-black sm:text-4xl">{testTitle}</h2>
                 <p className="mt-1 text-sm text-muted">Evalua lo aprendido en esta clase.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-foreground">
                   {totalExercises} ejercicios
                 </span>
-                <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-foreground">
-                  ~{estimatedMinutes || 0} min
-                </span>
+                {estimatedMinutes != null ? (
+                  <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-foreground">
+                    ~{estimatedMinutes} min
+                  </span>
+                ) : null}
               </div>
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted">
-                <span>Progreso</span>
-                <span>
-                  {currentAttempt.completed_count} de {totalExercises}
-                </span>
+                <span>Progreso: {currentAttempt.completed_count} de {totalExercises}</span>
+                <span>{progressPercent}%</span>
               </div>
               <div className="h-3 w-full overflow-hidden rounded-full bg-surface-2">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent transition-all duration-500"
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    quizState === LESSON_QUIZ_STATUS.COMPLETED ? "bg-success" : "bg-primary"
+                  }`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
             </div>
 
-            {quizState === LESSON_QUIZ_STATUS.LOCKED ? (
-              <div className="flex items-start gap-3 rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-muted">
-                <span className="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-surface">
-                  <LockIcon />
-                </span>
-                <div>
-                  <p className="font-semibold text-foreground">Bloqueado</p>
-                  <p>Completa la leccion anterior para desbloquear.</p>
-                </div>
-              </div>
-            ) : null}
-
             {quizState === LESSON_QUIZ_STATUS.IN_PROGRESS ? (
-              <p className="rounded-2xl border border-border bg-surface-2 px-4 py-2 text-sm text-muted">
-                Vas {currentAttempt.completed_count} de {totalExercises}.
+              <p className="rounded-2xl border border-border bg-surface-2 px-4 py-2 text-sm text-foreground">
+                Vas {currentAttempt.completed_count} de {totalExercises}. Te queda {remainingAttempts} intento
+                {remainingAttempts === 1 ? "" : "s"}.
               </p>
             ) : null}
 
             {quizState === LESSON_QUIZ_STATUS.COMPLETED ? (
-              <div className="flex items-center gap-2 rounded-2xl border border-success/30 bg-success/12 px-4 py-3 text-sm">
-                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-success/25 text-success">
-                  <CheckIcon />
-                </span>
-                <div>
-                  <p className="font-semibold text-foreground">Prueba completada</p>
-                  {currentAttempt.score_percent != null ? (
-                    <p className="text-muted">Puntaje: {Math.round(currentAttempt.score_percent)}%</p>
-                  ) : (
-                    <p className="text-muted">Puedes revisar resultados o repetir la prueba.</p>
-                  )}
-                  <p className="text-xs text-muted">
-                    Repeticiones usadas: {repeatCount}/{LESSON_QUIZ_MAX_RESTARTS}
-                  </p>
-                </div>
+              <div className="space-y-1 rounded-2xl border border-success/30 bg-success/12 px-4 py-3 text-sm">
+                <p className="inline-flex items-center gap-2 font-semibold text-foreground">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-success/25 text-success">
+                    <CheckIcon />
+                  </span>
+                  Completada
+                </p>
+                {currentAttempt.score_percent != null ? (
+                  <p className="text-foreground">Puntaje: {Math.round(currentAttempt.score_percent)}%</p>
+                ) : null}
+                <p className="text-muted">
+                  Intentos usados: {attemptsUsed}/{LESSON_QUIZ_MAX_TOTAL_ATTEMPTS}
+                </p>
               </div>
             ) : null}
 
             <div className="flex flex-col gap-2 sm:flex-row">
-              {quizState === LESSON_QUIZ_STATUS.LOCKED ? (
-                <button
-                  type="button"
-                  disabled
-                  className="inline-flex w-full items-center justify-center rounded-2xl bg-primary/35 px-5 py-3 text-base font-semibold text-primary-foreground/80 disabled:cursor-not-allowed"
-                >
-                  Realizar prueba
-                </button>
-              ) : null}
-
               {quizState === LESSON_QUIZ_STATUS.READY ? (
                 <form action={startLessonQuizAttempt} className="w-full">
                   <input type="hidden" name="lessonId" value={lesson.id} />
@@ -387,22 +596,23 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
                     disabled={!canStart}
                     className="inline-flex w-full items-center justify-center rounded-2xl bg-primary px-5 py-3 text-base font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-55"
                   >
-                    Realizar prueba
+                    Realizar test
                   </button>
                 </form>
               ) : null}
 
               {quizState === LESSON_QUIZ_STATUS.IN_PROGRESS ? (
-                <Link
-                  href={canContinue ? `/app/clases/${lesson.id}/prueba/jugar?i=${currentIndex}` : "#"}
-                  className={`inline-flex w-full items-center justify-center rounded-2xl px-5 py-3 text-base font-semibold transition ${
+                <MonthlyLessonQuizzesModalButton
+                  quizzes={monthlyQuizzes}
+                  currentLessonId={lesson.id}
+                  triggerLabel="Continuar"
+                  triggerDisabled={!canContinue}
+                  triggerClassName={`inline-flex w-full items-center justify-center rounded-2xl px-5 py-3 text-base font-semibold transition ${
                     canContinue
                       ? "bg-primary text-primary-foreground hover:bg-primary-2"
-                      : "pointer-events-none bg-primary/35 text-primary-foreground/80"
+                      : "cursor-not-allowed bg-primary/35 text-primary-foreground/80"
                   }`}
-                >
-                  Continuar
-                </Link>
+                />
               ) : null}
 
               {quizState === LESSON_QUIZ_STATUS.COMPLETED ? (
@@ -413,39 +623,19 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
                   >
                     Ver resultados
                   </Link>
-                  <form action={restartLessonQuizAttempt} className="w-full sm:w-auto">
-                    <input type="hidden" name="lessonId" value={lesson.id} />
-                    <button
-                      type="submit"
-                      disabled={!canRepeat}
-                      className="inline-flex w-full items-center justify-center rounded-2xl border border-border bg-surface px-5 py-3 text-base font-semibold text-foreground transition hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {canRepeat
-                        ? `Repetir prueba (${remainingRestarts} restantes)`
-                        : "Repeticiones agotadas"}
-                    </button>
-                  </form>
+                  <RestartLessonQuizButton
+                    action={restartLessonQuizAttempt}
+                    lessonId={lesson.id}
+                    canRepeat={canRepeat}
+                    remainingAttempts={remainingAttempts}
+                    attemptsUsed={attemptsUsed}
+                    maxAttempts={LESSON_QUIZ_MAX_TOTAL_ATTEMPTS}
+                  />
                 </>
               ) : null}
             </div>
           </div>
         </article>
-
-        {typeSummary.length ? (
-          <details className="rounded-2xl border border-border bg-surface p-4">
-            <summary className="cursor-pointer text-sm font-semibold uppercase tracking-[0.22em] text-muted">
-              Incluye
-            </summary>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              {typeSummary.map((row) => (
-                <div key={row.key} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm">
-                  <p className="font-semibold text-foreground">{row.label}</p>
-                  <p className="text-xs text-muted">{row.count}</p>
-                </div>
-              ))}
-            </div>
-          </details>
-        ) : null}
       </div>
     </section>
   );

@@ -21,7 +21,6 @@ export const metadata = {
 const MATERIAL_TYPE_OPTIONS = [
   { value: "slides", label: "Google Slides" },
   { value: "link", label: "Enlace" },
-  { value: "exercise", label: "Ejercicio" },
   { value: "video", label: "Video" },
 ];
 
@@ -147,12 +146,23 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
 
   const sessionIds = sessions.map((session) => session.id);
   if (sessionIds.length) {
-    const { data: itemRows } = await supabase
-      .from("session_items")
-      .select("id, session_id, type, title, url, created_at")
-      .in("session_id", sessionIds)
-      .order("created_at", { ascending: true });
-    sessionItemsBySession = (itemRows || []).reduce((acc, item) => {
+    let itemColumns = ["id", "session_id", "type", "title", "url", "created_at", "note", "exercise_id"];
+    let itemsResult = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await supabase
+        .from("session_items")
+        .select(itemColumns.join(","))
+        .in("session_id", sessionIds)
+        .order("created_at", { ascending: true });
+      itemsResult = result;
+      if (!result.error) break;
+      const missingColumn = getMissingColumnFromError(result.error);
+      if (!missingColumn || !itemColumns.includes(missingColumn)) break;
+      itemColumns = itemColumns.filter((column) => column !== missingColumn);
+    }
+
+    const itemRows = itemsResult?.error ? [] : itemsResult?.data || [];
+    sessionItemsBySession = itemRows.reduce((acc, item) => {
       const current = acc.get(item.session_id) || [];
       current.push(item);
       acc.set(item.session_id, current);
@@ -299,6 +309,19 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
                 <div className="mt-4 space-y-4">
                   {monthSessions.map((session) => {
                     const items = sessionItemsBySession.get(session.id) || [];
+                    const primarySlideItem =
+                      items.find((item) => item.type === "slides" && item.note === "primary_slide") ||
+                      items.find((item) => item.type === "slides") ||
+                      null;
+                    const exerciseItems = items.filter(
+                      (item) => item.type === "exercise" || Boolean(item.exercise_id)
+                    );
+                    const materialItems = items.filter((item) => {
+                      if (primarySlideItem?.id && item.id === primarySlideItem.id) return false;
+                      if (item.type === "exercise" || item.exercise_id) return false;
+                      return true;
+                    });
+                    const hasQuiz = exerciseItems.length > 0;
                     return (
                       <div key={session.id} className="rounded-2xl border border-border bg-surface-2 p-4">
                         <form action={upsertCourseSessionLinks} className="space-y-3">
@@ -369,21 +392,117 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
                           </button>
                         </form>
 
-                        <div className="mt-4 rounded-2xl border border-border bg-surface p-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted">Materiales</p>
-                          <div className="mt-3 space-y-3">
-                            {items.map((item) => (
-                              <div key={item.id} className="flex flex-wrap items-start gap-2">
+                        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                          <div className="space-y-4">
+                            <div className="rounded-2xl border border-border bg-surface p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted">
+                                Slide principal de clase
+                              </p>
+                              <p className="mt-1 text-xs text-muted">
+                                Este material se muestra como archivo principal para el alumno. Los demas slides quedan como
+                                materiales adicionales.
+                              </p>
+                              <form action={upsertSessionItem} className="mt-3 grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                                <input suppressHydrationWarning type="hidden" name="sessionId" value={session.id} />
+                                <input suppressHydrationWarning type="hidden" name="commissionId" value={commission.id} />
+                                {primarySlideItem?.id ? (
+                                  <input suppressHydrationWarning type="hidden" name="itemId" value={primarySlideItem.id} />
+                                ) : null}
+                                <input suppressHydrationWarning type="hidden" name="type" value="slides" />
+                                <input suppressHydrationWarning type="hidden" name="note" value="primary_slide" />
+                                <input suppressHydrationWarning
+                                  name="title"
+                                  defaultValue={primarySlideItem?.title || "Slide de clase"}
+                                  className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                                  placeholder="Slide de clase"
+                                  required
+                                />
+                                <input suppressHydrationWarning
+                                  name="url"
+                                  defaultValue={primarySlideItem?.url || ""}
+                                  className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                                  placeholder="https://docs.google.com/presentation/..."
+                                />
+                                <button suppressHydrationWarning
+                                  type="submit"
+                                  className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+                                >
+                                  Guardar
+                                </button>
+                              </form>
+                            </div>
+
+                            <div className="rounded-2xl border border-border bg-surface p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted">
+                                Materiales adicionales
+                              </p>
+                              <div className="mt-3 space-y-3">
+                                {materialItems.map((item) => (
+                                  <div key={item.id} className="flex flex-wrap items-start gap-2">
+                                    <form
+                                      action={upsertSessionItem}
+                                      className="grid flex-1 gap-2 rounded-xl border border-border bg-surface-2 p-3 md:grid-cols-[140px_1fr_1fr_auto]"
+                                    >
+                                      <input suppressHydrationWarning type="hidden" name="sessionId" value={session.id} />
+                                      <input suppressHydrationWarning type="hidden" name="commissionId" value={commission.id} />
+                                      <input suppressHydrationWarning type="hidden" name="itemId" value={item.id} />
+                                      <input suppressHydrationWarning type="hidden" name="note" value={item.note || ""} />
+                                      <select suppressHydrationWarning
+                                        name="type"
+                                        defaultValue={item.type || "link"}
+                                        className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                      >
+                                        {MATERIAL_TYPE_OPTIONS.map((option) => (
+                                          <option key={option.value} value={option.value}>
+                                            {option.label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <input suppressHydrationWarning
+                                        name="title"
+                                        defaultValue={item.title || ""}
+                                        className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                        placeholder="Titulo"
+                                        required
+                                      />
+                                      <input suppressHydrationWarning
+                                        name="url"
+                                        defaultValue={item.url || ""}
+                                        className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
+                                        placeholder="https://..."
+                                      />
+                                      <button suppressHydrationWarning
+                                        type="submit"
+                                        className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface"
+                                      >
+                                        Guardar
+                                      </button>
+                                    </form>
+                                    <form action={deleteSessionItem}>
+                                      <input suppressHydrationWarning type="hidden" name="itemId" value={item.id} />
+                                      <input suppressHydrationWarning type="hidden" name="commissionId" value={commission.id} />
+                                      <button suppressHydrationWarning
+                                        type="submit"
+                                        className="rounded-xl border border-danger/60 px-3 py-2 text-xs font-semibold text-danger transition hover:bg-danger/10"
+                                      >
+                                        Eliminar
+                                      </button>
+                                    </form>
+                                  </div>
+                                ))}
+                                {!materialItems.length ? (
+                                  <p className="text-sm text-muted">Sin materiales adicionales en esta clase.</p>
+                                ) : null}
+
                                 <form
                                   action={upsertSessionItem}
-                                  className="grid flex-1 gap-2 rounded-xl border border-border bg-surface-2 p-3 md:grid-cols-[140px_1fr_1fr_auto]"
+                                  className="grid gap-2 rounded-xl border border-dashed border-border bg-surface-2 p-3 md:grid-cols-[140px_1fr_1fr_auto]"
                                 >
                                   <input suppressHydrationWarning type="hidden" name="sessionId" value={session.id} />
                                   <input suppressHydrationWarning type="hidden" name="commissionId" value={commission.id} />
-                                  <input suppressHydrationWarning type="hidden" name="itemId" value={item.id} />
                                   <select suppressHydrationWarning
                                     name="type"
-                                    defaultValue={item.type || "link"}
+                                    defaultValue="slides"
                                     className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
                                   >
                                     {MATERIAL_TYPE_OPTIONS.map((option) => (
@@ -394,75 +513,41 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
                                   </select>
                                   <input suppressHydrationWarning
                                     name="title"
-                                    defaultValue={item.title || ""}
                                     className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                    placeholder="Titulo"
+                                    placeholder="Nuevo material"
                                     required
                                   />
                                   <input suppressHydrationWarning
                                     name="url"
-                                    defaultValue={item.url || ""}
                                     className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
                                     placeholder="https://..."
                                   />
                                   <button suppressHydrationWarning
                                     type="submit"
-                                    className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface"
+                                    className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
                                   >
-                                    Guardar
-                                  </button>
-                                </form>
-                                <form action={deleteSessionItem}>
-                                  <input suppressHydrationWarning type="hidden" name="itemId" value={item.id} />
-                                  <input suppressHydrationWarning type="hidden" name="commissionId" value={commission.id} />
-                                  <button suppressHydrationWarning
-                                    type="submit"
-                                    className="rounded-xl border border-danger/60 px-3 py-2 text-xs font-semibold text-danger transition hover:bg-danger/10"
-                                  >
-                                    Eliminar
+                                    Agregar
                                   </button>
                                 </form>
                               </div>
-                            ))}
-                            {!items.length ? (
-                              <p className="text-sm text-muted">Sin materiales en esta clase.</p>
-                            ) : null}
+                            </div>
+                          </div>
 
-                            <form
-                              action={upsertSessionItem}
-                              className="grid gap-2 rounded-xl border border-dashed border-border bg-surface-2 p-3 md:grid-cols-[140px_1fr_1fr_auto]"
+                          <div className="rounded-2xl border border-primary/30 bg-primary/8 p-4">
+                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Prueba / Test</p>
+                            <p className="mt-1 text-sm text-foreground">{hasQuiz ? "Creada" : "No creada"}</p>
+                            <p className="text-xs text-muted">
+                              {exerciseItems.length} ejercicio{exerciseItems.length === 1 ? "" : "s"}
+                            </p>
+                            <p className="mt-2 text-xs text-muted">
+                              Los ejercicios de esta clase se editan juntos desde un solo editor.
+                            </p>
+                            <Link
+                              href={`/admin/commissions/${commission.id}/sessions/${session.id}/exercises`}
+                              className="mt-3 inline-flex w-full justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
                             >
-                              <input suppressHydrationWarning type="hidden" name="sessionId" value={session.id} />
-                              <input suppressHydrationWarning type="hidden" name="commissionId" value={commission.id} />
-                              <select suppressHydrationWarning
-                                name="type"
-                                defaultValue="slides"
-                                className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                              >
-                                {MATERIAL_TYPE_OPTIONS.map((option) => (
-                                  <option key={option.value} value={option.value}>
-                                    {option.label}
-                                  </option>
-                                ))}
-                              </select>
-                              <input suppressHydrationWarning
-                                name="title"
-                                className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                placeholder="Nuevo material"
-                                required
-                              />
-                              <input suppressHydrationWarning
-                                name="url"
-                                className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground"
-                                placeholder="https://..."
-                              />
-                              <button suppressHydrationWarning
-                                type="submit"
-                                className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
-                              >
-                                Agregar
-                              </button>
-                            </form>
+                              {hasQuiz ? "Editar prueba" : "Crear prueba para esta clase"}
+                            </Link>
                           </div>
                         </div>
                       </div>

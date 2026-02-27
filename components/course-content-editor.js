@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 const STATUS_OPTIONS = ["draft", "published", "archived"];
 const EXERCISE_TYPES = ["scramble", "audio_match", "image_match", "pairs", "cloze"];
-const SKILL_TAG_OPTIONS = ["speaking", "reading", "grammar"];
+const SKILL_TAG_OPTIONS = ["grammar", "reading", "listening"];
 
 function toJson(value, fallback = {}) {
   try {
@@ -44,9 +44,17 @@ function defaultContent(type) {
 }
 
 function defaultSkillTagByType(type) {
-  if (type === "audio_match") return "speaking";
+  if (type === "audio_match") return "listening";
   if (type === "image_match" || type === "pairs") return "reading";
   return "grammar";
+}
+
+function normalizeSkillTag(value, type) {
+  const fallback = defaultSkillTagByType(type);
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "speaking") return "listening";
+  return SKILL_TAG_OPTIONS.includes(normalized) ? normalized : fallback;
 }
 
 function upsert(list, item) {
@@ -319,7 +327,7 @@ export default function CourseContentEditor({ initialData }) {
       id: selected.id,
       lesson_id: selected.lesson_id || initialData.lessons?.[0]?.id || "",
       type: selected.type || "scramble",
-      skill_tag: selected.skill_tag || defaultSkillTagByType(selected.type || "scramble"),
+      skill_tag: normalizeSkillTag(selected.skill_tag, selected.type || "scramble"),
       status: selected.status || "draft",
       ordering: String(selected.ordering || 1),
       content_json: pretty(selected.content_json || {}),
@@ -477,7 +485,7 @@ export default function CourseContentEditor({ initialData }) {
     const payload = exercises.map((exercise) => ({
       lesson_id: exercise.lesson_id,
       type: exercise.type,
-      skill_tag: exercise.skill_tag || defaultSkillTagByType(exercise.type),
+      skill_tag: normalizeSkillTag(exercise.skill_tag, exercise.type),
       status: exercise.status,
       ordering: exercise.ordering,
       content_json: exercise.content_json,
@@ -507,7 +515,7 @@ export default function CourseContentEditor({ initialData }) {
       for (const row of rows) {
         const data = await requestJson("/api/admin/exercises", "POST", {
           ...row,
-          skill_tag: row.skill_tag || defaultSkillTagByType(row.type),
+          skill_tag: normalizeSkillTag(row.skill_tag, row.type),
         });
         if (data?.exercise?.id) {
           setExercises((prev) => upsert(prev, data.exercise));
