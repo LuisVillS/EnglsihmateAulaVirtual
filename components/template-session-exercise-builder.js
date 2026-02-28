@@ -3,17 +3,26 @@
 import { useActionState, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveCourseSessionExerciseBatch, saveTemplateSessionExerciseBatch } from "@/app/admin/actions";
+import {
+  buildListeningQuestionsFromContent,
+  createDefaultListeningQuestion,
+  getListeningMaxPlays,
+  isYouTubeUrl,
+  LISTENING_QUESTION_TYPES,
+  normalizeListeningQuestion,
+  normalizeListeningQuestionType,
+} from "@/lib/listening-exercise";
 
 const EXERCISE_TYPE_OPTIONS = [
   { value: "scramble", label: "Scrambled Sentence" },
-  { value: "audio_match", label: "Audio Match / Dictation" },
+  { value: "audio_match", label: "Listening Exercise" },
   { value: "image_match", label: "Image-Word Association" },
   { value: "pairs", label: "Pairs Game" },
   { value: "cloze", label: "Fill in the blanks" },
 ];
 
 const SKILL_TAG_OPTIONS = [
-  { value: "speaking", label: "Speaking" },
+  { value: "listening", label: "Listening" },
   { value: "reading", label: "Reading" },
   { value: "grammar", label: "Grammar" },
 ];
@@ -131,10 +140,17 @@ function getDefaultContent(type) {
       };
     case "audio_match":
       return {
-        text_target: "How are you?",
-        mode: "dictation",
-        provider: "elevenlabs",
+        prompt_native: "Listen to the audio and answer the questions.",
+        provider: "youtube",
+        source_type: "youtube",
+        youtube_url: "",
         audio_url: "",
+        start_time: "",
+        end_time: "",
+        max_plays: 2,
+        questions: [
+          createDefaultListeningQuestion(LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE, 0),
+        ],
         point_value: 10,
       };
     case "image_match":
@@ -182,9 +198,24 @@ function getDefaultContent(type) {
 }
 
 function defaultSkillTagByType(type) {
-  if (type === "audio_match") return "speaking";
+  if (type === "audio_match") return "listening";
   if (type === "image_match" || type === "pairs") return "reading";
   return "grammar";
+}
+
+function normalizeSkillTag(value, type) {
+  let raw = String(value || "").trim().toLowerCase();
+  if (raw === "speaking") {
+    raw = type === "audio_match" ? "listening" : "grammar";
+  }
+  if (raw === "writing") raw = "grammar";
+  if (SKILL_TAG_OPTIONS.some((option) => option.value === raw)) return raw;
+  return defaultSkillTagByType(type);
+}
+
+function resolveEditableText(rawValue, fallbackValue = "") {
+  if (rawValue == null) return String(fallbackValue ?? "");
+  return String(rawValue);
 }
 
 function normalizeContent(type, rawObject) {
@@ -395,14 +426,14 @@ function normalizeContent(type, rawObject) {
 
   if (type === "scramble") {
     const targetWords = Array.isArray(raw.target_words)
-      ? raw.target_words.map((v) => String(v || "").trim()).filter(Boolean)
+      ? raw.target_words.map((v) => String(v ?? ""))
       : base.target_words;
     const defaultOrder = targetWords.map((_, idx) => idx);
     const answerOrder = Array.isArray(raw.answer_order)
       ? raw.answer_order.map((v, idx) => toInt(v, idx))
       : defaultOrder;
     return {
-      prompt_native: String(raw.prompt_native || base.prompt_native),
+      prompt_native: resolveEditableText(raw.prompt_native, base.prompt_native),
       target_words: targetWords.length ? targetWords : base.target_words,
       answer_order: answerOrder.length ? answerOrder : defaultOrder,
       point_value: pointValue,
@@ -411,11 +442,23 @@ function normalizeContent(type, rawObject) {
   }
 
   if (type === "audio_match") {
+    const legacyAudioUrl = resolveEditableText(raw.audio_url ?? raw.audioUrl, "");
+    const explicitYouTubeValue = raw.youtube_url ?? raw.youtubeUrl;
+    const explicitYoutubeUrl = resolveEditableText(explicitYouTubeValue, "");
+    const youtubeUrl = explicitYoutubeUrl || (isYouTubeUrl(legacyAudioUrl) ? legacyAudioUrl : "");
     return {
-      text_target: String(raw.text_target || base.text_target),
-      mode: String(raw.mode || base.mode),
-      provider: "elevenlabs",
-      audio_url: String(raw.audio_url || ""),
+      prompt_native: resolveEditableText(raw.prompt_native ?? raw.promptNative ?? raw.instructions, base.prompt_native),
+      provider: youtubeUrl ? "youtube" : String(raw.provider ?? base.provider ?? "youtube"),
+      source_type: youtubeUrl ? "youtube" : (legacyAudioUrl ? "audio" : "youtube"),
+      youtube_url: youtubeUrl,
+      audio_url: youtubeUrl ? "" : legacyAudioUrl,
+      start_time: resolveEditableText(raw.start_time ?? raw.startTime, base.start_time ?? ""),
+      end_time: resolveEditableText(raw.end_time ?? raw.endTime, base.end_time ?? ""),
+      max_plays: getListeningMaxPlays(raw, getListeningMaxPlays(base, 1)),
+      questions: buildListeningQuestionsFromContent(raw, {
+        preserveDraftText: true,
+        allowBlankPrompt: true,
+      }),
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
     };
@@ -426,22 +469,23 @@ function normalizeContent(type, rawObject) {
     const mappedOptions = rawOptions.map((option) => {
       if (typeof option === "string") {
         return {
-          label: String(option).trim(),
+          label: String(option),
           vocab_id: "",
           image_url: "",
         };
       }
       const source = option && typeof option === "object" ? option : {};
       return {
-        label: String(
-          source.label ||
-            source.word_native ||
-            source.word_target ||
-            source.text ||
-            source.option ||
-            source.vocab_id ||
-            ""
-        ).trim(),
+        label: resolveEditableText(
+          source.label ??
+            source.word_native ??
+            source.word_target ??
+            source.text ??
+            source.option ??
+            source.vocab_id ??
+            "",
+          ""
+        ),
         vocab_id: String(source.vocab_id || source.vocabId || "").trim(),
         image_url: String(source.image_url || source.imageUrl || "").trim(),
       };
@@ -449,7 +493,7 @@ function normalizeContent(type, rawObject) {
     const options = Array.from({ length: 4 }, (_, idx) => {
       const source = mappedOptions[idx] || {};
       return {
-        label: String(source.label || "").trim(),
+        label: resolveEditableText(source.label, ""),
         vocab_id: String(source.vocab_id || "").trim(),
       };
     });
@@ -462,7 +506,7 @@ function normalizeContent(type, rawObject) {
     const fallbackImageUrl = mappedOptions[correctIndex]?.image_url || mappedOptions[0]?.image_url || "";
     const imageUrl = String(raw.image_url || raw.imageUrl || fallbackImageUrl || "").trim();
     return {
-      question_native: String(raw.question_native || base.question_native),
+      question_native: resolveEditableText(raw.question_native, base.question_native),
       image_url: imageUrl,
       options,
       correct_index: Number.isFinite(correctIndex) ? correctIndex : 0,
@@ -476,8 +520,8 @@ function normalizeContent(type, rawObject) {
     const pairs = Array.isArray(raw.pairs)
       ? raw.pairs
           .map((pair) => ({
-            native: String(pair?.native || "").trim(),
-            target: String(pair?.target || "").trim(),
+            native: resolveEditableText(pair?.native, ""),
+            target: resolveEditableText(pair?.target, ""),
           }))
       : base.pairs;
     return {
@@ -511,7 +555,7 @@ function createDraft(overrides = {}) {
     status: overrides.status || "published",
     title: overrides.title || "",
     lessonId: overrides.lessonId || "",
-    skillTag: overrides.skillTag || defaultSkillTagByType(type),
+    skillTag: normalizeSkillTag(overrides.skillTag, type),
     contentJson: toPrettyJson(resolved),
   };
 }
@@ -896,33 +940,261 @@ function GuidedEditor({ item, content, onPatch }) {
   }
 
   if (item.type === "audio_match") {
+    const questions = Array.isArray(content.questions) ? content.questions : [];
+
+    const updateQuestion = (questionIndex, patchObject) => {
+      const next = questions.map((question, idx) => (
+        idx === questionIndex
+          ? normalizeListeningQuestion({ ...question, ...patchObject }, idx, { preserveDraftText: true, allowBlankPrompt: true })
+          : normalizeListeningQuestion(question, idx, { preserveDraftText: true, allowBlankPrompt: true })
+      ));
+      onPatch({ questions: next });
+    };
+
+    const addQuestion = (questionType) => {
+      const next = [
+        ...questions.map((question, idx) => normalizeListeningQuestion(question, idx, { preserveDraftText: true, allowBlankPrompt: true })),
+        createDefaultListeningQuestion(normalizeListeningQuestionType(questionType), questions.length),
+      ];
+      onPatch({ questions: next });
+    };
+
+    const removeQuestion = (questionIndex) => {
+      if (questions.length <= 1) return;
+      const next = questions
+        .filter((_, idx) => idx !== questionIndex)
+        .map((question, idx) => normalizeListeningQuestion(question, idx, { preserveDraftText: true, allowBlankPrompt: true }));
+      onPatch({ questions: next });
+    };
+
     return (
-      <div className="grid gap-2">
-        <label className="text-xs font-semibold uppercase tracking-wide text-muted">Texto target</label>
+      <div className="grid gap-3">
+        <label className="text-xs font-semibold uppercase tracking-wide text-muted">Instrucciones</label>
         <input
-          value={content.text_target}
-          onChange={(event) => onPatch({ text_target: event.target.value })}
+          value={content.prompt_native || ""}
+          onChange={(event) => onPatch({ prompt_native: event.target.value })}
           className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-          placeholder="How are you?"
+          placeholder="Listen to the audio and answer the questions."
         />
-        <label className="text-xs font-semibold uppercase tracking-wide text-muted">Modo</label>
-        <select
-          value={content.mode}
-          onChange={(event) => onPatch({ mode: event.target.value })}
-          className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-        >
-          <option value="dictation">Dictation</option>
-          <option value="translation">Translation</option>
-          <option value="choice">Multiple Choice</option>
-        </select>
-        <label className="text-xs font-semibold uppercase tracking-wide text-muted">Audio URL (opcional)</label>
-        <input
-          value={content.audio_url || ""}
-          onChange={(event) => onPatch({ audio_url: event.target.value })}
-          className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-          placeholder="https://..."
-        />
-        <p className="text-xs text-muted">Proveedor fijado a ElevenLabs para cache de audio.</p>
+
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_120px]">
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Link de YouTube</label>
+            <input
+              value={content.youtube_url || ""}
+              onChange={(event) => onPatch({ youtube_url: event.target.value, provider: "youtube", source_type: "youtube" })}
+              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+              placeholder="https://www.youtube.com/watch?v=..."
+            />
+            <p className="text-xs text-muted">Por ahora el audio se reproduce desde YouTube (solo audio en alumno).</p>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Max plays</label>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={Math.max(1, toInt(content.max_plays, 1))}
+              onChange={(event) => onPatch({ max_plays: Math.max(1, toInt(event.target.value, 1)) })}
+              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Start time (opcional)</label>
+            <input
+              value={content.start_time ?? ""}
+              onChange={(event) => onPatch({ start_time: event.target.value })}
+              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+              placeholder="0:30 o 30"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">End time (opcional)</label>
+            <input
+              value={content.end_time ?? ""}
+              onChange={(event) => onPatch({ end_time: event.target.value })}
+              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+              placeholder="1:15 o 75"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-muted">
+          Puedes usar segundos, mm:ss o hh:mm:ss. Si defines solo start time, el audio sigue hasta el final del video.
+        </p>
+
+        <div className="rounded-xl border border-border bg-surface p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Preguntas ({questions.length})
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => addQuestion(LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE)}
+                className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              >
+                + Multiple Choice
+              </button>
+              <button
+                type="button"
+                onClick={() => addQuestion(LISTENING_QUESTION_TYPES.WRITTEN)}
+                className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              >
+                + Escrita
+              </button>
+              <button
+                type="button"
+                onClick={() => addQuestion(LISTENING_QUESTION_TYPES.TRUE_FALSE)}
+                className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              >
+                + True / False
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 space-y-3">
+            {questions.map((question, questionIndex) => {
+              const normalizedQuestion = normalizeListeningQuestion(question, questionIndex, {
+                preserveDraftText: true,
+                allowBlankPrompt: true,
+              });
+              const questionType = normalizedQuestion.type;
+              return (
+                <div
+                  key={`${item.localId}-audio-question-${normalizedQuestion.id}-${questionIndex}`}
+                  className="rounded-xl border border-border bg-surface-2 p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                      Pregunta {questionIndex + 1}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => removeQuestion(questionIndex)}
+                      disabled={questions.length <= 1}
+                      className="rounded-lg border border-danger/60 px-2 py-1 text-xs font-semibold text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Quitar
+                    </button>
+                  </div>
+
+                  <div className="mt-3 grid gap-3">
+                    <div className="grid gap-3 md:grid-cols-[160px_minmax(0,1fr)]">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">Tipo</label>
+                        <select
+                          value={questionType}
+                          onChange={(event) => {
+                            const nextType = normalizeListeningQuestionType(event.target.value);
+                            updateQuestion(
+                              questionIndex,
+                              createDefaultListeningQuestion(nextType, questionIndex)
+                            );
+                          }}
+                          className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                        >
+                          <option value={LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE}>Multiple Choice</option>
+                          <option value={LISTENING_QUESTION_TYPES.WRITTEN}>Respuesta escrita</option>
+                          <option value={LISTENING_QUESTION_TYPES.TRUE_FALSE}>True / False</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">Prompt</label>
+                        <input
+                          value={normalizedQuestion.prompt || ""}
+                          onChange={(event) => updateQuestion(questionIndex, { prompt: event.target.value })}
+                          className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                          placeholder="What did the speaker say?"
+                        />
+                      </div>
+                    </div>
+
+                    {questionType === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
+                      <>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {normalizedQuestion.options.map((option, optionIndex) => (
+                            <div
+                              key={`${normalizedQuestion.id}-option-${optionIndex}`}
+                              className="grid gap-1 rounded-lg border border-border bg-surface p-2"
+                            >
+                              <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                                Opcion {optionIndex + 1}
+                              </label>
+                              <input
+                                value={option || ""}
+                                onChange={(event) => {
+                                  const nextOptions = normalizedQuestion.options.map((currentOption, idx) => (
+                                    idx === optionIndex ? event.target.value : currentOption
+                                  ));
+                                  updateQuestion(questionIndex, { options: nextOptions });
+                                }}
+                                className="w-full rounded-lg border border-border bg-surface-2 px-2 py-2 text-sm text-foreground"
+                                placeholder={`Option ${optionIndex + 1}`}
+                              />
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">Respuesta correcta</label>
+                          <select
+                            value={normalizedQuestion.correct_index}
+                            onChange={(event) => updateQuestion(questionIndex, { correct_index: toInt(event.target.value, 0) })}
+                            className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                          >
+                            {normalizedQuestion.options.map((option, optionIndex) => (
+                              <option key={`${normalizedQuestion.id}-correct-${optionIndex}`} value={optionIndex}>
+                                Opcion {optionIndex + 1}: {option || "(sin texto)"}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
+                    ) : null}
+
+                    {questionType === LISTENING_QUESTION_TYPES.WRITTEN ? (
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                          Respuestas validas (una por linea)
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={(normalizedQuestion.accepted_answers || []).join("\n")}
+                          onChange={(event) =>
+                            updateQuestion(questionIndex, {
+                              accepted_answers: event.target.value
+                                .split(/\r?\n/)
+                                .map((value) => String(value ?? "")),
+                            })
+                          }
+                          className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                          placeholder={"example answer\nalternate answer"}
+                        />
+                      </div>
+                    ) : null}
+
+                    {questionType === LISTENING_QUESTION_TYPES.TRUE_FALSE ? (
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">Respuesta correcta</label>
+                        <select
+                          value={normalizedQuestion.correct_boolean ? "true" : "false"}
+                          onChange={(event) => updateQuestion(questionIndex, { correct_boolean: event.target.value === "true" })}
+                          className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                        >
+                          <option value="true">True</option>
+                          <option value="false">False</option>
+                        </select>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     );
   }
@@ -1148,7 +1420,16 @@ export default function TemplateSessionExerciseBuilder({
     setItems((prev) =>
       prev.map((item) => {
         if (item.localId !== localId) return item;
-        return { ...item, ...patch };
+        const nextType = patch.type || item.type;
+        const nextSkillTag = Object.prototype.hasOwnProperty.call(patch, "skillTag")
+          ? patch.skillTag
+          : item.skillTag;
+        return {
+          ...item,
+          ...patch,
+          type: nextType,
+          skillTag: normalizeSkillTag(nextSkillTag, nextType),
+        };
       })
     );
   }

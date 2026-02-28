@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatEnrollmentFrequencyLabel } from "@/lib/frequency-labels";
 
 const SUPPORT_URL = process.env.NEXT_PUBLIC_SUPPORT_WA_URL || "https://wa.me/";
 
@@ -206,6 +207,7 @@ function StartMonthPicker({ value, onChange, options = [] }) {
 
 export default function MatriculaPage() {
   const [loading, setLoading] = useState(true);
+  const [optionsLoading, setOptionsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [resettingExpiredReservation, setResettingExpiredReservation] = useState(false);
   const [error, setError] = useState("");
@@ -229,6 +231,8 @@ export default function MatriculaPage() {
   const [payerPhone, setPayerPhone] = useState("");
   const [openingCheckout, setOpeningCheckout] = useState(false);
   const [reserveCountdown, setReserveCountdown] = useState(null);
+  const optionsCacheRef = useRef(new Map());
+  const optionsRequestIdRef = useRef(0);
 
   const [selection, setSelection] = useState({
     level: "",
@@ -249,25 +253,83 @@ export default function MatriculaPage() {
     STEPS.findIndex((item) => item.key === step)
   );
 
-  async function loadOptions(params = "") {
-    const response = await fetch(`/api/matricula/options${params}`);
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "No se pudieron cargar opciones.");
+  const applyOptionsPayload = useCallback((payload, { preservePreEnrollment = false } = {}) => {
+    if (!preservePreEnrollment) {
+      setPreEnrollment(payload.preEnrollment || null);
     }
-    setPreEnrollment(payload.preEnrollment || null);
     setStartMonths(payload.startMonths || []);
     setLevels(payload.levels || []);
     setFrequencies(payload.frequencies || []);
     setCourses(payload.courses || []);
     setSchedules(payload.schedules || []);
+  }, []);
+
+  function buildOptionsQuery({
+    startMonth = selection.startMonth,
+    level = selection.level,
+    frequency = selection.frequency,
+    courseId = selection.courseId,
+  } = {}) {
+    const params = new URLSearchParams();
+    if (startMonth) params.set("startMonth", startMonth);
+    if (level) params.set("level", level);
+    if (frequency) params.set("frequency", frequency);
+    if (courseId) params.set("courseId", courseId);
+    const query = params.toString();
+    return query ? `?${query}` : "";
   }
+
+  const loadOptions = useCallback(async (params = "") => {
+    if (params && optionsCacheRef.current.has(params)) {
+      const cachedPayload = optionsCacheRef.current.get(params);
+      applyOptionsPayload(cachedPayload, { preservePreEnrollment: true });
+      setOptionsLoading(false);
+      return cachedPayload;
+    }
+
+    const requestId = optionsRequestIdRef.current + 1;
+    optionsRequestIdRef.current = requestId;
+    setOptionsLoading(true);
+
+    try {
+      const response = await fetch(`/api/matricula/options${params}`);
+      const payload = await response.json();
+      if (!response.ok) {
+        if (requestId !== optionsRequestIdRef.current) {
+          return null;
+        }
+        throw new Error(payload.error || "No se pudieron cargar opciones.");
+      }
+      if (params) {
+        optionsCacheRef.current.set(params, {
+          startMonths: payload.startMonths || [],
+          levels: payload.levels || [],
+          frequencies: payload.frequencies || [],
+          courses: payload.courses || [],
+          schedules: payload.schedules || [],
+        });
+      }
+      if (requestId === optionsRequestIdRef.current) {
+        applyOptionsPayload(payload);
+      }
+      return payload;
+    } catch (err) {
+      if (requestId !== optionsRequestIdRef.current) {
+        return null;
+      }
+      throw err;
+    } finally {
+      if (requestId === optionsRequestIdRef.current) {
+        setOptionsLoading(false);
+      }
+    }
+  }, [applyOptionsPayload]);
 
   useEffect(() => {
     loadOptions()
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [loadOptions]);
 
   useEffect(() => {
     if (!preEnrollment?.reservation_expires_at) {
@@ -318,25 +380,69 @@ export default function MatriculaPage() {
   }, [preEnrollment]);
 
   async function handleLevelChange(value) {
+    setError("");
     setSelection((prev) => ({ ...prev, level: value, frequency: "", courseId: "", startTime: "" }));
     setFrequencies([]);
     setCourses([]);
     setSchedules([]);
-    const monthQuery = selection.startMonth ? `startMonth=${encodeURIComponent(selection.startMonth)}&` : "";
-    await loadOptions(`?${monthQuery}level=${encodeURIComponent(value)}`);
+    try {
+      await loadOptions(
+        buildOptionsQuery({
+          startMonth: selection.startMonth,
+          level: value,
+          frequency: "",
+          courseId: "",
+        })
+      );
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   async function handleFrequencyChange(value) {
+    setError("");
     setSelection((prev) => ({ ...prev, frequency: value, courseId: "", startTime: "" }));
     setCourses([]);
     setSchedules([]);
-    const monthQuery = selection.startMonth ? `startMonth=${encodeURIComponent(selection.startMonth)}&` : "";
-    await loadOptions(
-      `?${monthQuery}level=${encodeURIComponent(selection.level)}&frequency=${encodeURIComponent(value)}`
-    );
+    try {
+      await loadOptions(
+        buildOptionsQuery({
+          startMonth: selection.startMonth,
+          level: selection.level,
+          frequency: value,
+          courseId: "",
+        })
+      );
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleCourseChange(value) {
+    setError("");
+    setSelection((prev) => ({ ...prev, courseId: value, startTime: "" }));
+    setSchedules([]);
+
+    if (!value) {
+      return;
+    }
+
+    try {
+      await loadOptions(
+        buildOptionsQuery({
+          startMonth: selection.startMonth,
+          level: selection.level,
+          frequency: selection.frequency,
+          courseId: value,
+        })
+      );
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   async function handleStartMonthChange(value) {
+    setError("");
     setSelection((prev) => ({
       ...prev,
       startMonth: value,
@@ -351,11 +457,19 @@ export default function MatriculaPage() {
     setSchedules([]);
 
     if (!value) {
-      await loadOptions();
+      try {
+        await loadOptions();
+      } catch (err) {
+        setError(err.message);
+      }
       return;
     }
 
-    await loadOptions(`?startMonth=${encodeURIComponent(value)}`);
+    try {
+      await loadOptions(buildOptionsQuery({ startMonth: value, level: "", frequency: "", courseId: "" }));
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   async function handleSelectionContinue() {
@@ -394,11 +508,7 @@ export default function MatriculaPage() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "No se pudo aceptar terminos.");
       setPreEnrollment(payload.preEnrollment || null);
-
-      const summaryResponse = await fetch("/api/matricula/summary");
-      const summaryPayload = await summaryResponse.json();
-      if (!summaryResponse.ok) throw new Error(summaryPayload.error || "No se pudo obtener resumen.");
-      setSummary(summaryPayload.summary || null);
+      setSummary(payload.summary || null);
       setStep("summary");
     } catch (err) {
       setError(err.message);
@@ -511,6 +621,7 @@ export default function MatriculaPage() {
       }
 
       setPreEnrollment(payload.preEnrollment || null);
+      optionsCacheRef.current.clear();
       setStep("selection");
       setSummary(null);
       setTermsAccepted(false);
@@ -556,6 +667,9 @@ export default function MatriculaPage() {
   const summaryCourseTypeLabel = formatCourseType(
     summary?.course_type || preEnrollment?.selected_course_type || selection.courseType
   );
+  const summaryFrequencyLabel = formatEnrollmentFrequencyLabel(
+    summary?.frequency || preEnrollment?.selected_frequency || selection.frequency
+  );
   const summaryStartMonthLabel = formatMonthLabel(
     summary?.start_month || preEnrollment?.start_month || selection.startMonth
   );
@@ -577,7 +691,10 @@ export default function MatriculaPage() {
       return "No hay frecuencias disponibles para ese nivel en el mes elegido.";
     }
     if (!selection.frequency) {
-      return "Selecciona una frecuencia para ver los horarios disponibles.";
+      return "Selecciona una frecuencia para ver los cursos disponibles.";
+    }
+    if (!selection.courseId) {
+      return "Selecciona un curso para ver horarios disponibles.";
     }
     if (!schedules.length) {
       return "No hay horarios disponibles para ese nivel/frecuencia en el mes seleccionado. Prueba otra combinacion.";
@@ -590,6 +707,7 @@ export default function MatriculaPage() {
     selection.level,
     frequencies,
     selection.frequency,
+    selection.courseId,
     schedules,
   ]);
 
@@ -618,12 +736,6 @@ export default function MatriculaPage() {
               </span>
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-              <a
-                href="/app"
-                className="rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2"
-              >
-                Ir al inicio
-              </a>
               <a
                 href={SUPPORT_URL}
                 target="_blank"
@@ -751,11 +863,19 @@ export default function MatriculaPage() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Mes de inicio">
+                  <StartMonthPicker
+                    value={selection.startMonth}
+                    options={startMonths}
+                    onChange={handleStartMonthChange}
+                  />
+                </Field>
+
                 <Field label="Nivel">
                   <SelectField
                     value={selection.level}
                     onChange={(event) => handleLevelChange(event.target.value)}
-                    disabled={!selection.startMonth || !levels.length}
+                    disabled={!selection.startMonth || !levels.length || optionsLoading}
                   >
                     <option value="">Selecciona</option>
                     {levels.map((level) => (
@@ -770,7 +890,7 @@ export default function MatriculaPage() {
                   <SelectField
                     value={selection.frequency}
                     onChange={(event) => handleFrequencyChange(event.target.value)}
-                    disabled={!selection.startMonth || !selection.level || !frequencies.length}
+                    disabled={!selection.startMonth || !selection.level || !frequencies.length || optionsLoading}
                   >
                     <option value="">Selecciona</option>
                     {frequencies.map((item) => (
@@ -784,8 +904,10 @@ export default function MatriculaPage() {
                 <Field label="Curso">
                   <SelectField
                     value={selection.courseId}
-                    onChange={(event) => setSelection((prev) => ({ ...prev, courseId: event.target.value }))}
-                    disabled={!selection.startMonth || !selection.level || !selection.frequency || !courses.length}
+                    onChange={(event) => handleCourseChange(event.target.value)}
+                    disabled={
+                      !selection.startMonth || !selection.level || !selection.frequency || !courses.length || optionsLoading
+                    }
                   >
                     <option value="">Selecciona</option>
                     {courses.map((course) => (
@@ -800,7 +922,14 @@ export default function MatriculaPage() {
                   <SelectField
                     value={selection.startTime}
                     onChange={(event) => setSelection((prev) => ({ ...prev, startTime: event.target.value }))}
-                    disabled={!selection.startMonth || !selection.level || !selection.frequency || !schedules.length}
+                    disabled={
+                      !selection.startMonth ||
+                      !selection.level ||
+                      !selection.frequency ||
+                      !selection.courseId ||
+                      !schedules.length ||
+                      optionsLoading
+                    }
                   >
                     <option value="">Selecciona</option>
                     {schedules.map((schedule) => (
@@ -809,6 +938,9 @@ export default function MatriculaPage() {
                       </option>
                     ))}
                   </SelectField>
+                  {selection.frequency && !selection.courseId ? (
+                    <p className="text-xs text-muted">Selecciona un curso para ver horarios disponibles.</p>
+                  ) : null}
                 </Field>
 
                 <Field label="Tipo de curso">
@@ -820,15 +952,13 @@ export default function MatriculaPage() {
                     <option value="premium">Premium</option>
                   </SelectField>
                 </Field>
-
-                <Field label="Mes de inicio">
-                  <StartMonthPicker
-                    value={selection.startMonth}
-                    options={startMonths}
-                    onChange={handleStartMonthChange}
-                  />
-                </Field>
               </div>
+
+              {optionsLoading ? (
+                <div className="rounded-xl border border-border bg-surface-2 px-4 py-3 text-xs text-muted">
+                  Actualizando opciones disponibles...
+                </div>
+              ) : null}
 
               {selectionHint ? (
                 <div className="rounded-xl border border-primary/25 bg-primary/10 px-4 py-3 text-xs text-foreground">
@@ -904,7 +1034,7 @@ export default function MatriculaPage() {
 
               <div className="grid gap-3 rounded-2xl border border-border bg-background/60 p-4 text-sm text-foreground md:grid-cols-2">
                 <p>Nivel: <span className="font-semibold text-foreground">{summary?.level || preEnrollment?.selected_level || "-"}</span></p>
-                <p>Frecuencia: <span className="font-semibold text-foreground">{summary?.frequency || preEnrollment?.selected_frequency || "-"}</span></p>
+                <p>Frecuencia: <span className="font-semibold text-foreground">{summaryFrequencyLabel}</span></p>
                 <p>Horario: <span className="font-semibold text-foreground">{formatSchedule(summary?.schedule)}</span></p>
                 <p>Tipo: <span className="font-semibold text-foreground">{summaryCourseTypeLabel}</span></p>
                 <p>Mes de inicio: <span className="font-semibold text-foreground">{summaryStartMonthLabel}</span></p>
@@ -1132,4 +1262,3 @@ export default function MatriculaPage() {
     </section>
   );
 }
-

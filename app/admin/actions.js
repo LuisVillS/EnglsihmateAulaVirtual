@@ -273,6 +273,7 @@ function defaultSkillTagByType(type) {
 function normalizeExerciseSkillTag(value, type) {
   let raw = String(value || "").trim().toLowerCase();
   if (raw === "speaking") raw = "listening";
+  if (raw === "writing") raw = "grammar";
   if (EXERCISE_SKILL_TAG_VALUES.includes(raw)) return raw;
   return defaultSkillTagByType(type);
 }
@@ -465,9 +466,20 @@ function getDefaultExerciseContent(type) {
       };
     case "audio_match":
       return {
-        text_target: "How are you?",
-        mode: "dictation",
-        provider: "elevenlabs",
+        prompt_native: "Listen to the audio and answer the questions.",
+        provider: "youtube",
+        source_type: "youtube",
+        youtube_url: "",
+        max_plays: 2,
+        questions: [
+          {
+            id: "q_1",
+            type: "multiple_choice",
+            prompt: "Question 1",
+            options: ["", "", "", ""],
+            correct_index: 0,
+          },
+        ],
         point_value: 10,
       };
     case "image_match":

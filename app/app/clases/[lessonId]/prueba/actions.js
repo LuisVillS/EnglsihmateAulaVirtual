@@ -247,7 +247,7 @@ export async function submitLessonQuizStep(formData) {
       ? "failed"
       : "passed";
   const isCorrect = finalStatus === "passed";
-  const scoreAwarded = isCorrect ? clamp(submittedScoreAwarded, 0, 100) : 0;
+  const scoreAwarded = clamp(submittedScoreAwarded, 0, 100);
 
   const { supabase, userId } = await requireStudentUser();
 

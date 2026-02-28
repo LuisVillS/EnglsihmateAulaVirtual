@@ -4,7 +4,11 @@ import { useMemo, useState } from "react";
 
 const STATUS_OPTIONS = ["draft", "published", "archived"];
 const EXERCISE_TYPES = ["scramble", "audio_match", "image_match", "pairs", "cloze"];
-const SKILL_TAG_OPTIONS = ["grammar", "reading", "listening"];
+const SKILL_TAG_OPTIONS = [
+  { value: "grammar", label: "Grammar" },
+  { value: "reading", label: "Reading" },
+  { value: "listening", label: "Listening" },
+];
 
 function toJson(value, fallback = {}) {
   try {
@@ -20,7 +24,22 @@ function pretty(value) {
 
 function defaultContent(type) {
   if (type === "audio_match") {
-    return { text_target: "How are you?", mode: "dictation", provider: "elevenlabs" };
+    return {
+      prompt_native: "Listen to the audio and answer the questions.",
+      provider: "youtube",
+      source_type: "youtube",
+      youtube_url: "",
+      max_plays: 2,
+      questions: [
+        {
+          id: "q_1",
+          type: "multiple_choice",
+          prompt: "Question 1",
+          options: ["", "", "", ""],
+          correct_index: 0,
+        },
+      ],
+    };
   }
   if (type === "image_match") {
     return {
@@ -54,7 +73,8 @@ function normalizeSkillTag(value, type) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return fallback;
   if (normalized === "speaking") return "listening";
-  return SKILL_TAG_OPTIONS.includes(normalized) ? normalized : fallback;
+  if (normalized === "writing") return "grammar";
+  return SKILL_TAG_OPTIONS.some((option) => option.value === normalized) ? normalized : fallback;
 }
 
 function upsert(list, item) {
@@ -634,7 +654,7 @@ export default function CourseContentEditor({ initialData }) {
                 {EXERCISE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
               </select>
               <select value={exerciseForm.skill_tag} onChange={(e) => setExerciseForm((prev) => ({ ...prev, skill_tag: e.target.value }))} className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm">
-                {SKILL_TAG_OPTIONS.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
+                {SKILL_TAG_OPTIONS.map((tag) => <option key={tag.value} value={tag.value}>{tag.label}</option>)}
               </select>
               <select value={exerciseForm.status} onChange={(e) => setExerciseForm((prev) => ({ ...prev, status: e.target.value }))} className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm">
                 {STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}

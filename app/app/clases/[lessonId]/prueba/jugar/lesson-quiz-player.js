@@ -1,13 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import ListeningPlaybackControl from "@/components/listening-playback-control";
+import {
+  buildListeningQuestionsFromContent,
+  getListeningEndTime,
+  getListeningMaxPlays,
+  getListeningPrompt,
+  getListeningQuestionCorrectAnswerText,
+  getListeningStartTime,
+  LISTENING_QUESTION_TYPES,
+  summarizeListeningQuestionResults,
+} from "@/lib/listening-exercise";
 import { submitLessonQuizStep } from "../actions";
 
 const MAX_WRONG_ATTEMPTS = 1;
 
 const TYPE_LABELS = {
   scramble: "Scrambled Sentence",
-  audio_match: "Audio Match",
+  audio_match: "Listening Exercise",
   image_match: "Image Match",
   pairs: "Pairs",
   cloze: "Fill in the blanks",
@@ -72,11 +83,17 @@ function computeExerciseWeightFromPoints(totalExercises, exerciseIndex, exercise
   return round2(raw);
 }
 
-function computeExerciseScore(weight, wrongAttempts, finalStatus) {
-  if (finalStatus !== "passed") return 0;
+function computeExerciseScore(weight, wrongAttempts, finalStatus, itemStats = null) {
+  let ratio = finalStatus === "passed" ? 1 : 0;
+  const correctItems = Number(itemStats?.correctItems);
+  const totalItems = Number(itemStats?.totalItems);
+  if (Number.isFinite(correctItems) && Number.isFinite(totalItems) && totalItems > 0) {
+    ratio = Math.min(1, Math.max(0, correctItems / totalItems));
+  }
+  if (ratio <= 0) return 0;
   const wrong = Math.max(0, Math.min(2, Number(wrongAttempts) || 0));
   const multipliers = [1, 0.8, 0.6];
-  return round2((Number(weight) || 0) * multipliers[wrong]);
+  return round2((Number(weight) || 0) * ratio * multipliers[wrong]);
 }
 
 function isArrayEqual(a = [], b = []) {
@@ -161,7 +178,7 @@ function getDefaultExplanation(type, data) {
   if (type === "scramble") return "El orden correcto sigue sujeto + verbo + complemento.";
   if (type === "pairs") return "Estos son los pares correctos entre ambos idiomas.";
   if (type === "image_match") return "La imagen correcta corresponde al termino solicitado.";
-  if (type === "audio_match") return "La respuesta correcta coincide con lo que se escucha.";
+  if (type === "audio_match") return "Las respuestas correctas se obtienen a partir del audio escuchado.";
   if (data?.correctAnswer) return "Esa es la respuesta correcta para este ejercicio.";
   return "Revisa la solucion para entender la regla de este ejercicio.";
 }
@@ -435,18 +452,18 @@ function resolveExerciseData(exercise) {
   }
 
   if (type === "audio_match") {
-    const options = normalizeArray(content.options).map((option) => String(option || "").trim()).filter(Boolean);
-    const mode = String(content.mode || "dictation").trim().toLowerCase();
-    const correctByIndex = options[Math.max(0, Number(content.correct_index) || 0)] || "";
-    const correctText = String(content.correct || content.answer || correctByIndex || content.text_target || "").trim();
+    const questions = buildListeningQuestionsFromContent(content);
     return {
       type,
       explanation,
-      mode,
-      textTarget: String(content.text_target || exercise?.prompt || "Escucha y responde."),
+      prompt: getListeningPrompt(content) || String(exercise?.prompt || "Escucha y responde."),
+      textTarget: String(content.text_target || "").trim(),
       audioUrl: String(content.audio_url || "").trim(),
-      options,
-      correctText,
+      youtubeUrl: String(content.youtube_url || content.youtubeUrl || "").trim(),
+      maxPlays: getListeningMaxPlays(content, 1),
+      startTime: getListeningStartTime(content, 0),
+      endTime: getListeningEndTime(content, null),
+      questions,
     };
   }
 
@@ -486,7 +503,14 @@ function buildCorrectAnswerText(type, data) {
     const correct = data.options?.[data.correctIndex];
     return correct?.label || correct?.vocabId || "Opcion correcta";
   }
-  if (type === "audio_match") return data.correctText || "-";
+  if (type === "audio_match") {
+    const questions = normalizeArray(data.questions);
+    if (!questions.length && data.textTarget) return data.textTarget;
+    if (!questions.length) return "-";
+    return questions
+      .map((question, idx) => `Q${idx + 1}: ${getListeningQuestionCorrectAnswerText(question)}`)
+      .join(" | ");
+  }
   return "-";
 }
 
@@ -508,6 +532,7 @@ export default function LessonQuizPlayer({
 }) {
   const data = useMemo(() => resolveExerciseData(exercise), [exercise]);
   const type = data.type;
+  const listeningExerciseKey = String(exercise?.id || `${lessonId}-${currentIndex}`);
   const exerciseWeight = useMemo(
     () => computeExerciseWeightFromPoints(totalExercises, currentIndex, exercisePointValues),
     [totalExercises, currentIndex, exercisePointValues]
@@ -531,8 +556,17 @@ export default function LessonQuizPlayer({
 
   const [selectedImageIndex, setSelectedImageIndex] = useState(null);
 
-  const [audioInput, setAudioInput] = useState("");
-  const [selectedAudioOption, setSelectedAudioOption] = useState(null);
+  const [listeningAnswersByExercise, setListeningAnswersByExercise] = useState({});
+  const [listeningPlaybackState, setListeningPlaybackState] = useState({
+    isPlaying: false,
+    playsUsed: 0,
+    remainingPlays: getListeningMaxPlays(data, 1),
+    canPlay: Boolean(data.audioUrl || data.youtubeUrl),
+  });
+  const listeningAnswers = useMemo(
+    () => listeningAnswersByExercise[listeningExerciseKey] || {},
+    [listeningAnswersByExercise, listeningExerciseKey]
+  );
 
   const pairBoardRef = useRef(null);
   const leftPairRefs = useRef(new Map());
@@ -630,21 +664,29 @@ export default function LessonQuizPlayer({
     }
   }
 
-  function markPassed() {
+  function markPassed(itemStats = null) {
     if (isResolved) return;
-    const awarded = computeExerciseScore(exerciseWeight, wrongAttempts, "passed");
+    const awarded = computeExerciseScore(exerciseWeight, wrongAttempts, "passed", itemStats);
     setFinalStatus("passed");
     setScoreAwarded(awarded);
     setFeedback({ kind: "correct", text: "Correcto!" });
     setErrorFlash(false);
   }
 
-  function markFailed(onReveal) {
+  function markFailed(onReveal, options = {}) {
     if (isResolved) return;
+    const awarded = computeExerciseScore(exerciseWeight, wrongAttempts, "failed", options.itemStats);
     setWrongAttempts(MAX_WRONG_ATTEMPTS);
     setFinalStatus("failed");
-    setScoreAwarded(0);
-    setFeedback({ kind: "reveal", text: "Respuesta correcta mostrada." });
+    setScoreAwarded(awarded);
+    setFeedback({
+      kind: "reveal",
+      text:
+        options.message ||
+        (awarded > 0
+          ? `Puntaje parcial: ${awarded}/${exerciseWeight}. Respuesta correcta mostrada.`
+          : "Respuesta correcta mostrada."),
+    });
     setErrorFlash(false);
     if (typeof onReveal === "function") onReveal();
   }
@@ -776,10 +818,24 @@ export default function LessonQuizPlayer({
     setSelectedImageIndex(index);
   }
 
-  function handleAudioOptionSelect(index) {
+  function handleListeningAnswer(questionId, patchObject) {
     if (type !== "audio_match" || isResolved) return;
     clearIncorrectFeedback();
-    setSelectedAudioOption(index);
+    const safeQuestionId = String(questionId || "").trim();
+    if (!safeQuestionId) return;
+    setListeningAnswersByExercise((current) => {
+      const currentExerciseAnswers = current[listeningExerciseKey] || {};
+      return {
+        ...current,
+        [listeningExerciseKey]: {
+          ...currentExerciseAnswers,
+          [safeQuestionId]: {
+            ...(currentExerciseAnswers[safeQuestionId] || {}),
+            ...patchObject,
+          },
+        },
+      };
+    });
   }
 
   function showIncompleteResponse() {
@@ -811,19 +867,29 @@ export default function LessonQuizPlayer({
         const expected = String(blank.correctOptionId || "").toLowerCase();
         return Boolean(expected && selected && selected === expected);
       });
+      const correctCount = blanks.filter((blank) => {
+        const key = String(blank.key || "").toLowerCase();
+        const selected = String(clozeSelections[key] || "").toLowerCase();
+        const expected = String(blank.correctOptionId || "").toLowerCase();
+        return Boolean(expected && selected && selected === expected);
+      }).length;
+      const itemStats = {
+        correctItems: correctCount,
+        totalItems: blanks.length,
+      };
       if (allCorrect) {
-        markPassed();
+        markPassed(itemStats);
         return;
       }
-      registerIncorrect({
-        onReveal: () => {
-          const solved = {};
-          blanks.forEach((blank) => {
-            const key = String(blank.key || "").toLowerCase();
-            solved[key] = String(blank.correctOptionId || "").toLowerCase();
-          });
-          setClozeSelections(solved);
-        },
+      markFailed(() => {
+        const solved = {};
+        blanks.forEach((blank) => {
+          const key = String(blank.key || "").toLowerCase();
+          solved[key] = String(blank.correctOptionId || "").toLowerCase();
+        });
+        setClozeSelections(solved);
+      }, {
+        itemStats,
       });
       return;
     }
@@ -854,21 +920,25 @@ export default function LessonQuizPlayer({
         showIncompleteResponse();
         return;
       }
-      const isCorrect = requiredIds.every((pairId) => pairAssignments[pairId] === pairId);
-      if (isCorrect) {
-        markPassed();
+      const correctCount = requiredIds.filter((pairId) => pairAssignments[pairId] === pairId).length;
+      const itemStats = {
+        correctItems: correctCount,
+        totalItems: requiredIds.length,
+      };
+      if (correctCount === requiredIds.length) {
+        markPassed(itemStats);
         return;
       }
-      registerIncorrect({
-        onReveal: () => {
-          const solved = {};
-          requiredIds.forEach((pairId) => {
-            solved[pairId] = pairId;
-          });
-          setPairAssignments(solved);
-          setSelectedLeftPair(null);
-          setSelectedRightPair(null);
-        },
+      markFailed(() => {
+        const solved = {};
+        requiredIds.forEach((pairId) => {
+          solved[pairId] = pairId;
+        });
+        setPairAssignments(solved);
+        setSelectedLeftPair(null);
+        setSelectedRightPair(null);
+      }, {
+        itemStats,
       });
       return;
     }
@@ -890,28 +960,21 @@ export default function LessonQuizPlayer({
       return;
     }
 
-    const candidate = isAudioDictation
-      ? normalizeText(audioInput)
-      : normalizeText(data.options?.[selectedAudioOption] || "");
-    if (!candidate) {
+    const summary = summarizeListeningQuestionResults(normalizeArray(data.questions), listeningAnswers);
+    if (!summary.total || !summary.complete) {
       showIncompleteResponse();
       return;
     }
-    if (candidate === normalizeText(data.correctText)) {
-      markPassed();
+    const itemStats = {
+      correctItems: summary.correctCount,
+      totalItems: summary.total,
+    };
+    if (summary.correctCount === summary.total) {
+      markPassed(itemStats);
       return;
     }
-    registerIncorrect({
-      onReveal: () => {
-        if (data.options?.length) {
-          const correctIdx = data.options.findIndex(
-            (option) => normalizeText(option) === normalizeText(data.correctText)
-          );
-          setSelectedAudioOption(correctIdx >= 0 ? correctIdx : null);
-        } else {
-          setAudioInput(data.correctText);
-        }
-      },
+    markFailed(null, {
+      itemStats,
     });
   }
 
@@ -939,7 +1002,18 @@ export default function LessonQuizPlayer({
     return round2(exerciseWeight / blanksCount);
   }, [type, data.blanks, exerciseWeight]);
 
-  const isAudioDictation = type === "audio_match" && (!data.options?.length || data.mode === "dictation");
+  const listeningQuestions = useMemo(
+    () => (type === "audio_match" ? normalizeArray(data.questions) : []),
+    [type, data.questions]
+  );
+  const listeningSummary = useMemo(
+    () => (
+      type === "audio_match"
+        ? summarizeListeningQuestionResults(listeningQuestions, listeningAnswers)
+        : { total: 0, answeredCount: 0, correctCount: 0, complete: false, results: [] }
+    ),
+    [type, listeningQuestions, listeningAnswers]
+  );
   const remainingErrors = Math.max(0, MAX_WRONG_ATTEMPTS - wrongAttempts);
 
   function renderCloze() {
@@ -1041,7 +1115,7 @@ export default function LessonQuizPlayer({
                     selectedInActiveBlank
                       ? "border-primary bg-primary text-primary-foreground"
                       : selectedElsewhere
-                      ? "border-accent/60 bg-accent/12 text-foreground"
+                      ? "border-primary/60 bg-primary/10 text-foreground"
                       : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
                   } disabled:cursor-not-allowed disabled:opacity-85`}
                 >
@@ -1249,61 +1323,154 @@ export default function LessonQuizPlayer({
   }
 
   function renderAudioMatch() {
-    return (
-      <div className="space-y-4">
-        <p className="text-sm text-muted">{data.textTarget || "Escucha y responde."}</p>
-        {data.audioUrl ? (
-          <audio controls src={data.audioUrl} className="w-full rounded-xl border border-border bg-surface" />
-        ) : (
-          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-muted">
-            Audio disponible al publicar este ejercicio.
-          </div>
-        )}
+    const resultByQuestionId = new Map(
+      normalizeArray(listeningSummary.results).map((entry) => [
+        String(entry?.id || "").trim(),
+        entry,
+      ])
+    );
+    const hasPlaybackSource = Boolean(data.youtubeUrl || data.audioUrl);
+    const canAnswerQuestions = !hasPlaybackSource || listeningPlaybackState.playsUsed > 0;
 
-        {isAudioDictation ? (
-          <div className="space-y-2">
-            <label className="text-xs uppercase tracking-wide text-muted">Escribe lo que escuchas</label>
-            <input
-              type="text"
-              value={audioInput}
-              onChange={(event) => {
-                if (!isResolved) clearIncorrectFeedback();
-                setAudioInput(event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.preventDefault();
-              }}
-              disabled={isResolved}
-              className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary disabled:cursor-not-allowed disabled:opacity-90"
-              placeholder="Escribe tu respuesta"
-            />
-            <p className="text-xs text-muted">Presiona Continuar para validar.</p>
+    return (
+      <div className="space-y-5">
+        <p className="text-sm text-muted">{data.prompt || "Escucha y responde."}</p>
+
+        <ListeningPlaybackControl
+          key={`listening-playback-${exercise?.id || currentIndex}-${data.youtubeUrl || data.audioUrl || "none"}-${data.maxPlays}-${data.startTime ?? 0}-${data.endTime ?? "end"}`}
+          youtubeUrl={data.youtubeUrl}
+          audioUrl={data.audioUrl}
+          maxPlays={data.maxPlays}
+          startTime={data.startTime}
+          endTime={data.endTime}
+          onStatusChange={setListeningPlaybackState}
+        />
+
+        {!canAnswerQuestions ? (
+          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
+            Reproduce el audio al menos una vez antes de responder.
           </div>
-        ) : (
-          <div className="grid gap-2">
-            {normalizeArray(data.options).map((option, idx) => {
-              const selected = selectedAudioOption === idx;
-              const resolvedCorrect = isResolved && normalizeText(option) === normalizeText(data.correctText);
-              return (
-                <button
-                  key={`audio-option-${idx}`}
-                  type="button"
-                  onClick={() => handleAudioOptionSelect(idx)}
-                  disabled={isResolved}
-                  className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
-                    resolvedCorrect
-                      ? "border-success bg-success/15 text-success"
-                      : selected
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
-                  } disabled:cursor-not-allowed disabled:opacity-90`}
-                >
-                  {option}
-                </button>
-              );
-            })}
+        ) : listeningPlaybackState.isPlaying ? (
+          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
+            Puedes responder mientras el audio sigue sonando.
           </div>
-        )}
+        ) : null}
+
+        {listeningSummary.total > 0 ? (
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Preguntas respondidas: {listeningSummary.answeredCount}/{listeningSummary.total}
+            {isResolved ? ` | Aciertos: ${listeningSummary.correctCount}/${listeningSummary.total}` : ""}
+          </p>
+        ) : null}
+
+        <div className="space-y-3">
+          {listeningQuestions.map((question, questionIndex) => {
+            const questionId = String(question?.id || `q_${questionIndex + 1}`).trim();
+            const answerState = listeningAnswers[questionId] || {};
+            const result = resultByQuestionId.get(questionId) || null;
+            const questionIsCorrect = Boolean(result?.isCorrect);
+            const questionWasAnswered = Boolean(result?.answered);
+
+            return (
+              <div
+                key={`listening-question-${questionId}-${questionIndex}`}
+                className={`rounded-2xl border p-4 transition ${
+                  isResolved
+                    ? questionIsCorrect
+                      ? "border-success/55 bg-success/10"
+                      : "border-danger/45 bg-danger/10"
+                    : "border-border bg-surface-2"
+                }`}
+              >
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  Question {questionIndex + 1}
+                </p>
+                <p className="mt-1 text-sm font-semibold text-foreground">{question.prompt}</p>
+
+                {question.type === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {normalizeArray(question.options).map((option, optionIndex) => {
+                      const selected = Number(answerState.selected_index) === optionIndex;
+                      const correctOption = Number(question.correct_index) === optionIndex;
+                      const showWrong = isFailed && selected && !correctOption;
+                      return (
+                        <button
+                          key={`${questionId}-option-${optionIndex}`}
+                          type="button"
+                          onClick={() => handleListeningAnswer(questionId, { selected_index: optionIndex })}
+                          disabled={isResolved || !canAnswerQuestions}
+                          className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
+                            isResolved && correctOption
+                              ? "border-success bg-success/15 text-success"
+                              : showWrong
+                              ? "border-danger/70 bg-danger/12 text-danger"
+                              : selected
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
+                          } disabled:cursor-not-allowed disabled:opacity-90`}
+                        >
+                          {option || `Option ${optionIndex + 1}`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {question.type === LISTENING_QUESTION_TYPES.WRITTEN ? (
+                  <div className="mt-3 space-y-2">
+                    <input
+                      type="text"
+                      value={answerState.text || ""}
+                      onChange={(event) => handleListeningAnswer(questionId, { text: event.target.value })}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") event.preventDefault();
+                      }}
+                      disabled={isResolved || !canAnswerQuestions}
+                      className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary disabled:cursor-not-allowed disabled:opacity-90"
+                      placeholder="Write your answer"
+                    />
+                  </div>
+                ) : null}
+
+                {question.type === LISTENING_QUESTION_TYPES.TRUE_FALSE ? (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {["True", "False"].map((label, optionIndex) => {
+                      const boolValue = optionIndex === 0;
+                      const selected = answerState.value === boolValue;
+                      const correctOption = Boolean(question.correct_boolean) === boolValue;
+                      const showWrong = isFailed && selected && !correctOption;
+                      return (
+                        <button
+                          key={`${questionId}-${label}`}
+                          type="button"
+                          onClick={() => handleListeningAnswer(questionId, { value: boolValue })}
+                          disabled={isResolved || !canAnswerQuestions}
+                          className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
+                            isResolved && correctOption
+                              ? "border-success bg-success/15 text-success"
+                              : showWrong
+                              ? "border-danger/70 bg-danger/12 text-danger"
+                              : selected
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
+                          } disabled:cursor-not-allowed disabled:opacity-90`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {isFailed && (!questionWasAnswered || !questionIsCorrect) ? (
+                  <p className="mt-3 text-xs font-semibold text-danger">
+                    Correct answer: {getListeningQuestionCorrectAnswerText(question)}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -1341,6 +1508,12 @@ export default function LessonQuizPlayer({
 
       {feedback?.kind === "incomplete" ? (
         <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm font-semibold text-muted">
+          {feedback.text}
+        </div>
+      ) : null}
+
+      {feedback?.kind === "reveal" ? (
+        <div className="rounded-2xl border border-accent/45 bg-accent/12 px-4 py-3 text-sm font-semibold text-foreground">
           {feedback.text}
         </div>
       ) : null}

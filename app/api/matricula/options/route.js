@@ -3,14 +3,7 @@ import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import { resolvePreEnrollmentUserId } from "@/lib/pre-enrollment-session";
 import { ensureReservationStatus, getPreEnrollment } from "@/lib/pre-enrollment";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO } from "@/lib/commissions";
-
-const MODALITY_LABELS = {
-  DAILY: "Diaria (Lunes a Viernes)",
-  MWF: "LMV (Lunes, Miercoles y Viernes)",
-  LMV: "LMV (Lunes, Miercoles y Viernes)",
-  TT: "Interdiaria (Martes y Jueves)",
-  SAT: "Sabatino (Sabado)",
-};
+import { formatEnrollmentFrequencyLabel } from "@/lib/frequency-labels";
 
 const MONTH_LABELS = [
   "Enero",
@@ -75,7 +68,16 @@ function formatMonthLabel(monthKey) {
 
 export async function GET(request) {
   try {
-    await autoDeactivateExpiredCommissions();
+    const { searchParams } = new URL(request.url);
+    const startMonth = normalizeMonthKey(searchParams.get("startMonth"));
+    const level = searchParams.get("level");
+    const frequency = searchParams.get("frequency");
+    const courseId = searchParams.get("courseId");
+
+    if (!startMonth && !level && !frequency && !courseId) {
+      await autoDeactivateExpiredCommissions();
+    }
+
     const userId = await resolvePreEnrollmentUserId(request);
     if (!userId) {
       return NextResponse.json({ error: "Sesion invalida." }, { status: 401 });
@@ -104,10 +106,6 @@ export async function GET(request) {
     }
 
     const preEnrollment = await ensureReservationStatus(await getPreEnrollment(userId));
-    const { searchParams } = new URL(request.url);
-    const startMonth = normalizeMonthKey(searchParams.get("startMonth"));
-    const level = searchParams.get("level");
-    const frequency = searchParams.get("frequency");
 
     const todayIso = getLimaTodayISO();
     const { data: activeCommissions } = await service
@@ -172,7 +170,7 @@ export async function GET(request) {
       )
     ).map((key) => ({
       value: key,
-      label: MODALITY_LABELS[key] || key,
+      label: formatEnrollmentFrequencyLabel(key),
     }));
 
     if (level && !frequency) {
@@ -192,6 +190,22 @@ export async function GET(request) {
       .eq("level", level)
       .order("title", { ascending: true });
 
+    const resolvedCourses =
+      (courses || []).length > 0
+        ? (courses || []).map((course) => ({ id: course.id, label: course.title }))
+        : [{ id: `generic-${level}`, label: `Programa ${level}` }];
+
+    if (!courseId) {
+      return NextResponse.json({
+        preEnrollment,
+        startMonths,
+        levels: levelsForMonth,
+        frequencies: frequenciesForLevel,
+        courses: resolvedCourses,
+        schedules: [],
+      });
+    }
+
     const schedules = Array.from(
       new Map(
         commissionsByMonth
@@ -207,11 +221,6 @@ export async function GET(request) {
           ])
       ).values()
     );
-
-    const resolvedCourses =
-      (courses || []).length > 0
-        ? (courses || []).map((course) => ({ id: course.id, label: course.title }))
-        : [{ id: `generic-${level}`, label: `Programa ${level}` }];
 
     return NextResponse.json({
       preEnrollment,

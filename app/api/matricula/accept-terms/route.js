@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolvePreEnrollmentUserId } from "@/lib/pre-enrollment-session";
 import { ensureReservationStatus, getPreEnrollment, updatePreEnrollmentSelection } from "@/lib/pre-enrollment";
+import { buildMatriculaSummary } from "@/lib/matricula-summary";
 
 export async function POST(request) {
   try {
@@ -30,7 +31,9 @@ export async function POST(request) {
       },
     });
 
-    return NextResponse.json({ preEnrollment: updated });
+    const summary = await buildMatriculaSummary(updated);
+
+    return NextResponse.json({ preEnrollment: updated, summary });
   } catch (error) {
     console.error("[Matricula] terms error", error);
     return NextResponse.json({ error: error.message || "No se pudo aceptar terminos." }, { status: 400 });

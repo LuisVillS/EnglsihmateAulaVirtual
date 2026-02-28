@@ -2,7 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import ListeningPlaybackControl from "@/components/listening-playback-control";
 import { evaluateExerciseAnswer } from "@/lib/duolingo/evaluate";
+import {
+  getListeningEndTime,
+  buildListeningQuestionsFromContent,
+  getListeningMaxPlays,
+  getListeningPrompt,
+  getListeningQuestionCorrectAnswerText,
+  getListeningStartTime,
+  LISTENING_QUESTION_TYPES,
+  summarizeListeningQuestionResults,
+} from "@/lib/listening-exercise";
 
 function shuffle(list) {
   const copy = [...list];
@@ -47,6 +58,12 @@ export default function StudentPracticeSession() {
   const [isFinalized, setIsFinalized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pairsState, setPairsState] = useState({ cards: [], selected: [], matched: [] });
+  const [listeningPlaybackState, setListeningPlaybackState] = useState({
+    isPlaying: false,
+    playsUsed: 0,
+    remainingPlays: 0,
+    canPlay: false,
+  });
 
   const items = session?.items || [];
   const current = items[index] || null;
@@ -101,6 +118,26 @@ export default function StudentPracticeSession() {
       ])
     );
     setPairsState({ cards, selected: [], matched: [] });
+  }, [current]);
+
+  useEffect(() => {
+    const content = current?.content_json || {};
+    if (!current || current.type !== "audio_match") {
+      setListeningPlaybackState({
+        isPlaying: false,
+        playsUsed: 0,
+        remainingPlays: 0,
+        canPlay: false,
+      });
+      return;
+    }
+
+    setListeningPlaybackState({
+      isPlaying: false,
+      playsUsed: 0,
+      remainingPlays: getListeningMaxPlays(content, 1),
+      canPlay: Boolean(content.youtube_url || content.audio_url),
+    });
   }, [current]);
 
   function nextExercise() {
@@ -159,6 +196,15 @@ export default function StudentPracticeSession() {
 
   async function checkAnswer() {
     if (!current || isFinalized || saving) return;
+
+    if (current.type === "audio_match") {
+      const content = current.content_json || {};
+      const hasPlaybackSource = Boolean(content.youtube_url || content.audio_url);
+      if (hasPlaybackSource && listeningPlaybackState.playsUsed < 1) {
+        setFeedback("Reproduce el audio antes de responder.");
+        return;
+      }
+    }
 
     const isCorrect = evaluateExerciseAnswer({
       type: current.type,
@@ -249,6 +295,19 @@ export default function StudentPracticeSession() {
   const scrambleWords = normalizeArray(content.target_words);
   const selectedOrder = normalizeArray(answer.selected_order);
   const availableIndexes = scrambleWords.map((_, idx) => idx).filter((idx) => !selectedOrder.includes(idx));
+  const listeningQuestions = current.type === "audio_match" ? buildListeningQuestionsFromContent(content) : [];
+  const listeningAnswers =
+    answer?.questions && typeof answer.questions === "object"
+      ? answer.questions
+      : {};
+  const listeningSummary = current.type === "audio_match"
+    ? summarizeListeningQuestionResults(listeningQuestions, listeningAnswers)
+    : { total: 0, answeredCount: 0, correctCount: 0, complete: false, results: [] };
+  const listeningResultById = new Map(
+    normalizeArray(listeningSummary.results).map((row) => [String(row?.id || "").trim(), row])
+  );
+  const hasListeningPlaybackSource = Boolean(content.youtube_url || content.audio_url);
+  const canAnswerListening = !hasListeningPlaybackSource || listeningPlaybackState.playsUsed > 0;
 
   return (
     <div className="space-y-5">
@@ -326,31 +385,148 @@ export default function StudentPracticeSession() {
 
         {current.type === "audio_match" ? (
           <div className="space-y-4">
-            <p className="text-sm text-muted">Escucha el audio y responde.</p>
-            {content.audio_url ? <audio controls src={content.audio_url} className="w-full" /> : null}
-            {content.mode === "translation" && normalizeArray(content.options).length ? (
-              <div className="grid gap-2">
-                {content.options.map((option, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    className={`rounded-xl border px-3 py-2 text-left text-sm ${
-                      Number(answer.selected_index) === idx ? "border-primary bg-primary/10" : "border-border"
+            <p className="text-sm text-muted">{getListeningPrompt(content)}</p>
+            <ListeningPlaybackControl
+              key={`practice-listening-${current.id || index}-${content.youtube_url || content.audio_url || "none"}-${getListeningMaxPlays(content, 1)}-${getListeningStartTime(content, 0)}-${getListeningEndTime(content, null) ?? "end"}`}
+              youtubeUrl={content.youtube_url || ""}
+              audioUrl={content.audio_url || ""}
+              maxPlays={getListeningMaxPlays(content, 1)}
+              startTime={getListeningStartTime(content, 0)}
+              endTime={getListeningEndTime(content, null)}
+              onStatusChange={setListeningPlaybackState}
+            />
+            {!canAnswerListening ? (
+              <p className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
+                Reproduce el audio antes de responder.
+              </p>
+            ) : listeningPlaybackState.isPlaying ? (
+              <p className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
+                Puedes responder mientras el audio sigue sonando.
+              </p>
+            ) : null}
+            <div className="space-y-3">
+              {listeningQuestions.map((question, questionIndex) => {
+                const questionId = String(question?.id || `q_${questionIndex + 1}`).trim();
+                const questionAnswer = listeningAnswers[questionId] || {};
+                const result = listeningResultById.get(questionId) || null;
+                const showResult = isFinalized;
+                const isCorrectQuestion = Boolean(result?.isCorrect);
+                const wasAnswered = Boolean(result?.answered);
+
+                return (
+                  <div
+                    key={`${questionId}-${questionIndex}`}
+                    className={`rounded-xl border p-3 ${
+                      showResult
+                        ? isCorrectQuestion
+                          ? "border-success bg-success/10"
+                          : "border-danger/10"
+                        : "border-border bg-surface-2"
                     }`}
-                    onClick={() => setAnswer((prev) => ({ ...prev, selected_index: idx }))}
                   >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <input
-                value={answer.text || ""}
-                onChange={(event) => setAnswer((prev) => ({ ...prev, text: event.target.value }))}
-                className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
-                placeholder="Escribe lo que escuchas"
-              />
-            )}
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Question {questionIndex + 1}</p>
+                    <p className="mt-1 text-sm font-semibold">{question.prompt}</p>
+
+                    {question.type === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
+                      <div className="mt-3 grid gap-2">
+                        {question.options.map((option, optionIndex) => {
+                          const selected = Number(questionAnswer.selected_index) === optionIndex;
+                          const correctOption = Number(question.correct_index) === optionIndex;
+                          return (
+                            <button
+                              key={`${questionId}-${optionIndex}`}
+                              type="button"
+                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                                showResult && correctOption
+                                  ? "border-success bg-success/10"
+                                  : showResult && selected && !correctOption
+                                  ? "border-danger/10"
+                                  : selected
+                                  ? "border-primary bg-primary/10"
+                                  : "border-border"
+                              }`}
+                              disabled={isFinalized || !canAnswerListening}
+                              onClick={() =>
+                                setAnswer((prev) => ({
+                                  ...prev,
+                                  questions: {
+                                    ...(prev.questions || {}),
+                                    [questionId]: { selected_index: optionIndex },
+                                  },
+                                }))
+                              }
+                            >
+                              {option || `Option ${optionIndex + 1}`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    {question.type === LISTENING_QUESTION_TYPES.WRITTEN ? (
+                      <input
+                        value={questionAnswer.text || ""}
+                        onChange={(event) =>
+                          setAnswer((prev) => ({
+                            ...prev,
+                            questions: {
+                              ...(prev.questions || {}),
+                              [questionId]: { text: event.target.value },
+                            },
+                          }))
+                        }
+                        disabled={isFinalized || !canAnswerListening}
+                        className="mt-3 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm"
+                        placeholder="Write your answer"
+                      />
+                    ) : null}
+
+                    {question.type === LISTENING_QUESTION_TYPES.TRUE_FALSE ? (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {["True", "False"].map((label, optionIndex) => {
+                          const value = optionIndex === 0;
+                          const selected = questionAnswer.value === value;
+                          const correctOption = Boolean(question.correct_boolean) === value;
+                          return (
+                            <button
+                              key={`${questionId}-${label}`}
+                              type="button"
+                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                                showResult && correctOption
+                                  ? "border-success bg-success/10"
+                                  : showResult && selected && !correctOption
+                                  ? "border-danger/10"
+                                  : selected
+                                  ? "border-primary bg-primary/10"
+                                  : "border-border"
+                              }`}
+                              disabled={isFinalized || !canAnswerListening}
+                              onClick={() =>
+                                setAnswer((prev) => ({
+                                  ...prev,
+                                  questions: {
+                                    ...(prev.questions || {}),
+                                    [questionId]: { value },
+                                  },
+                                }))
+                              }
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    {showResult && (!wasAnswered || !isCorrectQuestion) ? (
+                      <p className="mt-3 text-xs font-semibold text-danger">
+                        Correct answer: {getListeningQuestionCorrectAnswerText(question)}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         ) : null}
 
@@ -478,7 +654,3 @@ export default function StudentPracticeSession() {
     </div>
   );
 }
-
-
-
-
