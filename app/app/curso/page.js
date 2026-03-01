@@ -342,8 +342,42 @@ export default async function CourseGatePage() {
       .order("created_at", { ascending: true });
 
     if (!itemsError) {
+      let flashcardsBySessionId = {};
+      const flashcardsResult = await supabase
+        .from("session_flashcards")
+        .select("id, session_id, word, meaning, image_url, card_order, accepted_answers")
+        .in("session_id", persistedSessionIds)
+        .order("card_order", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      if (!flashcardsResult.error) {
+        flashcardsBySessionId = (flashcardsResult.data || []).reduce((acc, row) => {
+          const sessionKey = String(row?.session_id || "").trim();
+          if (!sessionKey) return acc;
+          if (!acc[sessionKey]) acc[sessionKey] = [];
+          acc[sessionKey].push({
+            id: row.id,
+            word: String(row.word || "").trim(),
+            meaning: String(row.meaning || "").trim(),
+            image: String(row.image_url || "").trim(),
+            order: Number(row.card_order || acc[sessionKey].length + 1) || acc[sessionKey].length + 1,
+            acceptedAnswers: Array.isArray(row.accepted_answers) ? row.accepted_answers : [],
+          });
+          return acc;
+        }, {});
+      } else {
+        const missingTable = getMissingTableName(flashcardsResult.error);
+        if (!missingTable?.endsWith("session_flashcards")) {
+          console.error("No se pudieron cargar flashcards de clase", flashcardsResult.error);
+        }
+      }
+
       const normalizedRows = (itemRows || []).map((item) => ({
         ...item,
+        flashcards:
+          String(item?.type || "").trim().toLowerCase() === "flashcards"
+            ? flashcardsBySessionId[String(item?.session_id || "").trim()] || []
+            : [],
         lesson_id: null,
       }));
 

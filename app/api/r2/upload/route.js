@@ -24,7 +24,7 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { fileName, contentType, visibility = "public" } = body;
+    const { fileName, contentType, visibility = "public", folder = "audios" } = body;
 
     if (!fileName || !contentType) {
       return NextResponse.json(
@@ -34,7 +34,11 @@ export async function POST(request) {
     }
 
     const sanitizedName = fileName.toLowerCase().replace(/[^a-z0-9.-]+/g, "-");
-    const key = `audios/${Date.now()}-${sanitizedName}`;
+    const normalizedFolder = String(folder || "audios")
+      .toLowerCase()
+      .replace(/[^a-z0-9/_-]+/g, "")
+      .replace(/^\/+|\/+$/g, "") || "audios";
+    const key = `${normalizedFolder}/${Date.now()}-${sanitizedName}`;
     const uploadUrl = await getSignedUploadUrl(key, contentType);
 
     const responsePayload = { key, uploadUrl };
@@ -49,4 +53,3 @@ export async function POST(request) {
     return NextResponse.json({ error: "Error al firmar el upload" }, { status: 500 });
   }
 }
-

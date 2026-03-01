@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import AppModal from "@/components/app-modal";
+import CourseSessionFlashcardsViewer from "@/components/course-session-flashcards-viewer";
 import { formatMonthKeyFromDate } from "@/lib/class-format";
 import { getRemainingQuizRestarts, normalizeAttemptRow } from "@/lib/lesson-quiz";
 
@@ -247,6 +248,11 @@ function isExerciseItem(item) {
   return false;
 }
 
+function isFlashcardsItem(item) {
+  const type = String(item?.type || "").trim().toLowerCase();
+  return type === "flashcards";
+}
+
 function formatResourceTypeLabel(type) {
   const normalized = String(type || "").trim().toLowerCase();
   if (normalized === "link") return "enlace";
@@ -256,6 +262,7 @@ function formatResourceTypeLabel(type) {
   if (normalized === "live_link") return "clase en vivo";
   if (normalized === "video") return "video";
   if (normalized === "slides") return "presentacion";
+  if (normalized === "flashcards") return "flashcards";
   if (!normalized) return "recurso";
   return normalized;
 }
@@ -263,6 +270,7 @@ function formatResourceTypeLabel(type) {
 function getResourceActionLabel(item) {
   if (isSlidesItem(item)) return "Ver presentacion";
   if (isVideoItem(item)) return "Ver video";
+  if (isFlashcardsItem(item)) return "Abrir flashcards";
   const type = String(item?.type || "").trim().toLowerCase();
   if (type === "file") return "Abrir archivo";
   if (type === "link") return "Abrir enlace";
@@ -469,6 +477,8 @@ export default function CourseSessionList({
   const selectedClassTitle = String(selectedSession?.title || "").trim() || "Slide de la clase";
   const selectedRecordingLink = String(selectedSession?.recording_link || "").trim();
   const selectedRecordingPasscode = String(selectedSession?.recording_passcode || "").trim();
+  const selectedFlashcardsItem = selectedItems.find((item) => isFlashcardsItem(item)) || null;
+  const selectedFlashcards = Array.isArray(selectedFlashcardsItem?.flashcards) ? selectedFlashcardsItem.flashcards : [];
   const embedUrl = toSlidesEmbedUrl(selectedSlideUrl);
   const recordingEmbedUrl = toVimeoEmbedUrl(selectedRecordingLink);
 
@@ -490,6 +500,12 @@ export default function CourseSessionList({
   function openRecording(sessionId, disabled) {
     if (disabled) return;
     setViewerType("recording");
+    setOpenSessionId(sessionId);
+  }
+
+  function openFlashcards(sessionId, disabled) {
+    if (disabled) return;
+    setViewerType("flashcards");
     setOpenSessionId(sessionId);
   }
 
@@ -683,7 +699,15 @@ export default function CourseSessionList({
                                         </p>
                                         {item.note ? <p className="text-xs text-muted">{item.note}</p> : null}
                                       </div>
-                                      {item.url ? (
+                                      {isFlashcardsItem(item) ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => openFlashcards(session.id, monthLocked)}
+                                          className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                                        >
+                                          {getResourceActionLabel(item)}
+                                        </button>
+                                      ) : item.url ? (
                                         <a
                                           href={item.url}
                                           target="_blank"
@@ -822,7 +846,13 @@ export default function CourseSessionList({
       <AppModal
         open={Boolean(selectedSession)}
         onClose={closeViewer}
-        title={viewerType === "recording" ? "Grabación de clase" : "Slide de la clase"}
+        title={
+          viewerType === "recording"
+            ? "Grabacion de clase"
+            : viewerType === "flashcards"
+              ? "Flashcards"
+              : "Slide de la clase"
+        }
         widthClass="max-w-6xl"
       >
         {viewerType === "slide" ? (
@@ -856,7 +886,7 @@ export default function CourseSessionList({
               </button>
             </div>
           </div>
-        ) : (
+        ) : viewerType === "recording" ? (
           <div className="space-y-4">
             <div className="space-y-1">
               <p className="text-lg font-semibold text-foreground">{selectedClassTitle}</p>
@@ -896,6 +926,13 @@ export default function CourseSessionList({
               </button>
             </div>
           </div>
+        ) : (
+          <CourseSessionFlashcardsViewer
+            key={`${String(selectedSession?.id || "session")}:${String(selectedFlashcardsItem?.id || "flashcards")}`}
+            title={String(selectedFlashcardsItem?.title || "").trim() || "Flashcards"}
+            sessionTitle={selectedClassTitle}
+            flashcards={selectedFlashcards}
+          />
         )}
       </AppModal>
     </>

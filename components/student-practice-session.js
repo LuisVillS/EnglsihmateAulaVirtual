@@ -295,19 +295,28 @@ export default function StudentPracticeSession() {
   const scrambleWords = normalizeArray(content.target_words);
   const selectedOrder = normalizeArray(answer.selected_order);
   const availableIndexes = scrambleWords.map((_, idx) => idx).filter((idx) => !selectedOrder.includes(idx));
-  const listeningQuestions = current.type === "audio_match" ? buildListeningQuestionsFromContent(content) : [];
+  const isQuestionExercise = current.type === "audio_match" || current.type === "reading_exercise";
+  const listeningQuestions = isQuestionExercise ? buildListeningQuestionsFromContent(content) : [];
   const listeningAnswers =
     answer?.questions && typeof answer.questions === "object"
       ? answer.questions
       : {};
-  const listeningSummary = current.type === "audio_match"
+  const listeningSummary = isQuestionExercise
     ? summarizeListeningQuestionResults(listeningQuestions, listeningAnswers)
     : { total: 0, answeredCount: 0, correctCount: 0, complete: false, results: [] };
   const listeningResultById = new Map(
     normalizeArray(listeningSummary.results).map((row) => [String(row?.id || "").trim(), row])
   );
   const hasListeningPlaybackSource = Boolean(content.youtube_url || content.audio_url);
-  const canAnswerListening = !hasListeningPlaybackSource || listeningPlaybackState.playsUsed > 0;
+  const canAnswerListening =
+    current.type === "audio_match"
+      ? (!hasListeningPlaybackSource || listeningPlaybackState.playsUsed > 0)
+      : true;
+  const currentTypeLabel = current.type === "audio_match"
+    ? "Listening Exercise"
+    : current.type === "reading_exercise"
+    ? "Reading Exercise"
+    : current.type;
 
   return (
     <div className="space-y-5">
@@ -332,7 +341,7 @@ export default function StudentPracticeSession() {
 
       <SectionCard>
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-semibold uppercase tracking-wide text-muted">{current.type}</p>
+          <p className="text-sm font-semibold uppercase tracking-wide text-muted">{currentTypeLabel}</p>
           <ExerciseBadge mode={current.mode} />
         </div>
 
@@ -501,6 +510,152 @@ export default function StudentPracticeSession() {
                                   : "border-border"
                               }`}
                               disabled={isFinalized || !canAnswerListening}
+                              onClick={() =>
+                                setAnswer((prev) => ({
+                                  ...prev,
+                                  questions: {
+                                    ...(prev.questions || {}),
+                                    [questionId]: { value },
+                                  },
+                                }))
+                              }
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    {showResult && (!wasAnswered || !isCorrectQuestion) ? (
+                      <p className="mt-3 text-xs font-semibold text-danger">
+                        Correct answer: {getListeningQuestionCorrectAnswerText(question)}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {current.type === "reading_exercise" ? (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-border bg-surface-2 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Reading</p>
+              <h3 className="mt-1 text-xl font-semibold">
+                {content.title || "Reading Exercise"}
+              </h3>
+              {content.image_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={content.image_url}
+                  alt={content.title || "Reading image"}
+                  className="mt-4 h-52 w-full rounded-2xl object-cover"
+                />
+              ) : null}
+              <div className="mt-4 whitespace-pre-wrap text-sm leading-7 text-foreground">
+                {content.text || ""}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {listeningQuestions.map((question, questionIndex) => {
+                const questionId = String(question?.id || `q_${questionIndex + 1}`).trim();
+                const questionAnswer = listeningAnswers[questionId] || {};
+                const result = listeningResultById.get(questionId) || null;
+                const showResult = isFinalized;
+                const isCorrectQuestion = Boolean(result?.isCorrect);
+                const wasAnswered = Boolean(result?.answered);
+
+                return (
+                  <div
+                    key={`reading-${questionId}-${questionIndex}`}
+                    className={`rounded-xl border p-3 ${
+                      showResult
+                        ? isCorrectQuestion
+                          ? "border-success bg-success/10"
+                          : "border-danger/10"
+                        : "border-border bg-surface-2"
+                    }`}
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Question {questionIndex + 1}</p>
+                    <p className="mt-1 text-sm font-semibold">{question.prompt}</p>
+
+                    {question.type === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
+                      <div className="mt-3 grid gap-2">
+                        {question.options.map((option, optionIndex) => {
+                          const selected = Number(questionAnswer.selected_index) === optionIndex;
+                          const correctOption = Number(question.correct_index) === optionIndex;
+                          return (
+                            <button
+                              key={`${questionId}-${optionIndex}`}
+                              type="button"
+                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                                showResult && correctOption
+                                  ? "border-success bg-success/10"
+                                  : showResult && selected && !correctOption
+                                  ? "border-danger/10"
+                                  : selected
+                                  ? "border-primary bg-primary/10"
+                                  : "border-border"
+                              }`}
+                              disabled={isFinalized}
+                              onClick={() =>
+                                setAnswer((prev) => ({
+                                  ...prev,
+                                  questions: {
+                                    ...(prev.questions || {}),
+                                    [questionId]: { selected_index: optionIndex },
+                                  },
+                                }))
+                              }
+                            >
+                              {option || `Option ${optionIndex + 1}`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    {question.type === LISTENING_QUESTION_TYPES.WRITTEN ? (
+                      <input
+                        value={questionAnswer.text || ""}
+                        onChange={(event) =>
+                          setAnswer((prev) => ({
+                            ...prev,
+                            questions: {
+                              ...(prev.questions || {}),
+                              [questionId]: { text: event.target.value },
+                            },
+                          }))
+                        }
+                        disabled={isFinalized}
+                        className="mt-3 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm"
+                        placeholder="Write your answer"
+                      />
+                    ) : null}
+
+                    {question.type === LISTENING_QUESTION_TYPES.TRUE_FALSE ? (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {["True", "False"].map((label, optionIndex) => {
+                          const value = optionIndex === 0;
+                          const selected = questionAnswer.value === value;
+                          const correctOption = Boolean(question.correct_boolean) === value;
+                          return (
+                            <button
+                              key={`${questionId}-${label}`}
+                              type="button"
+                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                                showResult && correctOption
+                                  ? "border-success bg-success/10"
+                                  : showResult && selected && !correctOption
+                                  ? "border-danger/10"
+                                  : selected
+                                  ? "border-primary bg-primary/10"
+                                  : "border-border"
+                              }`}
+                              disabled={isFinalized}
                               onClick={() =>
                                 setAnswer((prev) => ({
                                   ...prev,

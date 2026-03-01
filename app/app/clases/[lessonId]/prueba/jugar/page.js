@@ -2,8 +2,10 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
+  LESSON_QUIZ_MAX_RESTARTS,
   LESSON_QUIZ_STATUS,
   getLessonQuizProgressPercent,
+  isMissingLessonQuizRestartColumnError,
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
@@ -127,12 +129,33 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
     redirect(`/app/clases/${lesson.id}/prueba`);
   }
 
-  const { data: attemptRow, error: attemptError } = await supabase
+  let attemptRow = null;
+  let attemptError = null;
+  ({
+    data: attemptRow,
+    error: attemptError,
+  } = await supabase
     .from("lesson_quiz_attempts")
-    .select("attempt_status, current_index, completed_count, total_exercises, correct_count")
+    .select("attempt_status, current_index, completed_count, total_exercises, correct_count, restart_count")
     .eq("user_id", profile.id)
     .eq("lesson_id", lesson.id)
-    .maybeSingle();
+    .maybeSingle());
+
+  if (attemptError && isMissingLessonQuizRestartColumnError(attemptError)) {
+    const fallback = await supabase
+      .from("lesson_quiz_attempts")
+      .select("attempt_status, current_index, completed_count, total_exercises, correct_count")
+      .eq("user_id", profile.id)
+      .eq("lesson_id", lesson.id)
+      .maybeSingle();
+    attemptError = fallback.error;
+    attemptRow = fallback.data
+      ? {
+          ...fallback.data,
+          restart_count: 0,
+        }
+      : null;
+  }
 
   if (attemptError) {
     if (isMissingLessonQuizTableError(attemptError)) {
@@ -154,6 +177,7 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
   if (!currentExercise?.id) {
     redirect(`/app/clases/${lesson.id}/prueba`);
   }
+  const revealCorrectAnswers = Math.max(0, Number(attempt.restart_count) || 0) >= LESSON_QUIZ_MAX_RESTARTS;
 
   const progressPercent = getLessonQuizProgressPercent({
     status: LESSON_QUIZ_STATUS.IN_PROGRESS,
@@ -210,6 +234,7 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
             totalExercises={totalExercises}
             exercise={currentExercise}
             exercisePointValues={exercisePointValues}
+            revealCorrectAnswers={revealCorrectAnswers}
           />
         </article>
       </div>

@@ -34,6 +34,13 @@ function getMissingColumnFromError(error) {
   return plainMatch?.[1] || null;
 }
 
+function getMissingTableName(error) {
+  const message = String(error?.message || "");
+  const relationMatch = message.match(/relation\s+"([^"]+)"/i);
+  if (relationMatch?.[1]) return relationMatch[1];
+  return null;
+}
+
 function normalizeMonthKey(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -145,6 +152,8 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
   }
 
   const sessionIds = sessions.map((session) => session.id);
+  let flashcardsBySession = new Map();
+  let flashcardsTableError = "";
   if (sessionIds.length) {
     let itemColumns = ["id", "session_id", "type", "title", "url", "created_at", "note", "exercise_id"];
     let itemsResult = null;
@@ -168,6 +177,27 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
       acc.set(item.session_id, current);
       return acc;
     }, new Map());
+
+    const flashcardsResult = await supabase
+      .from("session_flashcards")
+      .select("id, session_id")
+      .in("session_id", sessionIds)
+      .order("card_order", { ascending: true })
+      .order("created_at", { ascending: true });
+
+    if (flashcardsResult.error) {
+      const missingTable = getMissingTableName(flashcardsResult.error);
+      flashcardsTableError = missingTable?.endsWith("session_flashcards")
+        ? "Falta crear la tabla session_flashcards."
+        : (flashcardsResult.error.message || "No se pudo cargar el conteo de flashcards.");
+    } else {
+      flashcardsBySession = (flashcardsResult.data || []).reduce((acc, row) => {
+        const current = acc.get(row.session_id) || [];
+        current.push(row);
+        acc.set(row.session_id, current);
+        return acc;
+      }, new Map());
+    }
   }
 
   const monthMap = new Map();
@@ -313,11 +343,14 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
                       items.find((item) => item.type === "slides" && item.note === "primary_slide") ||
                       items.find((item) => item.type === "slides") ||
                       null;
+                    const flashcardsItem = items.find((item) => item.type === "flashcards") || null;
+                    const flashcards = flashcardsBySession.get(session.id) || [];
                     const exerciseItems = items.filter(
                       (item) => item.type === "exercise" || Boolean(item.exercise_id)
                     );
                     const materialItems = items.filter((item) => {
                       if (primarySlideItem?.id && item.id === primarySlideItem.id) return false;
+                      if (flashcardsItem?.id && item.id === flashcardsItem.id) return false;
                       if (item.type === "exercise" || item.exercise_id) return false;
                       return true;
                     });
@@ -533,21 +566,45 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
                             </div>
                           </div>
 
-                          <div className="rounded-2xl border border-primary/30 bg-primary/8 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Prueba / Test</p>
-                            <p className="mt-1 text-sm text-foreground">{hasQuiz ? "Creada" : "No creada"}</p>
-                            <p className="text-xs text-muted">
-                              {exerciseItems.length} ejercicio{exerciseItems.length === 1 ? "" : "s"}
-                            </p>
-                            <p className="mt-2 text-xs text-muted">
-                              Los ejercicios de esta clase se editan juntos desde un solo editor.
-                            </p>
-                            <Link
-                              href={`/admin/commissions/${commission.id}/sessions/${session.id}/exercises`}
-                              className="mt-3 inline-flex w-full justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
-                            >
-                              {hasQuiz ? "Editar prueba" : "Crear prueba para esta clase"}
-                            </Link>
+                          <div className="space-y-4">
+                            <div className="rounded-2xl border border-primary/30 bg-primary/8 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Prueba / Test</p>
+                              <p className="mt-1 text-sm text-foreground">{hasQuiz ? "Creada" : "No creada"}</p>
+                              <p className="text-xs text-muted">
+                                {exerciseItems.length} ejercicio{exerciseItems.length === 1 ? "" : "s"}
+                              </p>
+                              <p className="mt-2 text-xs text-muted">
+                                Los ejercicios de esta clase se editan juntos desde un solo editor.
+                              </p>
+                              <Link
+                                href={`/admin/commissions/${commission.id}/sessions/${session.id}/exercises`}
+                                className="mt-3 inline-flex w-full justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+                              >
+                                {hasQuiz ? "Editar prueba" : "Crear prueba para esta clase"}
+                              </Link>
+                            </div>
+
+                            <div className="rounded-2xl border border-border bg-surface p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Flashcards</p>
+                              <p className="mt-1 text-sm text-foreground">
+                                {flashcards.length ? "Set creado" : flashcardsItem ? "Material creado" : "No creado"}
+                              </p>
+                              <p className="text-xs text-muted">
+                                {flashcards.length} tarjeta{flashcards.length === 1 ? "" : "s"}
+                              </p>
+                              <p className="mt-2 text-xs text-muted">
+                                Editor dedicado con reorder, preview y carga de imagen.
+                              </p>
+                              {flashcardsTableError ? (
+                                <p className="mt-2 text-xs text-danger">{flashcardsTableError}</p>
+                              ) : null}
+                              <Link
+                                href={`/admin/commissions/${commission.id}/sessions/${session.id}/flashcards`}
+                                className="mt-3 inline-flex w-full justify-center rounded-xl border border-primary/35 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                              >
+                                {flashcards.length || flashcardsItem ? "Editar flashcards" : "Crear set de flashcards"}
+                              </Link>
+                            </div>
                           </div>
                         </div>
                       </div>

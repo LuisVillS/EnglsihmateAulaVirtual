@@ -40,6 +40,13 @@ function getMissingColumnFromError(error) {
   return plainMatch?.[1] || null;
 }
 
+function getMissingTableName(error) {
+  const message = String(error?.message || "");
+  const relationMatch = message.match(/relation\s+"([^"]+)"/i);
+  if (relationMatch?.[1]) return relationMatch[1];
+  return null;
+}
+
 function resolveSessionPosition(row, sessionsPerMonth) {
   const monthIndex = Number(row?.month_index);
   const sessionInMonth = Number(row?.session_in_month);
@@ -224,8 +231,10 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
 
   const sessionIds = sessions.map((row) => row.id);
   let itemsBySession = new Map();
+  let flashcardsBySession = new Map();
   let missingExerciseColumn = false;
   let itemsErrorMessage = null;
+  let flashcardsErrorMessage = null;
 
   if (sessionIds.length) {
     let itemsResult = await supabase
@@ -264,6 +273,27 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
     } else {
       const itemRows = itemsResult.data || [];
       itemsBySession = itemRows.reduce((acc, item) => {
+        const current = acc.get(item.template_session_id) || [];
+        current.push(item);
+        acc.set(item.template_session_id, current);
+        return acc;
+      }, new Map());
+    }
+
+    const flashcardsResult = await supabase
+      .from("template_session_flashcards")
+      .select("id, template_session_id")
+      .in("template_session_id", sessionIds)
+      .order("card_order", { ascending: true })
+      .order("created_at", { ascending: true });
+
+    if (flashcardsResult.error) {
+      const missingTable = getMissingTableName(flashcardsResult.error);
+      flashcardsErrorMessage = missingTable?.endsWith("template_session_flashcards")
+        ? "Falta crear la tabla template_session_flashcards."
+        : (flashcardsResult.error.message || "No se pudieron cargar flashcards de plantilla.");
+    } else {
+      flashcardsBySession = (flashcardsResult.data || []).reduce((acc, item) => {
         const current = acc.get(item.template_session_id) || [];
         current.push(item);
         acc.set(item.template_session_id, current);
@@ -342,6 +372,11 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
             {itemsErrorMessage}
           </div>
         ) : null}
+        {flashcardsErrorMessage ? (
+          <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+            {flashcardsErrorMessage}
+          </div>
+        ) : null}
         {missingExerciseColumn ? (
           <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
             Falta la columna exercise_id en template_session_items. Ejecuta el SQL actualizado.
@@ -363,6 +398,8 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                 <div className="mt-4 space-y-4">
                   {monthSessions.map((session) => {
                     const items = itemsBySession.get(session.id) || [];
+                    const flashcardsItem = items.find((item) => item.type === "flashcards") || null;
+                    const flashcards = flashcardsBySession.get(session.id) || [];
                     const exerciseItems = items.filter((item) => {
                       if (item.type !== "exercise" || !item.exercise_id) return false;
                       const exerciseStatus = String(item?.exercise?.status || "")
@@ -370,7 +407,9 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                         .toLowerCase();
                       return exerciseStatus === "draft" || exerciseStatus === "published";
                     });
-                    const materialItems = items.filter((item) => item.type !== "exercise");
+                    const materialItems = items.filter(
+                      (item) => item.type !== "exercise" && item.type !== "flashcards"
+                    );
                     const additionalSlides = normalizeAdditionalSlides(session.additional_slides);
                     const slidesExtraCount =
                       additionalSlides.length + materialItems.filter((item) => item.type === "slides").length;
@@ -496,6 +535,22 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                                 className="mt-3 inline-flex w-full justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
                               >
                                 {hasQuiz ? "Editar prueba" : "Crear prueba para esta clase"}
+                              </Link>
+                            </div>
+
+                            <div className="rounded-2xl border border-border bg-surface p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Flashcards</p>
+                              <p className="mt-1 text-sm text-foreground">
+                                {flashcards.length ? "Set creado" : flashcardsItem ? "Material creado" : "No creado"}
+                              </p>
+                              <p className="text-xs text-muted">
+                                {flashcards.length} tarjeta{flashcards.length === 1 ? "" : "s"}
+                              </p>
+                              <Link
+                                href={`/admin/courses/templates/${template.id}/sessions/${session.id}/flashcards`}
+                                className="mt-3 inline-flex w-full justify-center rounded-xl border border-primary/35 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                              >
+                                {flashcards.length || flashcardsItem ? "Editar flashcards" : "Crear set de flashcards"}
                               </Link>
                             </div>
 

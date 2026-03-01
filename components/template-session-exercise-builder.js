@@ -16,6 +16,7 @@ import {
 const EXERCISE_TYPE_OPTIONS = [
   { value: "scramble", label: "Scrambled Sentence" },
   { value: "audio_match", label: "Listening Exercise" },
+  { value: "reading_exercise", label: "Reading Exercise" },
   { value: "image_match", label: "Image-Word Association" },
   { value: "pairs", label: "Pairs Game" },
   { value: "cloze", label: "Fill in the blanks" },
@@ -153,6 +154,16 @@ function getDefaultContent(type) {
         ],
         point_value: 10,
       };
+    case "reading_exercise":
+      return {
+        title: "Reading Title",
+        text: "Write the reading passage here.",
+        image_url: "",
+        questions: [
+          createDefaultListeningQuestion(LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE, 0),
+        ],
+        point_value: 10,
+      };
     case "image_match":
       return {
         question_native: "Que palabra corresponde a la imagen?",
@@ -199,6 +210,7 @@ function getDefaultContent(type) {
 
 function defaultSkillTagByType(type) {
   if (type === "audio_match") return "listening";
+  if (type === "reading_exercise") return "reading";
   if (type === "image_match" || type === "pairs") return "reading";
   return "grammar";
 }
@@ -206,7 +218,7 @@ function defaultSkillTagByType(type) {
 function normalizeSkillTag(value, type) {
   let raw = String(value || "").trim().toLowerCase();
   if (raw === "speaking") {
-    raw = type === "audio_match" ? "listening" : "grammar";
+    raw = defaultSkillTagByType(type);
   }
   if (raw === "writing") raw = "grammar";
   if (SKILL_TAG_OPTIONS.some((option) => option.value === raw)) return raw;
@@ -455,6 +467,23 @@ function normalizeContent(type, rawObject) {
       start_time: resolveEditableText(raw.start_time ?? raw.startTime, base.start_time ?? ""),
       end_time: resolveEditableText(raw.end_time ?? raw.endTime, base.end_time ?? ""),
       max_plays: getListeningMaxPlays(raw, getListeningMaxPlays(base, 1)),
+      questions: buildListeningQuestionsFromContent(raw, {
+        preserveDraftText: true,
+        allowBlankPrompt: true,
+      }),
+      point_value: pointValue,
+      estimated_time_minutes: estimatedTimeMinutes,
+    };
+  }
+
+  if (type === "reading_exercise") {
+    return {
+      title: resolveEditableText(raw.title ?? raw.reading_title ?? raw.readingTitle, base.title),
+      text: resolveEditableText(
+        raw.text ?? raw.reading_text ?? raw.readingText ?? raw.body ?? raw.passage,
+        base.text
+      ),
+      image_url: resolveEditableText(raw.image_url ?? raw.imageUrl, base.image_url ?? ""),
       questions: buildListeningQuestionsFromContent(raw, {
         preserveDraftText: true,
         allowBlankPrompt: true,
@@ -939,7 +968,8 @@ function GuidedEditor({ item, content, onPatch }) {
     );
   }
 
-  if (item.type === "audio_match") {
+  if (item.type === "audio_match" || item.type === "reading_exercise") {
+    const isAudioExercise = item.type === "audio_match";
     const questions = Array.isArray(content.questions) ? content.questions : [];
 
     const updateQuestion = (questionIndex, patchObject) => {
@@ -969,61 +999,99 @@ function GuidedEditor({ item, content, onPatch }) {
 
     return (
       <div className="grid gap-3">
-        <label className="text-xs font-semibold uppercase tracking-wide text-muted">Instrucciones</label>
-        <input
-          value={content.prompt_native || ""}
-          onChange={(event) => onPatch({ prompt_native: event.target.value })}
-          className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-          placeholder="Listen to the audio and answer the questions."
-        />
+        {isAudioExercise ? (
+          <>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Instrucciones</label>
+            <input
+              value={content.prompt_native || ""}
+              onChange={(event) => onPatch({ prompt_native: event.target.value })}
+              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+              placeholder="Listen to the audio and answer the questions."
+            />
 
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_120px]">
-          <div className="space-y-1">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Link de YouTube</label>
-            <input
-              value={content.youtube_url || ""}
-              onChange={(event) => onPatch({ youtube_url: event.target.value, provider: "youtube", source_type: "youtube" })}
-              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-              placeholder="https://www.youtube.com/watch?v=..."
-            />
-            <p className="text-xs text-muted">Por ahora el audio se reproduce desde YouTube (solo audio en alumno).</p>
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Max plays</label>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={Math.max(1, toInt(content.max_plays, 1))}
-              onChange={(event) => onPatch({ max_plays: Math.max(1, toInt(event.target.value, 1)) })}
-              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-            />
-          </div>
-        </div>
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_120px]">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Link de YouTube</label>
+                <input
+                  value={content.youtube_url || ""}
+                  onChange={(event) => onPatch({ youtube_url: event.target.value, provider: "youtube", source_type: "youtube" })}
+                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  placeholder="https://www.youtube.com/watch?v=..."
+                />
+                <p className="text-xs text-muted">Por ahora el audio se reproduce desde YouTube (solo audio en alumno).</p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Max plays</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={Math.max(1, toInt(content.max_plays, 1))}
+                  onChange={(event) => onPatch({ max_plays: Math.max(1, toInt(event.target.value, 1)) })}
+                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                />
+              </div>
+            </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-1">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Start time (opcional)</label>
-            <input
-              value={content.start_time ?? ""}
-              onChange={(event) => onPatch({ start_time: event.target.value })}
-              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-              placeholder="0:30 o 30"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">End time (opcional)</label>
-            <input
-              value={content.end_time ?? ""}
-              onChange={(event) => onPatch({ end_time: event.target.value })}
-              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-              placeholder="1:15 o 75"
-            />
-          </div>
-        </div>
-        <p className="text-xs text-muted">
-          Puedes usar segundos, mm:ss o hh:mm:ss. Si defines solo start time, el audio sigue hasta el final del video.
-        </p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Start time (opcional)</label>
+                <input
+                  value={content.start_time ?? ""}
+                  onChange={(event) => onPatch({ start_time: event.target.value })}
+                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  placeholder="0:30 o 30"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">End time (opcional)</label>
+                <input
+                  value={content.end_time ?? ""}
+                  onChange={(event) => onPatch({ end_time: event.target.value })}
+                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  placeholder="1:15 o 75"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted">
+              Puedes usar segundos, mm:ss o hh:mm:ss. Si defines solo start time, el audio sigue hasta el final del video.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo</label>
+                <input
+                  value={content.title || ""}
+                  onChange={(event) => onPatch({ title: event.target.value })}
+                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  placeholder="Reading Title"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Imagen (opcional)</label>
+                <input
+                  value={content.image_url || ""}
+                  onChange={(event) => onPatch({ image_url: event.target.value })}
+                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  placeholder="https://..."
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Texto del reading</label>
+              <textarea
+                rows={8}
+                value={content.text || ""}
+                onChange={(event) => onPatch({ text: event.target.value })}
+                className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                placeholder="Write the reading passage here."
+              />
+            </div>
+          </>
+        )}
 
         <div className="rounded-xl border border-border bg-surface p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1064,7 +1132,7 @@ function GuidedEditor({ item, content, onPatch }) {
               const questionType = normalizedQuestion.type;
               return (
                 <div
-                  key={`${item.localId}-audio-question-${normalizedQuestion.id}-${questionIndex}`}
+                  key={`${item.localId}-question-${normalizedQuestion.id}-${questionIndex}`}
                   className="rounded-xl border border-border bg-surface-2 p-3"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1107,7 +1175,7 @@ function GuidedEditor({ item, content, onPatch }) {
                           value={normalizedQuestion.prompt || ""}
                           onChange={(event) => updateQuestion(questionIndex, { prompt: event.target.value })}
                           className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
-                          placeholder="What did the speaker say?"
+                          placeholder={isAudioExercise ? "What did the speaker say?" : "What does the text say?"}
                         />
                       </div>
                     </div>

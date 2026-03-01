@@ -589,7 +589,7 @@ alter table public.template_sessions
 create table if not exists public.template_session_items (
   id uuid primary key default uuid_generate_v4(),
   template_session_id uuid not null references public.template_sessions (id) on delete cascade,
-  type text not null check (type in ('slides', 'link', 'file', 'exercise', 'video')),
+  type text not null check (type in ('slides', 'link', 'file', 'exercise', 'video', 'flashcards')),
   title text not null,
   url text not null,
   exercise_id uuid references public.exercises (id) on delete set null,
@@ -608,10 +608,44 @@ alter table public.template_session_items
 
 alter table public.template_session_items
   add constraint template_session_items_type_check
-    check (type in ('slides', 'link', 'file', 'exercise', 'video'));
+    check (type in ('slides', 'link', 'file', 'exercise', 'video', 'flashcards'));
 
 alter table public.template_session_items
   add column if not exists exercise_id uuid references public.exercises (id) on delete set null;
+
+create table if not exists public.template_session_flashcards (
+  id uuid primary key default uuid_generate_v4(),
+  template_session_id uuid not null references public.template_sessions (id) on delete cascade,
+  word text not null,
+  meaning text not null,
+  image_url text not null,
+  card_order integer not null default 1,
+  accepted_answers jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.template_session_flashcards
+  add column if not exists image_url text;
+
+alter table public.template_session_flashcards
+  add column if not exists card_order integer not null default 1;
+
+alter table public.template_session_flashcards
+  add column if not exists accepted_answers jsonb not null default '[]'::jsonb;
+
+alter table public.template_session_flashcards
+  add column if not exists updated_at timestamptz not null default now();
+
+alter table public.template_session_flashcards
+  drop constraint if exists template_session_flashcards_accepted_answers_array_check;
+
+alter table public.template_session_flashcards
+  add constraint template_session_flashcards_accepted_answers_array_check
+    check (jsonb_typeof(accepted_answers) = 'array');
+
+create index if not exists template_session_flashcards_session_idx
+  on public.template_session_flashcards (template_session_id, card_order, created_at);
 
 -- Pre-enrollments (pre-matricula)
 create table if not exists public.pre_enrollments (
@@ -1108,7 +1142,7 @@ create index if not exists email_log_session_status_idx
 create table if not exists public.session_items (
   id uuid primary key default uuid_generate_v4(),
   session_id uuid not null references public.course_sessions (id) on delete cascade,
-  type text not null check (type in ('file', 'exercise', 'recording', 'live_link', 'link', 'note', 'slides')),
+  type text not null check (type in ('file', 'exercise', 'recording', 'live_link', 'link', 'note', 'slides', 'flashcards')),
   title text not null,
   url text,
   exercise_id uuid references public.exercises (id) on delete set null,
@@ -1135,13 +1169,47 @@ alter table public.session_items
 
 alter table public.session_items
   add constraint session_items_type_check
-    check (type in ('file', 'exercise', 'recording', 'live_link', 'link', 'note', 'slides', 'video'));
+    check (type in ('file', 'exercise', 'recording', 'live_link', 'link', 'note', 'slides', 'video', 'flashcards'));
 
 create index if not exists session_items_session_idx on public.session_items (session_id, created_at);
 
 create index if not exists session_items_exercise_idx
   on public.session_items (exercise_id, session_id)
   where exercise_id is not null;
+
+create table if not exists public.session_flashcards (
+  id uuid primary key default uuid_generate_v4(),
+  session_id uuid not null references public.course_sessions (id) on delete cascade,
+  word text not null,
+  meaning text not null,
+  image_url text not null,
+  card_order integer not null default 1,
+  accepted_answers jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.session_flashcards
+  add column if not exists image_url text;
+
+alter table public.session_flashcards
+  add column if not exists card_order integer not null default 1;
+
+alter table public.session_flashcards
+  add column if not exists accepted_answers jsonb not null default '[]'::jsonb;
+
+alter table public.session_flashcards
+  add column if not exists updated_at timestamptz not null default now();
+
+alter table public.session_flashcards
+  drop constraint if exists session_flashcards_accepted_answers_array_check;
+
+alter table public.session_flashcards
+  add constraint session_flashcards_accepted_answers_array_check
+    check (jsonb_typeof(accepted_answers) = 'array');
+
+create index if not exists session_flashcards_session_idx
+  on public.session_flashcards (session_id, card_order, created_at);
 
 drop table if exists public.password_reset_codes;
 
@@ -1174,9 +1242,11 @@ alter table public.google_calendar_connections enable row level security;
 alter table public.course_sessions enable row level security;
 alter table public.email_log enable row level security;
 alter table public.session_items enable row level security;
+alter table public.session_flashcards enable row level security;
 alter table public.course_templates enable row level security;
 alter table public.template_sessions enable row level security;
 alter table public.template_session_items enable row level security;
+alter table public.template_session_flashcards enable row level security;
 
 create policy "Profiles are self readable" on public.profiles
   for select using (auth.uid() = id);
@@ -1233,6 +1303,10 @@ drop policy if exists "Admins manage template session items" on public.template_
 create policy "Admins manage template session items" on public.template_session_items
   for all using (public.is_admin()) with check (public.is_admin());
 
+drop policy if exists "Admins manage template session flashcards" on public.template_session_flashcards;
+create policy "Admins manage template session flashcards" on public.template_session_flashcards
+  for all using (public.is_admin()) with check (public.is_admin());
+
 drop policy if exists "Students read course sessions" on public.course_sessions;
 create policy "Students read course sessions" on public.course_sessions
   for select using (
@@ -1264,6 +1338,23 @@ create policy "Students read session items" on public.session_items
 
 drop policy if exists "Admins manage session items" on public.session_items;
 create policy "Admins manage session items" on public.session_items
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "Students read session flashcards" on public.session_flashcards;
+create policy "Students read session flashcards" on public.session_flashcards
+  for select using (
+    public.is_admin()
+    or exists (
+      select 1
+      from public.course_sessions cs
+      join public.profiles p on p.commission_id = cs.commission_id
+      where cs.id = session_flashcards.session_id
+        and p.id = auth.uid()
+    )
+  );
+
+drop policy if exists "Admins manage session flashcards" on public.session_flashcards;
+create policy "Admins manage session flashcards" on public.session_flashcards
   for all using (public.is_admin()) with check (public.is_admin());
 
 create policy "Students read enrollments" on public.course_enrollments
@@ -1343,3 +1434,10 @@ on conflict (id) do update
   set email = excluded.email,
       full_name = coalesce(excluded.full_name, public.admin_profiles.full_name),
       invited = true;
+
+alter table public.exercises
+  drop constraint if exists exercises_type_check;
+
+alter table public.exercises
+  add constraint exercises_type_check
+    check (type in ('scramble', 'audio_match', 'reading_exercise', 'image_match', 'pairs', 'cloze'));

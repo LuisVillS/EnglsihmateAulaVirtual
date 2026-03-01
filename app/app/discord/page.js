@@ -93,6 +93,7 @@ export default async function DiscordPage({ searchParams: searchParamsPromise })
             <ProviderLinkButton
               provider="discord"
               redirectPath="/app/discord"
+              openInNewWindow
               label="Conectar cuenta con Discord"
               loadingLabel="Conectando Discord..."
               className="inline-flex items-center justify-center rounded-xl border border-primary/40 bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"

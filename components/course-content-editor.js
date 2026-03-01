@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 
 const STATUS_OPTIONS = ["draft", "published", "archived"];
-const EXERCISE_TYPES = ["scramble", "audio_match", "image_match", "pairs", "cloze"];
+const EXERCISE_TYPES = ["scramble", "audio_match", "reading_exercise", "image_match", "pairs", "cloze"];
 const SKILL_TAG_OPTIONS = [
   { value: "grammar", label: "Grammar" },
   { value: "reading", label: "Reading" },
@@ -41,6 +41,22 @@ function defaultContent(type) {
       ],
     };
   }
+  if (type === "reading_exercise") {
+    return {
+      title: "Reading Title",
+      text: "Write the reading passage here.",
+      image_url: "",
+      questions: [
+        {
+          id: "q_1",
+          type: "multiple_choice",
+          prompt: "Question 1",
+          options: ["", "", "", ""],
+          correct_index: 0,
+        },
+      ],
+    };
+  }
   if (type === "image_match") {
     return {
       question_native: "¿Cuál es 'El Pan'?",
@@ -64,6 +80,7 @@ function defaultContent(type) {
 
 function defaultSkillTagByType(type) {
   if (type === "audio_match") return "listening";
+  if (type === "reading_exercise") return "reading";
   if (type === "image_match" || type === "pairs") return "reading";
   return "grammar";
 }
@@ -72,7 +89,7 @@ function normalizeSkillTag(value, type) {
   const fallback = defaultSkillTagByType(type);
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return fallback;
-  if (normalized === "speaking") return "listening";
+  if (normalized === "speaking") return fallback;
   if (normalized === "writing") return "grammar";
   return SKILL_TAG_OPTIONS.some((option) => option.value === normalized) ? normalized : fallback;
 }

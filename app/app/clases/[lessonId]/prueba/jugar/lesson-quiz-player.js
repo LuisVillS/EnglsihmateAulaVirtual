@@ -19,6 +19,7 @@ const MAX_WRONG_ATTEMPTS = 1;
 const TYPE_LABELS = {
   scramble: "Scrambled Sentence",
   audio_match: "Listening Exercise",
+  reading_exercise: "Reading Exercise",
   image_match: "Image Match",
   pairs: "Pairs",
   cloze: "Fill in the blanks",
@@ -179,6 +180,7 @@ function getDefaultExplanation(type, data) {
   if (type === "pairs") return "Estos son los pares correctos entre ambos idiomas.";
   if (type === "image_match") return "La imagen correcta corresponde al termino solicitado.";
   if (type === "audio_match") return "Las respuestas correctas se obtienen a partir del audio escuchado.";
+  if (type === "reading_exercise") return "Las respuestas correctas se obtienen a partir del texto de lectura.";
   if (data?.correctAnswer) return "Esa es la respuesta correcta para este ejercicio.";
   return "Revisa la solucion para entender la regla de este ejercicio.";
 }
@@ -467,6 +469,25 @@ function resolveExerciseData(exercise) {
     };
   }
 
+  if (type === "reading_exercise") {
+    const questions = buildListeningQuestionsFromContent(content);
+    return {
+      type,
+      explanation,
+      title: String(content.title || content.reading_title || "Reading Exercise").trim(),
+      readingText: String(
+        content.text ||
+        content.reading_text ||
+        content.readingText ||
+        content.body ||
+        content.passage ||
+        ""
+      ).trim(),
+      imageUrl: String(content.image_url || content.imageUrl || "").trim(),
+      questions,
+    };
+  }
+
   return {
     type: "cloze",
     explanation,
@@ -503,7 +524,7 @@ function buildCorrectAnswerText(type, data) {
     const correct = data.options?.[data.correctIndex];
     return correct?.label || correct?.vocabId || "Opcion correcta";
   }
-  if (type === "audio_match") {
+  if (type === "audio_match" || type === "reading_exercise") {
     const questions = normalizeArray(data.questions);
     if (!questions.length && data.textTarget) return data.textTarget;
     if (!questions.length) return "-";
@@ -529,6 +550,7 @@ export default function LessonQuizPlayer({
   totalExercises,
   exercise,
   exercisePointValues = [],
+  revealCorrectAnswers = false,
 }) {
   const data = useMemo(() => resolveExerciseData(exercise), [exercise]);
   const type = data.type;
@@ -679,13 +701,14 @@ export default function LessonQuizPlayer({
     setWrongAttempts(MAX_WRONG_ATTEMPTS);
     setFinalStatus("failed");
     setScoreAwarded(awarded);
+    const baseScoreMessage = awarded > 0 ? `Puntaje parcial: ${awarded}/${exerciseWeight}.` : "";
     setFeedback({
       kind: "reveal",
       text:
         options.message ||
-        (awarded > 0
-          ? `Puntaje parcial: ${awarded}/${exerciseWeight}. Respuesta correcta mostrada.`
-          : "Respuesta correcta mostrada."),
+        (revealCorrectAnswers
+          ? `${baseScoreMessage}${baseScoreMessage ? " " : ""}Respuesta correcta mostrada.`
+          : `${baseScoreMessage}${baseScoreMessage ? " " : ""}La respuesta correcta se mostrara cuando se agoten tus intentos.`),
     });
     setErrorFlash(false);
     if (typeof onReveal === "function") onReveal();
@@ -819,7 +842,7 @@ export default function LessonQuizPlayer({
   }
 
   function handleListeningAnswer(questionId, patchObject) {
-    if (type !== "audio_match" || isResolved) return;
+    if ((type !== "audio_match" && type !== "reading_exercise") || isResolved) return;
     clearIncorrectFeedback();
     const safeQuestionId = String(questionId || "").trim();
     if (!safeQuestionId) return;
@@ -1003,12 +1026,12 @@ export default function LessonQuizPlayer({
   }, [type, data.blanks, exerciseWeight]);
 
   const listeningQuestions = useMemo(
-    () => (type === "audio_match" ? normalizeArray(data.questions) : []),
+    () => ((type === "audio_match" || type === "reading_exercise") ? normalizeArray(data.questions) : []),
     [type, data.questions]
   );
   const listeningSummary = useMemo(
     () => (
-      type === "audio_match"
+      type === "audio_match" || type === "reading_exercise"
         ? summarizeListeningQuestionResults(listeningQuestions, listeningAnswers)
         : { total: 0, answeredCount: 0, correctCount: 0, complete: false, results: [] }
     ),
@@ -1322,40 +1345,16 @@ export default function LessonQuizPlayer({
     );
   }
 
-  function renderAudioMatch() {
+  function renderQuestionExerciseQuestions(canAnswerQuestions = true) {
     const resultByQuestionId = new Map(
       normalizeArray(listeningSummary.results).map((entry) => [
         String(entry?.id || "").trim(),
         entry,
       ])
     );
-    const hasPlaybackSource = Boolean(data.youtubeUrl || data.audioUrl);
-    const canAnswerQuestions = !hasPlaybackSource || listeningPlaybackState.playsUsed > 0;
 
     return (
-      <div className="space-y-5">
-        <p className="text-sm text-muted">{data.prompt || "Escucha y responde."}</p>
-
-        <ListeningPlaybackControl
-          key={`listening-playback-${exercise?.id || currentIndex}-${data.youtubeUrl || data.audioUrl || "none"}-${data.maxPlays}-${data.startTime ?? 0}-${data.endTime ?? "end"}`}
-          youtubeUrl={data.youtubeUrl}
-          audioUrl={data.audioUrl}
-          maxPlays={data.maxPlays}
-          startTime={data.startTime}
-          endTime={data.endTime}
-          onStatusChange={setListeningPlaybackState}
-        />
-
-        {!canAnswerQuestions ? (
-          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
-            Reproduce el audio al menos una vez antes de responder.
-          </div>
-        ) : listeningPlaybackState.isPlaying ? (
-          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
-            Puedes responder mientras el audio sigue sonando.
-          </div>
-        ) : null}
-
+      <>
         {listeningSummary.total > 0 ? (
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
             Preguntas respondidas: {listeningSummary.answeredCount}/{listeningSummary.total}
@@ -1462,7 +1461,7 @@ export default function LessonQuizPlayer({
                   </div>
                 ) : null}
 
-                {isFailed && (!questionWasAnswered || !questionIsCorrect) ? (
+                {isFailed && revealCorrectAnswers && (!questionWasAnswered || !questionIsCorrect) ? (
                   <p className="mt-3 text-xs font-semibold text-danger">
                     Correct answer: {getListeningQuestionCorrectAnswerText(question)}
                   </p>
@@ -1471,6 +1470,65 @@ export default function LessonQuizPlayer({
             );
           })}
         </div>
+      </>
+    );
+  }
+
+  function renderAudioMatch() {
+    const hasPlaybackSource = Boolean(data.youtubeUrl || data.audioUrl);
+    const canAnswerQuestions = !hasPlaybackSource || listeningPlaybackState.playsUsed > 0;
+
+    return (
+      <div className="space-y-5">
+        <p className="text-sm text-muted">{data.prompt || "Escucha y responde."}</p>
+
+        <ListeningPlaybackControl
+          key={`listening-playback-${exercise?.id || currentIndex}-${data.youtubeUrl || data.audioUrl || "none"}-${data.maxPlays}-${data.startTime ?? 0}-${data.endTime ?? "end"}`}
+          youtubeUrl={data.youtubeUrl}
+          audioUrl={data.audioUrl}
+          maxPlays={data.maxPlays}
+          startTime={data.startTime}
+          endTime={data.endTime}
+          onStatusChange={setListeningPlaybackState}
+        />
+
+        {!canAnswerQuestions ? (
+          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
+            Reproduce el audio al menos una vez antes de responder.
+          </div>
+        ) : listeningPlaybackState.isPlaying ? (
+          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
+            Puedes responder mientras el audio sigue sonando.
+          </div>
+        ) : null}
+
+        {renderQuestionExerciseQuestions(canAnswerQuestions)}
+      </div>
+    );
+  }
+
+  function renderReadingExercise() {
+    return (
+      <div className="space-y-5">
+        <div className="rounded-2xl border border-border bg-surface-2 p-4 sm:p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">Reading</p>
+          <h3 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">
+            {data.title || "Reading Exercise"}
+          </h3>
+          {data.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={data.imageUrl}
+              alt={data.title || "Reading image"}
+              className="mt-4 h-52 w-full rounded-2xl object-cover sm:h-64"
+            />
+          ) : null}
+          <div className="mt-4 whitespace-pre-wrap text-sm leading-7 text-foreground">
+            {data.readingText || "Reading text not available."}
+          </div>
+        </div>
+
+        {renderQuestionExerciseQuestions(true)}
       </div>
     );
   }
@@ -1480,6 +1538,7 @@ export default function LessonQuizPlayer({
     if (type === "scramble") return renderScramble();
     if (type === "pairs") return renderPairs();
     if (type === "image_match") return renderImageMatch();
+    if (type === "reading_exercise") return renderReadingExercise();
     return renderAudioMatch();
   }
 
@@ -1518,7 +1577,7 @@ export default function LessonQuizPlayer({
         </div>
       ) : null}
 
-      {isFailed ? (
+      {isFailed && revealCorrectAnswers ? (
         <div className="space-y-2 rounded-2xl border border-accent/45 bg-accent/12 px-4 py-3 text-sm text-foreground">
           <p className="text-xs uppercase tracking-wide text-muted">Respuesta correcta</p>
           <p className="font-semibold">{correctAnswerText}</p>

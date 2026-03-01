@@ -7,6 +7,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 export default function ProviderLinkButton({
   provider,
   redirectPath = "/profile",
+  openInNewWindow = false,
   label = "Conectar",
   loadingLabel = "Conectando...",
   className = "rounded-full border border-border px-4 py-1.5 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60",
@@ -29,6 +30,14 @@ export default function ProviderLinkButton({
         const debugParts = [error?.code, error?.status, error?.message].filter(Boolean).join(" | ");
         const message = encodeURIComponent(debugParts || "No pudimos iniciar la vinculacion.");
         router.push(`${redirectPath}?error=${message}`);
+        return;
+      }
+
+      if (openInNewWindow) {
+        const popup = window.open(data.url, "_blank", "noopener,noreferrer");
+        if (!popup) {
+          window.location.href = data.url;
+        }
         return;
       }
 
