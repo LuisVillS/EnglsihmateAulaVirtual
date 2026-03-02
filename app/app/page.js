@@ -271,7 +271,7 @@ export default async function StudentDashboard() {
   const { data: profile } = await supabase
     .from("profiles")
     .select(
-      "full_name, role, status, course_level, level_number, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_date, end_date, start_month, duration_months, modality_key, days_of_week, start_time, end_time, status, is_active)"
+      "full_name, role, status, course_level, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_date, end_date, start_month, duration_months, modality_key, days_of_week, start_time, end_time, status, is_active)"
     )
     .eq("id", user.id)
     .maybeSingle();

@@ -275,7 +275,9 @@ async function handleLookup(formData, context, requireOtp) {
 
   const profileEmail = profile.email?.toLowerCase();
   const normalizedStatus = profile.status || "enrolled";
-  const requiresOtp = context === "student" && requireOtp && !profile.password_set;
+  const needsPasswordSetup =
+    context === "student" && normalizedStatus === "pre_registered" && !profile.password_set;
+  const requiresOtp = needsPasswordSetup && requireOtp;
 
   if (requiresOtp) {
     if (!otp) {
@@ -301,7 +303,7 @@ async function handleLookup(formData, context, requireOtp) {
     }
   }
 
-  if (!profile.password_set && context === "student") {
+  if (needsPasswordSetup) {
     return {
       context,
       requireOtp,

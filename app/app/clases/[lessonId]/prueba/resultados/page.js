@@ -8,6 +8,7 @@ import {
   LESSON_QUIZ_STATUS,
   formatDurationSeconds,
   getUsedQuizAttempts,
+  isMissingLessonQuizAttemptScoreColumnError,
   isMissingLessonQuizRestartColumnError,
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
@@ -32,6 +33,10 @@ function CheckIcon() {
 
 function normalizeArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function normalizeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function toInt(value, fallback = 0) {
@@ -62,11 +67,103 @@ function normalizeExerciseTypeLabel(type) {
   return EXERCISE_TYPE_LABELS[normalized] || "Ejercicio";
 }
 
+function splitSentenceByBlankTokens(sentence = "") {
+  const text = String(sentence || "");
+  const regex = /\[\[\s*(blank_[a-z0-9_-]+)\s*\]\]/gi;
+  const segments = [];
+  let lastIndex = 0;
+  let match = regex.exec(text);
+
+  while (match) {
+    if (match.index > lastIndex) {
+      segments.push({ kind: "text", value: text.slice(lastIndex, match.index) });
+    }
+    segments.push({ kind: "blank", key: String(match[1] || "").trim().toLowerCase() });
+    lastIndex = match.index + match[0].length;
+    match = regex.exec(text);
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({ kind: "text", value: text.slice(lastIndex) });
+  }
+
+  return segments.length ? segments : [{ kind: "text", value: text }];
+}
+
+function buildClozeReviewLayout(exercise, answerSnapshot, revealAll = false) {
+  const content = normalizeObject(exercise?.content_json);
+  const rawBlanks = normalizeArray(content.blanks);
+  const optionTextById = new Map(
+    normalizeArray(content.options_pool).map((option) => [
+      String(option?.id || "").trim().toLowerCase(),
+      String(option?.text || "").trim(),
+    ])
+  );
+
+  let blanks = rawBlanks.map((blank, idx) => {
+    const key = String(blank?.key || blank?.id || `blank_${idx + 1}`).trim().toLowerCase();
+    const correctOptionId = String(blank?.correct_option_id || blank?.correctOptionId || "").trim().toLowerCase();
+    const correctText =
+      optionTextById.get(correctOptionId) ||
+      String(blank?.answer || blank?.correct || "").trim();
+    return {
+      key,
+      correctText,
+    };
+  });
+
+  if (!blanks.length) {
+    const legacyOptions = normalizeArray(content.options).map((item) => String(item || "").trim());
+    const correctIndex = Math.max(0, Math.min(legacyOptions.length - 1, toInt(content.correct_index, 0)));
+    const correctText =
+      legacyOptions[correctIndex] ||
+      String(content.answer || content.correct || "").trim();
+    if (correctText) {
+      blanks = [{ key: "blank_1", correctText }];
+    }
+  }
+
+  if (!blanks.length) return null;
+
+  let sentence = String(content.sentence || exercise?.prompt || "").trim();
+  if (!sentence) sentence = "Complete the sentence.";
+  if (!/\[\[\s*blank_/i.test(sentence)) {
+    if (/_{2,}/.test(sentence)) {
+      sentence = sentence.replace(/_{2,}/, `[[${blanks[0].key}]]`);
+    } else if (blanks.length === 1) {
+      sentence = `${sentence} [[${blanks[0].key}]]`.trim();
+    }
+  }
+
+  const snapshot = normalizeObject(answerSnapshot);
+  const snapshotByKey = new Map(
+    normalizeArray(snapshot.blanks).map((blank, idx) => {
+      const key = String(blank?.key || `blank_${idx + 1}`).trim().toLowerCase();
+      return [key, normalizeObject(blank)];
+    })
+  );
+  const displayByKey = new Map(
+    blanks.map((blank) => {
+      const saved = snapshotByKey.get(blank.key) || null;
+      const text = revealAll
+        ? blank.correctText
+        : saved?.isCorrect
+        ? String(saved.correctText || blank.correctText || "").trim()
+        : "";
+      return [blank.key, text];
+    })
+  );
+
+  return {
+    segments: splitSentenceByBlankTokens(sentence),
+    hasPerBlankReview: snapshotByKey.size > 0,
+    displayByKey,
+  };
+}
+
 function buildExerciseAnswerLines(exercise) {
   const type = String(exercise?.type || "").trim().toLowerCase();
-  const content = exercise?.content_json && typeof exercise.content_json === "object"
-    ? exercise.content_json
-    : {};
+  const content = normalizeObject(exercise?.content_json);
 
   if (type === "scramble") {
     const words = normalizeArray(content.target_words);
@@ -243,7 +340,8 @@ function isMissingUserProgressQuizColumnsError(error) {
     message.includes("wrong_attempts") ||
     message.includes("final_status") ||
     message.includes("score_awarded") ||
-    message.includes("answered_at")
+    message.includes("answered_at") ||
+    message.includes("answer_snapshot")
   );
 }
 
@@ -309,13 +407,16 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
   } = await supabase
     .from("lesson_quiz_attempts")
     .select(
-      "attempt_status, current_index, completed_count, total_exercises, correct_count, score_percent, restart_count, duration_seconds, completed_at, updated_at"
+      "attempt_status, current_index, completed_count, total_exercises, correct_count, score_percent, attempt_score_percent, restart_count, duration_seconds, completed_at, updated_at"
     )
     .eq("user_id", profile.id)
     .eq("lesson_id", lesson.id)
     .maybeSingle());
 
-  if (attemptError && isMissingLessonQuizRestartColumnError(attemptError)) {
+  if (
+    attemptError &&
+    (isMissingLessonQuizRestartColumnError(attemptError) || isMissingLessonQuizAttemptScoreColumnError(attemptError))
+  ) {
     const fallback = await supabase
       .from("lesson_quiz_attempts")
       .select(
@@ -329,6 +430,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
       ? {
           ...fallback.data,
           restart_count: 0,
+          attempt_score_percent: fallback.data?.score_percent ?? null,
         }
       : null;
   }
@@ -352,7 +454,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
     let error = null;
     ({ data, error } = await supabase
       .from("user_progress")
-      .select("exercise_id, is_correct, attempts, wrong_attempts, final_status, score_awarded, answered_at")
+      .select("exercise_id, is_correct, attempts, wrong_attempts, final_status, score_awarded, answered_at, answer_snapshot")
       .eq("user_id", profile.id)
       .in("exercise_id", exerciseIds));
 
@@ -373,7 +475,8 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
     normalizeArray(progressRows).map((row) => [String(row.exercise_id || "").trim(), row])
   );
   const durationLabel = formatDurationSeconds(attempt.duration_seconds);
-  const scoreValue = attempt.score_percent != null ? round2(attempt.score_percent) : null;
+  const scoreValue = attempt.attempt_score_percent != null ? round2(attempt.attempt_score_percent) : null;
+  const bestScoreValue = attempt.score_percent != null ? round2(attempt.score_percent) : scoreValue;
   const repeatCount = Math.max(0, toInt(attempt.restart_count, 0));
   const attemptsUsed = getUsedQuizAttempts({
     status: attempt.attempt_status,
@@ -435,8 +538,14 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
           <div className="mt-5 grid gap-2 sm:grid-cols-2">
             {scoreValue != null ? (
               <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm">
-                <p className="text-xs uppercase tracking-wide text-muted">Puntaje final</p>
+                <p className="text-xs uppercase tracking-wide text-muted">Puntaje del intento</p>
                 <p className="mt-1 text-2xl font-semibold text-foreground">{scoreValue}/100</p>
+              </div>
+            ) : null}
+            {bestScoreValue != null && bestScoreValue !== scoreValue ? (
+              <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm">
+                <p className="text-xs uppercase tracking-wide text-muted">Mejor puntaje</p>
+                <p className="mt-1 text-2xl font-semibold text-foreground">{bestScoreValue}/100</p>
               </div>
             ) : null}
             {durationLabel ? (
@@ -473,7 +582,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
           <p className="mt-1 text-sm text-muted">
             {revealCorrectAnswers
               ? "Revisa cada ejercicio con su resultado y la respuesta correcta para detectar rapido en que fallaste."
-              : "Revisa cada ejercicio con su resultado. Las respuestas correctas se mostraran cuando ya no te queden intentos."}
+              : "Si acertaste un ejercicio, su respuesta ya se muestra. En Fill in the blanks se ven solo los blanks correctos y los incorrectos quedan vacios hasta agotar intentos."}
           </p>
           <div className="mt-4 space-y-3">
             {published.map((exercise, idx) => {
@@ -494,6 +603,12 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                   )
                 : null;
               const isPassed = finalStatus === "passed";
+              const exerciseType = String(exercise?.type || "").trim().toLowerCase();
+              const clozeReview = exerciseType === "cloze"
+                ? buildClozeReviewLayout(exercise, progress?.answer_snapshot, revealCorrectAnswers || isPassed)
+                : null;
+              const showStandardAnswer = hasResult && (isPassed || revealCorrectAnswers);
+              const showClozePartial = hasResult && !showStandardAnswer && Boolean(clozeReview?.hasPerBlankReview);
               const answerLines = buildExerciseAnswerLines(exercise);
               const typeLabel = normalizeExerciseTypeLabel(exercise.type);
               const title = String(exercise.prompt || "").trim() || typeLabel;
@@ -525,6 +640,10 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                           <p className="mt-1 text-sm text-muted">No se encontro data de este ejercicio.</p>
                         ) : isPassed ? (
                           <p className="mt-1 text-sm text-success">Lo resolviste correctamente.</p>
+                        ) : showClozePartial ? (
+                          <p className="mt-1 text-sm text-muted">
+                            Se muestran los blanks que resolviste bien. Los incorrectos quedan vacios por ahora.
+                          </p>
                         ) : revealCorrectAnswers ? (
                           <p className="mt-1 text-sm text-danger">Aqui estuvo tu error. Revisa la respuesta correcta abajo.</p>
                         ) : (
@@ -575,10 +694,35 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
 
                   <div className="mt-4 rounded-2xl border border-border bg-surface px-3 py-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      {revealCorrectAnswers ? "Respuesta correcta" : "Respuesta bloqueada"}
+                      {showStandardAnswer
+                        ? "Respuesta correcta"
+                        : showClozePartial
+                        ? "Detalle de blanks"
+                        : "Respuesta bloqueada"}
                     </p>
-                    {revealCorrectAnswers ? (
-                      answerLines.length ? (
+                    {showStandardAnswer ? (
+                      clozeReview ? (
+                        <div className="mt-2 rounded-2xl border border-border bg-surface-2 px-3 py-3 text-sm font-semibold text-foreground">
+                          {clozeReview.segments.map((segment, segmentIndex) => {
+                            if (segment.kind !== "blank") {
+                              return <span key={`${exercise.id}-segment-text-${segmentIndex}`}>{segment.value}</span>;
+                            }
+                            const value = clozeReview.displayByKey.get(String(segment.key || "").toLowerCase()) || "";
+                            return (
+                              <span
+                                key={`${exercise.id}-segment-blank-${segmentIndex}`}
+                                className={`mx-1 my-1 inline-flex min-h-10 min-w-24 items-center justify-center rounded-xl border px-3 py-2 align-middle ${
+                                  value
+                                    ? "border-success/35 bg-success/10"
+                                    : "border-dashed border-border bg-surface"
+                                }`}
+                              >
+                                {value ? value : <span className="block h-4 w-10" aria-hidden="true" />}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : answerLines.length ? (
                         <div className="mt-2 space-y-1.5">
                           {answerLines.map((line, lineIndex) => (
                             <p key={`${exercise.id}-answer-${lineIndex}`} className="text-sm text-foreground">
@@ -589,6 +733,27 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                       ) : (
                         <p className="mt-2 text-sm text-muted">No hay respuesta visible para este ejercicio.</p>
                       )
+                    ) : showClozePartial ? (
+                      <div className="mt-2 rounded-2xl border border-border bg-surface-2 px-3 py-3 text-sm font-semibold text-foreground">
+                        {clozeReview.segments.map((segment, segmentIndex) => {
+                          if (segment.kind !== "blank") {
+                            return <span key={`${exercise.id}-segment-text-${segmentIndex}`}>{segment.value}</span>;
+                          }
+                          const value = clozeReview.displayByKey.get(String(segment.key || "").toLowerCase()) || "";
+                          return (
+                            <span
+                              key={`${exercise.id}-segment-blank-${segmentIndex}`}
+                              className={`mx-1 my-1 inline-flex min-h-10 min-w-24 items-center justify-center rounded-xl border px-3 py-2 align-middle ${
+                                value
+                                  ? "border-success/35 bg-success/10"
+                                  : "border-dashed border-border bg-surface"
+                              }`}
+                            >
+                              {value ? value : <span className="block h-4 w-10" aria-hidden="true" />}
+                            </span>
+                          );
+                        })}
+                      </div>
                     ) : (
                       <p className="mt-2 text-sm text-muted">
                         Completa todos tus intentos del test para desbloquear las respuestas correctas.

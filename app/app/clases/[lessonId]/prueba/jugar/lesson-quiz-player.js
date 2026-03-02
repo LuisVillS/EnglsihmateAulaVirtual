@@ -174,6 +174,36 @@ function splitSentenceByBlankTokens(sentence = "") {
   return segments.length ? segments : [{ kind: "text", value: text }];
 }
 
+function buildClozeAnswerSnapshot(data = {}, selections = {}) {
+  const blanks = normalizeArray(data.blanks);
+  const optionById = new Map(
+    normalizeArray(data.optionsPool).map((option) => [
+      String(option?.id || "").trim().toLowerCase(),
+      String(option?.text || "").trim(),
+    ])
+  );
+
+  return {
+    type: "cloze",
+    sentence: String(data.sentence || "").trim(),
+    blanks: blanks.map((blank, idx) => {
+      const key = String(blank?.key || `blank_${idx + 1}`).trim().toLowerCase();
+      const selectedOptionId = String(selections[key] || "").trim().toLowerCase();
+      const correctOptionId = String(blank?.correctOptionId || "").trim().toLowerCase();
+      const selectedText = optionById.get(selectedOptionId) || "";
+      const correctText = optionById.get(correctOptionId) || "";
+      return {
+        key,
+        selectedOptionId,
+        correctOptionId,
+        selectedText,
+        correctText,
+        isCorrect: Boolean(correctOptionId && selectedOptionId && selectedOptionId === correctOptionId),
+      };
+    }),
+  };
+}
+
 function getDefaultExplanation(type, data) {
   if (type === "cloze") return "Se usa la opcion gramatical correcta para completar la frase.";
   if (type === "scramble") return "El orden correcto sigue sujeto + verbo + complemento.";
@@ -563,6 +593,7 @@ export default function LessonQuizPlayer({
   const [wrongAttempts, setWrongAttempts] = useState(0);
   const [finalStatus, setFinalStatus] = useState(null);
   const [scoreAwarded, setScoreAwarded] = useState(0);
+  const [resultSnapshot, setResultSnapshot] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [errorFlash, setErrorFlash] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -617,6 +648,14 @@ export default function LessonQuizPlayer({
   }, [pairRows, data.shuffle]);
 
   const correctAnswerText = useMemo(() => buildCorrectAnswerText(type, data), [type, data]);
+  const answerSnapshotValue = useMemo(() => {
+    if (!resultSnapshot) return "";
+    try {
+      return JSON.stringify(resultSnapshot);
+    } catch {
+      return "";
+    }
+  }, [resultSnapshot]);
   const explanationText = String(data.explanation || getDefaultExplanation(type, data)).trim();
   const resolvedActiveClozeBlank = useMemo(() => {
     const blankKeys = normalizeArray(data.blanks).map((blank, idx) =>
@@ -900,6 +939,8 @@ export default function LessonQuizPlayer({
         correctItems: correctCount,
         totalItems: blanks.length,
       };
+      const clozeSnapshot = buildClozeAnswerSnapshot(data, clozeSelections);
+      setResultSnapshot(clozeSnapshot);
       if (allCorrect) {
         markPassed(itemStats);
         return;
@@ -1606,6 +1647,7 @@ export default function LessonQuizPlayer({
         <input type="hidden" name="wrongAttempts" value={wrongAttempts} />
         <input type="hidden" name="finalStatus" value={finalStatus || ""} />
         <input type="hidden" name="scoreAwarded" value={scoreAwarded} />
+        <input type="hidden" name="answerSnapshot" value={answerSnapshotValue} />
         <button
           type="submit"
           disabled={isSubmitting}

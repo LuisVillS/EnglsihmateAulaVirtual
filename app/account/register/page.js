@@ -17,6 +17,7 @@ const MONTH_NAMES = [
   "Noviembre",
   "Diciembre",
 ];
+const MINIMUM_REGISTER_AGE = 13;
 
 function getTodayIsoLocal() {
   const now = new Date();
@@ -24,6 +25,11 @@ function getTodayIsoLocal() {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function getMaxBirthDateForMinimumAge(minimumAge) {
+  const now = new Date();
+  return formatIsoDate(now.getFullYear() - minimumAge, now.getMonth() + 1, now.getDate());
 }
 
 function parseIsoDate(value) {
@@ -472,7 +478,7 @@ export default function PreEnrollmentRegisterPage() {
   });
   const [emailSuggestions, setEmailSuggestions] = useState([]);
 
-  const maxBirthDate = useMemo(() => getTodayIsoLocal(), []);
+  const maxBirthDate = useMemo(() => getMaxBirthDateForMinimumAge(MINIMUM_REGISTER_AGE), []);
 
   useEffect(() => {
     const cached = window.localStorage.getItem("pre_enroll_email_history");
@@ -602,6 +608,7 @@ export default function PreEnrollmentRegisterPage() {
                   maxDate={maxBirthDate}
                   onChange={(nextValue) => setFormData({ ...formData, birthDate: nextValue })}
                 />
+                <p className="text-xs text-muted">Debes tener al menos {MINIMUM_REGISTER_AGE} anos para registrarte.</p>
               </div>
             </div>
             <button

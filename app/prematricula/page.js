@@ -36,7 +36,7 @@ export default async function PreMatriculaDashboardPage() {
           <p className="text-sm text-muted">Completa tu proceso para convertirte en alumno matriculado.</p>
         </header>
         <Link
-          href="/matricula"
+          href="/prematricula/checkout"
           className="group block rounded-3xl border border-border bg-surface p-10 transition hover:border-primary hover:bg-surface-2"
         >
           <p className="text-xs uppercase tracking-[0.4em] text-muted">Opcion principal</p>

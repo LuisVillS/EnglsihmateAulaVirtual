@@ -72,9 +72,8 @@ export async function GET(request) {
     const startMonth = normalizeMonthKey(searchParams.get("startMonth"));
     const level = searchParams.get("level");
     const frequency = searchParams.get("frequency");
-    const courseId = searchParams.get("courseId");
 
-    if (!startMonth && !level && !frequency && !courseId) {
+    if (!startMonth && !level && !frequency) {
       await autoDeactivateExpiredCommissions();
     }
 
@@ -194,17 +193,6 @@ export async function GET(request) {
       (courses || []).length > 0
         ? (courses || []).map((course) => ({ id: course.id, label: course.title }))
         : [{ id: `generic-${level}`, label: `Programa ${level}` }];
-
-    if (!courseId) {
-      return NextResponse.json({
-        preEnrollment,
-        startMonths,
-        levels: levelsForMonth,
-        frequencies: frequenciesForLevel,
-        courses: resolvedCourses,
-        schedules: [],
-      });
-    }
 
     const schedules = Array.from(
       new Map(

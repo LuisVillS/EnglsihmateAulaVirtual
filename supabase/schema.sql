@@ -613,12 +613,67 @@ alter table public.template_session_items
 alter table public.template_session_items
   add column if not exists exercise_id uuid references public.exercises (id) on delete set null;
 
-create table if not exists public.template_session_flashcards (
+create table if not exists public.flashcards (
   id uuid primary key default uuid_generate_v4(),
-  template_session_id uuid not null references public.template_sessions (id) on delete cascade,
   word text not null,
   meaning text not null,
   image_url text not null,
+  accepted_answers jsonb not null default '[]'::jsonb,
+  audio_url text,
+  audio_r2_key text,
+  audio_provider text not null default 'elevenlabs',
+  voice_id text,
+  elevenlabs_config jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.flashcards
+  add column if not exists accepted_answers jsonb not null default '[]'::jsonb;
+
+alter table public.flashcards
+  add column if not exists audio_url text;
+
+alter table public.flashcards
+  add column if not exists audio_r2_key text;
+
+alter table public.flashcards
+  add column if not exists audio_provider text not null default 'elevenlabs';
+
+alter table public.flashcards
+  add column if not exists voice_id text;
+
+alter table public.flashcards
+  add column if not exists elevenlabs_config jsonb;
+
+alter table public.flashcards
+  add column if not exists updated_at timestamptz not null default now();
+
+update public.flashcards
+set accepted_answers = '[]'::jsonb
+where accepted_answers is null
+   or jsonb_typeof(accepted_answers) <> 'array';
+
+alter table public.flashcards
+  drop constraint if exists flashcards_accepted_answers_array_check;
+
+alter table public.flashcards
+  add constraint flashcards_accepted_answers_array_check
+    check (jsonb_typeof(accepted_answers) = 'array');
+
+create index if not exists flashcards_word_idx
+  on public.flashcards (word);
+
+create index if not exists flashcards_meaning_idx
+  on public.flashcards (meaning);
+
+create table if not exists public.template_session_flashcards (
+  id uuid primary key default uuid_generate_v4(),
+  template_session_id uuid not null references public.template_sessions (id) on delete cascade,
+  flashcard_id uuid references public.flashcards (id) on delete restrict,
+  word text,
+  meaning text,
+  image_url text,
   card_order integer not null default 1,
   accepted_answers jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
@@ -626,7 +681,19 @@ create table if not exists public.template_session_flashcards (
 );
 
 alter table public.template_session_flashcards
+  add column if not exists flashcard_id uuid references public.flashcards (id) on delete restrict;
+
+alter table public.template_session_flashcards
   add column if not exists image_url text;
+
+alter table public.template_session_flashcards
+  alter column word drop not null;
+
+alter table public.template_session_flashcards
+  alter column meaning drop not null;
+
+alter table public.template_session_flashcards
+  alter column image_url drop not null;
 
 alter table public.template_session_flashcards
   add column if not exists card_order integer not null default 1;
@@ -646,6 +713,9 @@ alter table public.template_session_flashcards
 
 create index if not exists template_session_flashcards_session_idx
   on public.template_session_flashcards (template_session_id, card_order, created_at);
+
+create index if not exists template_session_flashcards_flashcard_idx
+  on public.template_session_flashcards (flashcard_id, template_session_id);
 
 -- Pre-enrollments (pre-matricula)
 create table if not exists public.pre_enrollments (
@@ -1180,9 +1250,10 @@ create index if not exists session_items_exercise_idx
 create table if not exists public.session_flashcards (
   id uuid primary key default uuid_generate_v4(),
   session_id uuid not null references public.course_sessions (id) on delete cascade,
-  word text not null,
-  meaning text not null,
-  image_url text not null,
+  flashcard_id uuid references public.flashcards (id) on delete restrict,
+  word text,
+  meaning text,
+  image_url text,
   card_order integer not null default 1,
   accepted_answers jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
@@ -1190,7 +1261,19 @@ create table if not exists public.session_flashcards (
 );
 
 alter table public.session_flashcards
+  add column if not exists flashcard_id uuid references public.flashcards (id) on delete restrict;
+
+alter table public.session_flashcards
   add column if not exists image_url text;
+
+alter table public.session_flashcards
+  alter column word drop not null;
+
+alter table public.session_flashcards
+  alter column meaning drop not null;
+
+alter table public.session_flashcards
+  alter column image_url drop not null;
 
 alter table public.session_flashcards
   add column if not exists card_order integer not null default 1;
@@ -1210,6 +1293,9 @@ alter table public.session_flashcards
 
 create index if not exists session_flashcards_session_idx
   on public.session_flashcards (session_id, card_order, created_at);
+
+create index if not exists session_flashcards_flashcard_idx
+  on public.session_flashcards (flashcard_id, session_id);
 
 drop table if exists public.password_reset_codes;
 
@@ -1242,6 +1328,7 @@ alter table public.google_calendar_connections enable row level security;
 alter table public.course_sessions enable row level security;
 alter table public.email_log enable row level security;
 alter table public.session_items enable row level security;
+alter table public.flashcards enable row level security;
 alter table public.session_flashcards enable row level security;
 alter table public.course_templates enable row level security;
 alter table public.template_sessions enable row level security;
@@ -1294,6 +1381,16 @@ create policy "Admins manage exercises" on public.exercises
 drop policy if exists "Admins manage course templates" on public.course_templates;
 create policy "Admins manage course templates" on public.course_templates
   for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "Authenticated users read flashcards library" on public.flashcards;
+create policy "Authenticated users read flashcards library" on public.flashcards
+  for select to authenticated
+  using (true);
+
+drop policy if exists "Admins manage flashcards library" on public.flashcards;
+create policy "Admins manage flashcards library" on public.flashcards
+  for all to authenticated
+  using (public.is_admin()) with check (public.is_admin());
 
 drop policy if exists "Admins manage template sessions" on public.template_sessions;
 create policy "Admins manage template sessions" on public.template_sessions

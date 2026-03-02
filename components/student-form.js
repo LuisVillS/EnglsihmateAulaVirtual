@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useActionState, useEffect, useMemo, useState } from "react";
-import { LEVEL_NUMBERS } from "@/lib/student-constants";
 import { upsertStudent } from "@/app/admin/actions";
 
 const DAY_LABELS = {
@@ -215,7 +214,6 @@ export default function StudentForm({
   const [state, formAction] = useActionState(upsertStudent, INITIAL_STATE);
   const title = student ? "Editar alumno" : "Registrar alumno";
   const buttonLabel = student ? "Guardar cambios" : "Crear alumno";
-  const defaultLevel = student?.level_number?.toString() || "1";
   const defaultType = student?.is_premium ? "premium" : "regular";
   const redirectTarget = redirectTo ?? (student ? "/admin/students" : "");
   const filteredCommissions = student?.course_level
@@ -296,22 +294,6 @@ export default function StudentForm({
         </div>
         <div className="grid gap-4">
           <BirthDatePicker defaultValue={student?.birth_date || ""} />
-        </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-1">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Nivel</label>
-            <select
-              name="levelNumber"
-              defaultValue={defaultLevel}
-              className="w-full rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground focus:border-primary focus:outline-none"
-            >
-              {LEVEL_NUMBERS.map((level) => (
-                <option className="text-foreground" key={level} value={level}>
-                  {level}
-                </option>
-              ))}
-            </select>
-          </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1">

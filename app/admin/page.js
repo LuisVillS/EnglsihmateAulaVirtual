@@ -203,6 +203,12 @@ export default async function AdminPage({ searchParams }) {
                   Plantillas + Ejercicios
                 </Link>
                 <Link
+                  href="/admin/flashcards"
+                  className="rounded-full border border-border px-4 py-2 font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+                >
+                  Flashcards Library
+                </Link>
+                <Link
                   href="/admin/teacher-dashboard"
                   className="rounded-full border border-border px-4 py-2 font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
                 >
@@ -255,7 +261,7 @@ export default async function AdminPage({ searchParams }) {
                 Importar CSV
               </button>
               <p className="text-[11px] text-muted">
-                Columnas: full_name,email,dni,phone,birth_date,course_level,level_number,is_premium,start_month,enrollment_date,preferred_hour,modality
+                Columnas: full_name,email,dni,phone,birth_date,course_level,is_premium,start_month,enrollment_date,preferred_hour,modality
               </p>
               <p className="text-[11px] text-muted/85">
                 Modalidad valida: Diaria | Interdiaria (Lunes, Miercoles y Viernes) | Interdiaria (Martes y Jueves) | Sabatinos

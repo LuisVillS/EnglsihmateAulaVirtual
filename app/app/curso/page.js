@@ -12,10 +12,15 @@ import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionSta
 import { buildWeightedCourseGrade } from "@/lib/course-grade";
 import CourseBreadcrumbs from "@/components/course-breadcrumbs";
 import {
+  buildFlashcardLibraryMap,
+  resolveAssignedFlashcardRow,
+} from "@/lib/flashcards";
+import {
   isMissingLessonQuizRestartColumnError,
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
+import { getSignedDownloadUrl } from "@/lib/r2";
 
 function getMissingTableName(error) {
   const message = String(error?.message || "");
@@ -32,6 +37,18 @@ function getMissingColumnFromError(error) {
   if (relationMatch?.[1]) return relationMatch[1];
   const plainMatch = message.match(/column\s+([a-zA-Z0-9_]+)\s+does not exist/i);
   return plainMatch?.[1] || null;
+}
+
+async function resolveFlashcardAudioUrl(row) {
+  const r2Key = String(row?.audio_r2_key || "").trim();
+  if (r2Key) {
+    try {
+      return await getSignedDownloadUrl(r2Key);
+    } catch {
+      // fall through
+    }
+  }
+  return String(row?.audio_url || "").trim() || null;
 }
 
 function parseDateValue(value) {
@@ -343,26 +360,63 @@ export default async function CourseGatePage() {
 
     if (!itemsError) {
       let flashcardsBySessionId = {};
-      const flashcardsResult = await supabase
-        .from("session_flashcards")
-        .select("id, session_id, word, meaning, image_url, card_order, accepted_answers")
-        .in("session_id", persistedSessionIds)
-        .order("card_order", { ascending: true })
-        .order("created_at", { ascending: true });
+      let flashcardColumns = [
+        "id",
+        "session_id",
+        "flashcard_id",
+        "word",
+        "meaning",
+        "image_url",
+        "card_order",
+        "accepted_answers",
+      ];
+      let flashcardsResult = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await supabase
+          .from("session_flashcards")
+          .select(flashcardColumns.join(","))
+          .in("session_id", persistedSessionIds)
+          .order("card_order", { ascending: true })
+          .order("created_at", { ascending: true });
+        flashcardsResult = result;
+        if (!result.error) break;
+        const missingColumn = getMissingColumnFromError(result.error);
+        if (!missingColumn || !flashcardColumns.includes(missingColumn)) break;
+        flashcardColumns = flashcardColumns.filter((column) => column !== missingColumn);
+      }
 
-      if (!flashcardsResult.error) {
+      if (!flashcardsResult?.error) {
+        const flashcardIds = Array.from(
+          new Set(
+            (flashcardsResult?.data || [])
+              .map((row) => String(row?.flashcard_id || "").trim())
+              .filter(Boolean)
+          )
+        );
+        let flashcardsById = new Map();
+        if (flashcardIds.length) {
+          const flashcardsLibraryResult = await supabase
+            .from("flashcards")
+            .select("id, word, meaning, image_url, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config")
+            .in("id", flashcardIds);
+          if (!flashcardsLibraryResult.error) {
+            const hydratedLibraryRows = await Promise.all(
+              (flashcardsLibraryResult.data || []).map(async (row) => ({
+                ...row,
+                audio_url: await resolveFlashcardAudioUrl(row),
+              }))
+            );
+            flashcardsById = buildFlashcardLibraryMap(hydratedLibraryRows);
+          } else {
+            console.error("No se pudo cargar la biblioteca de flashcards", flashcardsLibraryResult.error);
+          }
+        }
+
         flashcardsBySessionId = (flashcardsResult.data || []).reduce((acc, row) => {
           const sessionKey = String(row?.session_id || "").trim();
           if (!sessionKey) return acc;
           if (!acc[sessionKey]) acc[sessionKey] = [];
-          acc[sessionKey].push({
-            id: row.id,
-            word: String(row.word || "").trim(),
-            meaning: String(row.meaning || "").trim(),
-            image: String(row.image_url || "").trim(),
-            order: Number(row.card_order || acc[sessionKey].length + 1) || acc[sessionKey].length + 1,
-            acceptedAnswers: Array.isArray(row.accepted_answers) ? row.accepted_answers : [],
-          });
+          acc[sessionKey].push(resolveAssignedFlashcardRow(row, flashcardsById, acc[sessionKey].length + 1));
           return acc;
         }, {});
       } else {
@@ -489,9 +543,7 @@ export default async function CourseGatePage() {
         acc[lessonId] = row;
         return acc;
       }, {});
-      quizAttemptRows = normalizedAttempts.filter(
-        (row) => String(row.attempt_status || "").trim().toLowerCase() === "completed"
-      );
+      quizAttemptRows = normalizedAttempts;
     }
   }
 

@@ -43,7 +43,7 @@ export default async function StudentDetailPage({ params: paramsPromise }) {
   let studentQuery = await supabase
     .from("profiles")
     .select(
-      "id, full_name, email, dni, phone, birth_date, student_code, course_level, level_number, is_premium, student_grade, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_time, end_time, modality_key, days_of_week)"
+      "id, full_name, email, dni, phone, birth_date, student_code, course_level, is_premium, student_grade, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_time, end_time, modality_key, days_of_week)"
     )
     .eq("id", studentId)
     .maybeSingle();
@@ -51,7 +51,7 @@ export default async function StudentDetailPage({ params: paramsPromise }) {
     studentQuery = await supabase
       .from("profiles")
       .select(
-        "id, full_name, email, dni, phone, birth_date, student_code, course_level, level_number, is_premium, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_time, end_time, modality_key, days_of_week)"
+        "id, full_name, email, dni, phone, birth_date, student_code, course_level, is_premium, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_time, end_time, modality_key, days_of_week)"
       )
       .eq("id", studentId)
       .maybeSingle();
@@ -103,7 +103,6 @@ export default async function StudentDetailPage({ params: paramsPromise }) {
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted">
-            <span className="rounded-full border border-border px-3 py-1">Nivel {student.level_number || "1"}</span>
             <span
               className={`rounded-full border px-3 py-1 ${
                 student.is_premium ? "border-accent/45 text-accent" : "border-border"

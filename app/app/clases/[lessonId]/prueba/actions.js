@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
   LESSON_QUIZ_MAX_RESTARTS,
   LESSON_QUIZ_STATUS,
+  isMissingLessonQuizAttemptScoreColumnError,
   isMissingLessonQuizRestartColumnError,
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
@@ -16,6 +17,19 @@ const LESSON_QUIZ_MAX_WRONG_ATTEMPTS = 1;
 function getText(formData, key) {
   const value = formData?.get(key);
   return value ? String(value).trim() : "";
+}
+
+function getJsonObject(formData, key) {
+  const raw = getText(formData, key);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function toInt(value, fallback = 0) {
@@ -42,7 +56,8 @@ function isMissingUserProgressQuizColumnsError(error) {
     message.includes("wrong_attempts") ||
     message.includes("final_status") ||
     message.includes("score_awarded") ||
-    message.includes("answered_at")
+    message.includes("answered_at") ||
+    message.includes("answer_snapshot")
   );
 }
 
@@ -92,7 +107,7 @@ async function upsertAttemptAsStarted({ supabase, userId, lessonId, totalExercis
     completed_count: 0,
     total_exercises: totalExercises,
     correct_count: 0,
-    score_percent: 0,
+    attempt_score_percent: 0,
     restart_count: Math.max(0, Math.min(LESSON_QUIZ_MAX_RESTARTS, toInt(restartCount, 0))),
     duration_seconds: null,
     started_at: nowIso,
@@ -104,9 +119,18 @@ async function upsertAttemptAsStarted({ supabase, userId, lessonId, totalExercis
     .from("lesson_quiz_attempts")
     .upsert(payload, { onConflict: "user_id,lesson_id" });
 
-  if (error && isMissingLessonQuizRestartColumnError(error)) {
+  if (
+    error &&
+    (isMissingLessonQuizRestartColumnError(error) || isMissingLessonQuizAttemptScoreColumnError(error))
+  ) {
     const fallbackPayload = { ...payload };
-    delete fallbackPayload.restart_count;
+    if (isMissingLessonQuizRestartColumnError(error)) {
+      delete fallbackPayload.restart_count;
+    }
+    if (isMissingLessonQuizAttemptScoreColumnError(error)) {
+      delete fallbackPayload.attempt_score_percent;
+      fallbackPayload.score_percent = 0;
+    }
     const { error: fallbackError } = await supabase
       .from("lesson_quiz_attempts")
       .upsert(fallbackPayload, { onConflict: "user_id,lesson_id" });
@@ -241,6 +265,7 @@ export async function submitLessonQuizStep(formData) {
   );
   const submittedFinalStatus = getText(formData, "finalStatus").toLowerCase();
   const submittedScoreAwarded = round2(toNumber(getText(formData, "scoreAwarded"), 0));
+  const submittedAnswerSnapshot = getJsonObject(formData, "answerSnapshot");
 
   const finalStatus =
     submittedWrongAttempts >= LESSON_QUIZ_MAX_WRONG_ATTEMPTS || submittedFinalStatus === "failed"
@@ -261,18 +286,20 @@ export async function submitLessonQuizStep(formData) {
   }
 
   let existingAttempt = null;
+  let legacyScoreMode = false;
   try {
     const { data, error } = await supabase
       .from("lesson_quiz_attempts")
       .select(
-        "user_id, lesson_id, attempt_status, current_index, completed_count, total_exercises, correct_count, score_percent, restart_count, started_at, completed_at"
+        "user_id, lesson_id, attempt_status, current_index, completed_count, total_exercises, correct_count, score_percent, attempt_score_percent, restart_count, started_at, completed_at"
       )
       .eq("user_id", userId)
       .eq("lesson_id", lessonId)
       .maybeSingle();
 
     if (error) {
-      if (isMissingLessonQuizRestartColumnError(error)) {
+      if (isMissingLessonQuizRestartColumnError(error) || isMissingLessonQuizAttemptScoreColumnError(error)) {
+        legacyScoreMode = true;
         const fallback = await supabase
           .from("lesson_quiz_attempts")
           .select(
@@ -287,6 +314,7 @@ export async function submitLessonQuizStep(formData) {
         existingAttempt = {
           ...(fallback.data || {}),
           restart_count: 0,
+          attempt_score_percent: fallback.data?.score_percent ?? null,
         };
       } else {
         throw new Error(error.message || "No se pudo cargar el intento de prueba.");
@@ -314,7 +342,14 @@ export async function submitLessonQuizStep(formData) {
   const isCompleted = nextCompleted >= totalExercises;
   const nextStatus = isCompleted ? LESSON_QUIZ_STATUS.COMPLETED : LESSON_QUIZ_STATUS.IN_PROGRESS;
   const nextIndex = isCompleted ? totalExercises - 1 : safeCurrentIndex + 1;
-  const nextScore = clamp(round2(toNumber(current.score_percent, 0) + scoreAwarded), 0, 100);
+  const currentAttemptScore = clamp(round2(toNumber(current.attempt_score_percent, 0)), 0, 100);
+  const nextAttemptScore = clamp(round2(currentAttemptScore + scoreAwarded), 0, 100);
+  const historicalBestScore = clamp(round2(toNumber(current.score_percent, 0)), 0, 100);
+  const nextBestScore = legacyScoreMode
+    ? nextAttemptScore
+    : isCompleted
+    ? Math.max(historicalBestScore, nextAttemptScore)
+    : historicalBestScore;
 
   const durationSeconds = isCompleted
     ? Math.max(
@@ -356,6 +391,7 @@ export async function submitLessonQuizStep(formData) {
       final_status: finalStatus,
       score_awarded: scoreAwarded,
       answered_at: nowIso,
+      answer_snapshot: submittedAnswerSnapshot,
     };
 
     let progressUpsertError = null;
@@ -398,21 +434,32 @@ export async function submitLessonQuizStep(formData) {
     completed_count: nextCompleted,
     total_exercises: totalExercises,
     correct_count: nextCorrect,
-    score_percent: nextScore,
+    score_percent: nextBestScore,
     restart_count: toInt(current.restart_count, 0),
     duration_seconds: durationSeconds,
     started_at: startedAtIso,
     completed_at: isCompleted ? nowIso : null,
     updated_at: nowIso,
   };
+  if (!legacyScoreMode) {
+    payload.attempt_score_percent = nextAttemptScore;
+  }
 
   let { error: upsertError } = await supabase
     .from("lesson_quiz_attempts")
     .upsert(payload, { onConflict: "user_id,lesson_id" });
 
-  if (upsertError && isMissingLessonQuizRestartColumnError(upsertError)) {
+  if (
+    upsertError &&
+    (isMissingLessonQuizRestartColumnError(upsertError) || isMissingLessonQuizAttemptScoreColumnError(upsertError))
+  ) {
     const fallbackPayload = { ...payload };
-    delete fallbackPayload.restart_count;
+    if (isMissingLessonQuizRestartColumnError(upsertError)) {
+      delete fallbackPayload.restart_count;
+    }
+    if (isMissingLessonQuizAttemptScoreColumnError(upsertError)) {
+      delete fallbackPayload.attempt_score_percent;
+    }
     const { error: fallbackUpsertError } = await supabase
       .from("lesson_quiz_attempts")
       .upsert(fallbackPayload, { onConflict: "user_id,lesson_id" });

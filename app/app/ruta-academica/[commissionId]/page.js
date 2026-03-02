@@ -313,14 +313,32 @@ export default async function RutaAcademicaDetailPage({ params: paramsPromise })
   );
   let quizAttemptRows = [];
   if (assignedQuizLessonIds.length) {
-    const { data: attempts, error: attemptsError } = await supabase
+    let attempts = [];
+    let attemptsError = null;
+
+    const primary = await supabase
       .from("lesson_quiz_attempts")
-      .select("lesson_id, attempt_status, score_percent")
+      .select("lesson_id, attempt_status, score_percent, restart_count")
       .eq("user_id", user.id)
-      .eq("attempt_status", "completed")
       .in("lesson_id", assignedQuizLessonIds);
+
+    if (!primary.error) {
+      attempts = primary.data || [];
+    } else {
+      const fallback = await supabase
+        .from("lesson_quiz_attempts")
+        .select("lesson_id, attempt_status, score_percent")
+        .eq("user_id", user.id)
+        .in("lesson_id", assignedQuizLessonIds);
+      if (!fallback.error) {
+        attempts = (fallback.data || []).map((row) => ({ ...row, restart_count: 0 }));
+      } else {
+        attemptsError = fallback.error;
+      }
+    }
+
     if (!attemptsError) {
-      quizAttemptRows = attempts || [];
+      quizAttemptRows = attempts;
     }
   }
   const gradeSummary = buildWeightedCourseGrade({

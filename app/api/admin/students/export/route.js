@@ -2,9 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
-import { STUDENT_LEVELS, LEVEL_NUMBERS } from "@/lib/student-constants";
-
-const LEVEL_STRINGS = LEVEL_NUMBERS.map((value) => String(value));
+import { STUDENT_LEVELS } from "@/lib/student-constants";
 
 function sanitizeSearch(value) {
   return value.replace(/%/g, "\\%").replace(/,/g, "\\,");
@@ -38,8 +36,6 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const rawCourse = searchParams.get("course") || "";
   const courseFilter = STUDENT_LEVELS.includes(rawCourse) ? rawCourse : "";
-  const rawLevel = searchParams.get("level") || "";
-  const levelFilter = LEVEL_STRINGS.includes(rawLevel) ? Number(rawLevel) : null;
   const searchTerm = (searchParams.get("q") || "").trim();
   const rawHour = searchParams.get("hour") || "";
   const parsedHour = Number(rawHour);
@@ -53,7 +49,7 @@ export async function GET(request) {
       : null;
 
   const studentsBaseSelect =
-    "student_code, full_name, email, dni, phone, birth_date, course_level, level_number, is_premium, start_month, enrollment_date, password_set, preferred_hour";
+    "student_code, full_name, email, dni, phone, birth_date, course_level, is_premium, start_month, enrollment_date, password_set, preferred_hour";
   let studentsQuery = supabase
     .from("profiles")
     .select(studentsBaseSelect)
@@ -62,10 +58,6 @@ export async function GET(request) {
 
   if (courseFilter) {
     studentsQuery = studentsQuery.eq("course_level", courseFilter);
-  }
-
-  if (levelFilter) {
-    studentsQuery = studentsQuery.eq("level_number", levelFilter);
   }
 
   if (hourFilter != null) {
@@ -83,7 +75,6 @@ export async function GET(request) {
   if (error && String(error.message || "").toLowerCase().includes("status")) {
     let legacyQuery = supabase.from("profiles").select(studentsBaseSelect).eq("role", "student");
     if (courseFilter) legacyQuery = legacyQuery.eq("course_level", courseFilter);
-    if (levelFilter) legacyQuery = legacyQuery.eq("level_number", levelFilter);
     if (hourFilter != null) legacyQuery = legacyQuery.eq("preferred_hour", hourFilter);
     if (searchTerm) {
       const sanitized = sanitizeSearch(searchTerm);
@@ -108,7 +99,6 @@ export async function GET(request) {
     "phone",
     "birth_date",
     "course_level",
-    "level_number",
     "is_premium",
     "start_month",
     "enrollment_date",
@@ -124,7 +114,6 @@ export async function GET(request) {
     toCsvValue(student.phone || ""),
     toCsvValue(student.birth_date || ""),
     toCsvValue(student.course_level || ""),
-    toCsvValue(student.level_number ?? ""),
     toCsvValue(student.is_premium ? "1" : "0"),
     toCsvValue(student.start_month || ""),
     toCsvValue(student.enrollment_date || ""),

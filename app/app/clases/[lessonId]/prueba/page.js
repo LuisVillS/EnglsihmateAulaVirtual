@@ -579,7 +579,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
                   Completada
                 </p>
                 {currentAttempt.score_percent != null ? (
-                  <p className="text-foreground">Puntaje: {Math.round(currentAttempt.score_percent)}%</p>
+                  <p className="text-foreground">Mejor puntaje: {Math.round(currentAttempt.score_percent)}%</p>
                 ) : null}
                 <p className="text-muted">
                   Intentos usados: {attemptsUsed}/{LESSON_QUIZ_MAX_TOTAL_ATTEMPTS}

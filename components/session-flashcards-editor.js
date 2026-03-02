@@ -1,6 +1,8 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { startTransition, useActionState, useEffect, useMemo, useState } from "react";
+import AppModal from "@/components/app-modal";
 import {
   saveSessionFlashcardsBatch,
   saveTemplateSessionFlashcardsBatch,
@@ -18,51 +20,31 @@ let localCounter = 0;
 
 function nextLocalId() {
   localCounter += 1;
-  return `flashcard-local-${localCounter}`;
+  return `flashcard-link-${localCounter}`;
 }
 
 function createDraft(card = {}) {
+  const legacyId = String(card?.legacyId || "").trim();
+  const explicitFlashcardId = String(card?.flashcardId || "").trim();
   return {
     localId: nextLocalId(),
     id: String(card?.id || "").trim(),
+    legacyId,
+    flashcardId: explicitFlashcardId || (!legacyId ? String(card?.id || "").trim() : ""),
     word: String(card?.word || "").trim(),
     meaning: String(card?.meaning || "").trim(),
     image: String(card?.image || "").trim(),
-    acceptedAnswers: Array.isArray(card?.acceptedAnswers)
-      ? card.acceptedAnswers.join(", ")
-      : String(card?.acceptedAnswers || "").trim(),
+    acceptedAnswers: Array.isArray(card?.acceptedAnswers) ? card.acceptedAnswers : [],
+    audioUrl: String(card?.audioUrl || "").trim(),
+    audioR2Key: String(card?.audioR2Key || "").trim(),
+    audioProvider: String(card?.audioProvider || "elevenlabs").trim() || "elevenlabs",
+    voiceId: String(card?.voiceId || "").trim(),
+    elevenLabsConfig: card?.elevenLabsConfig && typeof card.elevenLabsConfig === "object" ? card.elevenLabsConfig : null,
   };
 }
 
 function toDraftList(cards = []) {
   return Array.isArray(cards) ? cards.map((card) => createDraft(card)) : [];
-}
-
-function normalizeAcceptedAnswers(rawValue) {
-  return Array.from(
-    new Set(
-      String(rawValue || "")
-        .split(/[\r\n,|]+/)
-        .map((value) => value.trim())
-        .filter(Boolean)
-    )
-  );
-}
-
-function parseBulkRows(rawValue) {
-  return String(rawValue || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const parts = line.includes("|") ? line.split("|") : line.split("\t");
-      const [word, meaning] = parts;
-      return {
-        word: String(word || "").trim(),
-        meaning: String(meaning || "").trim(),
-      };
-    })
-    .filter((row) => row.word || row.meaning);
 }
 
 function moveItem(list, fromIndex, toIndex) {
@@ -74,6 +56,22 @@ function moveItem(list, fromIndex, toIndex) {
   return next;
 }
 
+function matchesSearch(card, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return true;
+  return [card?.word, card?.meaning]
+    .map((value) => String(value || "").toLowerCase())
+    .some((value) => value.includes(needle));
+}
+
+function buildCardSignature(card) {
+  return [
+    String(card?.word || "").trim().toLowerCase(),
+    String(card?.meaning || "").trim().toLowerCase(),
+    String(card?.image || "").trim(),
+  ].join("::");
+}
+
 export default function SessionFlashcardsEditor({
   scope = "commission",
   commissionId = "",
@@ -82,57 +80,65 @@ export default function SessionFlashcardsEditor({
   templateSessionId = "",
   initialTitle = "Flashcards",
   initialCards = [],
+  libraryCards = [],
+  libraryError = "",
 }) {
   const submitAction = scope === "template" ? saveTemplateSessionFlashcardsBatch : saveSessionFlashcardsBatch;
   const [state, formAction, pending] = useActionState(submitAction, INITIAL_STATE);
   const [materialTitle, setMaterialTitle] = useState(() => String(initialTitle || "Flashcards").trim() || "Flashcards");
   const [cards, setCards] = useState(() => toDraftList(initialCards));
-  const [bulkInput, setBulkInput] = useState("");
   const [clientNotice, setClientNotice] = useState("");
-  const [clientError, setClientError] = useState("");
-  const [draggedLocalId, setDraggedLocalId] = useState("");
-  const [uploadingLocalId, setUploadingLocalId] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
+  const [pickerSelection, setPickerSelection] = useState([]);
 
   useEffect(() => {
     if (!Array.isArray(state?.cards)) return;
-    setCards(toDraftList(state.cards));
-    if (state?.materialTitle) {
-      setMaterialTitle(String(state.materialTitle || "").trim() || "Flashcards");
-    }
+    startTransition(() => {
+      setCards(toDraftList(state.cards));
+      if (state?.materialTitle) {
+        setMaterialTitle(String(state.materialTitle || "").trim() || "Flashcards");
+      }
+    });
   }, [state]);
+
+  const selectedIds = useMemo(
+    () => new Set(cards.map((card) => String(card.flashcardId || "").trim()).filter(Boolean)),
+    [cards]
+  );
+  const selectedSignatures = useMemo(
+    () => new Set(cards.map((card) => buildCardSignature(card)).filter((value) => value !== "::::")),
+    [cards]
+  );
 
   const serializedCards = useMemo(
     () =>
       JSON.stringify(
         cards.map((card, index) => ({
           id: card.id,
+          legacyId: card.legacyId,
+          flashcardId: card.flashcardId,
           word: card.word,
           meaning: card.meaning,
           image: card.image,
           order: index + 1,
-          acceptedAnswers: normalizeAcceptedAnswers(card.acceptedAnswers),
+          acceptedAnswers: card.acceptedAnswers,
+          audioUrl: card.audioUrl,
+          audioR2Key: card.audioR2Key,
+          audioProvider: card.audioProvider,
+          voiceId: card.voiceId,
+          elevenLabsConfig: card.elevenLabsConfig,
         }))
       ),
     [cards]
   );
 
-  function updateCard(localId, patch) {
-    setCards((previous) =>
-      previous.map((card) => (card.localId === localId ? { ...card, ...patch } : card))
-    );
-  }
-
-  function addCard() {
-    setClientError("");
-    setClientNotice("");
-    setCards((previous) => [
-      ...previous,
-      createDraft({ word: "", meaning: "", image: "", acceptedAnswers: [] }),
-    ]);
-  }
+  const filteredLibraryCards = useMemo(
+    () => (Array.isArray(libraryCards) ? libraryCards.filter((card) => matchesSearch(card, pickerQuery)) : []),
+    [libraryCards, pickerQuery]
+  );
 
   function removeCard(localId) {
-    setClientError("");
     setClientNotice("");
     setCards((previous) => previous.filter((card) => card.localId !== localId));
   }
@@ -147,97 +153,46 @@ export default function SessionFlashcardsEditor({
     });
   }
 
-  function handleBulkAdd() {
-    const rows = parseBulkRows(bulkInput);
-    if (!rows.length) {
-      setClientError("Agrega lineas con el formato word | meaning.");
-      setClientNotice("");
-      return;
-    }
-
-    setCards((previous) => [
-      ...previous,
-      ...rows.map((row) =>
-        createDraft({
-          word: row.word,
-          meaning: row.meaning,
-          image: "",
-          acceptedAnswers: [],
-        })
-      ),
-    ]);
-    setBulkInput("");
-    setClientError("");
-    setClientNotice(`${rows.length} flashcard(s) agregadas al editor.`);
+  function openPicker() {
+    setPickerSelection([]);
+    setPickerQuery("");
+    setPickerOpen(true);
   }
 
-  async function handleUpload(localId, file) {
-    if (!file) return;
-
-    setUploadingLocalId(localId);
-    setClientError("");
-    setClientNotice("");
-
-    try {
-      const signResponse = await fetch("/api/r2/upload", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          fileName: file.name,
-          contentType: file.type || "image/png",
-          visibility: "public",
-          folder: "images",
-        }),
-      });
-
-      if (!signResponse.ok) {
-        throw new Error("No se pudo obtener la URL firmada para la imagen.");
+  function togglePickerSelection(flashcardId) {
+    setPickerSelection((previous) => {
+      const value = String(flashcardId || "").trim();
+      if (!value) return previous;
+      if (previous.includes(value)) {
+        return previous.filter((item) => item !== value);
       }
-
-      const signData = await signResponse.json();
-      const uploadResponse = await fetch(signData.uploadUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": file.type || "image/png",
-        },
-        body: file,
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error("El upload de la imagen fallo.");
-      }
-
-      if (!signData.publicUrl) {
-        throw new Error("No se recibio la URL publica de la imagen.");
-      }
-
-      updateCard(localId, { image: signData.publicUrl });
-      setClientNotice("Imagen subida y asignada a la flashcard.");
-    } catch (error) {
-      setClientError(error?.message || "No se pudo subir la imagen.");
-    } finally {
-      setUploadingLocalId("");
-    }
-  }
-
-  function handleDragStart(localId) {
-    setDraggedLocalId(localId);
-  }
-
-  function handleDrop(targetLocalId) {
-    if (!draggedLocalId || draggedLocalId === targetLocalId) {
-      setDraggedLocalId("");
-      return;
-    }
-
-    setCards((previous) => {
-      const fromIndex = previous.findIndex((card) => card.localId === draggedLocalId);
-      const toIndex = previous.findIndex((card) => card.localId === targetLocalId);
-      return moveItem(previous, fromIndex, toIndex);
+      return [...previous, value];
     });
-    setDraggedLocalId("");
+  }
+
+  function confirmPickerSelection() {
+    const selectedLibraryRows = (libraryCards || []).filter((card) => pickerSelection.includes(String(card.id || "").trim()));
+    if (!selectedLibraryRows.length) {
+      setPickerOpen(false);
+      return;
+    }
+
+    const nextCards = selectedLibraryRows
+      .filter((card) => {
+        const flashcardId = String(card.id || "").trim();
+        return !selectedIds.has(flashcardId) && !selectedSignatures.has(buildCardSignature(card));
+      })
+      .map((card) => createDraft(card));
+
+    if (!nextCards.length) {
+      setClientNotice("Las flashcards seleccionadas ya estaban agregadas.");
+      setPickerOpen(false);
+      return;
+    }
+
+    setCards((previous) => [...previous, ...nextCards]);
+    setClientNotice(`${nextCards.length} flashcard(s) agregadas desde la biblioteca.`);
+    setPickerOpen(false);
   }
 
   return (
@@ -252,9 +207,9 @@ export default function SessionFlashcardsEditor({
           {state.message}
         </p>
       ) : null}
-      {clientError ? (
+      {libraryError ? (
         <p className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-          {clientError}
+          {libraryError}
         </p>
       ) : null}
       {clientNotice ? (
@@ -286,32 +241,26 @@ export default function SessionFlashcardsEditor({
               />
             </div>
 
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">
-                Carga rapida (opcional)
-              </label>
-              <textarea
-                rows={4}
-                value={bulkInput}
-                onChange={(event) => setBulkInput(event.target.value)}
-                className="mt-2 w-full rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground"
-                placeholder={"dog | perro\ncat | gato"}
-              />
-              <div className="mt-3 flex flex-wrap gap-2">
+            <div className="rounded-2xl border border-border bg-surface-2 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Biblioteca</p>
+              <p className="mt-2 text-sm text-muted">
+                Agrega flashcards ya registrados y guárdalos como referencias para esta clase.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={handleBulkAdd}
-                  className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+                  onClick={openPicker}
+                  disabled={!libraryCards.length}
+                  className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Agregar lote
+                  Agregar flashcards
                 </button>
-                <button
-                  type="button"
-                  onClick={addCard}
-                  className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+                <Link
+                  href="/admin/flashcards"
+                  className="rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface"
                 >
-                  Nueva flashcard
-                </button>
+                  Abrir biblioteca
+                </Link>
                 <button
                   type="button"
                   onClick={() => setCards([])}
@@ -326,9 +275,9 @@ export default function SessionFlashcardsEditor({
           <div className="rounded-3xl border border-primary/20 bg-primary/5 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Resumen</p>
             <p className="mt-2 text-3xl font-semibold text-foreground">{cards.length}</p>
-            <p className="text-sm text-muted">flashcard(s) en este set</p>
+            <p className="text-sm text-muted">flashcard(s) asignadas a este set</p>
             <p className="mt-4 text-xs text-muted">
-              Si vacias la lista y guardas, el material Flashcards se elimina de la clase.
+              Al guardar, la clase conserva solo referencias a la biblioteca central.
             </p>
             <button
               type="submit"
@@ -346,10 +295,6 @@ export default function SessionFlashcardsEditor({
           {cards.map((card, index) => (
             <section
               key={card.localId}
-              draggable
-              onDragStart={() => handleDragStart(card.localId)}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={() => handleDrop(card.localId)}
               className="rounded-3xl border border-border bg-surface p-5 shadow-sm"
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -358,7 +303,7 @@ export default function SessionFlashcardsEditor({
                     #{index + 1}
                   </span>
                   <span className="rounded-full border border-primary/25 bg-primary/8 px-3 py-1 text-xs font-semibold text-primary">
-                    Arrastra para reordenar
+                    {card.flashcardId ? "Biblioteca central" : "Legacy pendiente de migrar"}
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -383,104 +328,55 @@ export default function SessionFlashcardsEditor({
                     onClick={() => removeCard(card.localId)}
                     className="rounded-xl border border-danger/45 px-3 py-2 text-xs font-semibold text-danger transition hover:bg-danger/10"
                   >
-                    Eliminar
+                    Quitar
                   </button>
                 </div>
               </div>
 
               <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted">Word</label>
-                    <input
-                      value={card.word}
-                      onChange={(event) => updateCard(card.localId, { word: event.target.value })}
-                      className="w-full rounded-2xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-                      placeholder="dog"
-                    />
+                <div className="space-y-3 rounded-3xl border border-border bg-surface-2 p-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Word</p>
+                    <p className="mt-1 text-lg font-semibold text-foreground">{card.word || "Sin word"}</p>
                   </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted">Meaning</label>
-                    <input
-                      value={card.meaning}
-                      onChange={(event) => updateCard(card.localId, { meaning: event.target.value })}
-                      className="w-full rounded-2xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-                      placeholder="perro"
-                    />
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Meaning</p>
+                    <p className="mt-1 text-sm text-muted">{card.meaning || "Sin meaning"}</p>
                   </div>
-
-                  <div className="space-y-1 md:col-span-2">
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted">
-                      Imagen (URL)
-                    </label>
-                    <input
-                      value={card.image}
-                      onChange={(event) => updateCard(card.localId, { image: event.target.value })}
-                      className="w-full rounded-2xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-                      placeholder="https://..."
-                    />
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Variantes aceptadas</p>
+                    <p className="mt-1 text-sm text-muted">
+                      {card.acceptedAnswers.length ? card.acceptedAnswers.join(", ") : "Sin variantes extra"}
+                    </p>
                   </div>
-
-                  <div className="space-y-1 md:col-span-2">
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted">
-                      Variantes aceptadas (opcional)
-                    </label>
-                    <input
-                      value={card.acceptedAnswers}
-                      onChange={(event) => updateCard(card.localId, { acceptedAnswers: event.target.value })}
-                      className="w-full rounded-2xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-                      placeholder="doggo, puppy"
-                    />
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <label className="inline-flex cursor-pointer items-center rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-3 text-sm font-medium text-foreground">
-                      {uploadingLocalId === card.localId ? "Subiendo imagen..." : "Subir imagen"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        disabled={uploadingLocalId === card.localId}
-                        onChange={(event) => {
-                          const file = event.target.files?.[0];
-                          event.target.value = "";
-                          handleUpload(card.localId, file);
-                        }}
-                      />
-                    </label>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Audio</p>
+                    <p className="mt-1 text-sm text-muted">
+                      {card.audioUrl
+                        ? `Audio guardado (${card.audioProvider || "elevenlabs"})`
+                        : "Sin audio registrado"}
+                    </p>
                   </div>
                 </div>
 
                 <div className="space-y-3 rounded-3xl border border-border bg-surface-2 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Preview</p>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                    <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-                      <div className="border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                        Front
-                      </div>
-                      <div className="flex aspect-[4/3] items-center justify-center bg-surface-2 p-3">
-                        {card.image ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={card.image}
-                            alt={card.word || "Flashcard image"}
-                            className="h-full w-full rounded-xl object-contain"
-                          />
-                        ) : (
-                          <span className="text-xs text-muted">Sin imagen</span>
-                        )}
-                      </div>
+                  <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+                    <div className="flex aspect-[4/3] items-center justify-center bg-surface-2 p-3">
+                      {card.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={card.image}
+                          alt={card.word || "Flashcard image"}
+                          className="h-full w-full rounded-xl object-contain"
+                        />
+                      ) : (
+                        <span className="text-xs text-muted">Sin imagen</span>
+                      )}
                     </div>
-
-                    <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-                      <div className="border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                        Back
-                      </div>
-                      <div className="flex min-h-36 flex-col justify-center gap-2 px-4 py-4 text-center">
-                        <p className="text-lg font-semibold text-foreground">{card.word || "Word"}</p>
-                        <p className="text-sm text-muted">{card.meaning || "Meaning"}</p>
-                      </div>
+                    <div className="border-t border-border px-4 py-3 text-center">
+                      <p className="text-base font-semibold text-foreground">{card.word || "Word"}</p>
+                      <p className="text-sm text-muted">{card.meaning || "Meaning"}</p>
                     </div>
                   </div>
                 </div>
@@ -492,10 +388,108 @@ export default function SessionFlashcardsEditor({
         <div className="rounded-3xl border border-dashed border-border bg-surface p-8 text-center">
           <p className="text-lg font-semibold text-foreground">No hay flashcards en el editor</p>
           <p className="mt-2 text-sm text-muted">
-            Agrega una tarjeta manualmente o pega varias lineas con el formato word | meaning.
+            Usa el selector para agregar tarjetas desde la biblioteca central.
           </p>
         </div>
       )}
+
+      <AppModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        title="Agregar flashcards"
+        widthClass="max-w-5xl"
+      >
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Biblioteca central</p>
+              <p className="text-xs text-muted">
+                Busca y selecciona varias tarjetas para agregarlas a esta clase.
+              </p>
+            </div>
+            <div className="text-xs font-semibold text-muted">
+              Seleccionadas: {pickerSelection.length}
+            </div>
+          </div>
+
+          <input
+            value={pickerQuery}
+            onChange={(event) => setPickerQuery(event.target.value)}
+            className="w-full rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground"
+            placeholder="Buscar por word o meaning"
+          />
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {filteredLibraryCards.map((card) => {
+              const flashcardId = String(card.id || "").trim();
+              const selected = pickerSelection.includes(flashcardId);
+              const alreadyAdded =
+                selectedIds.has(flashcardId) || selectedSignatures.has(buildCardSignature(card));
+
+              return (
+                <button
+                  key={flashcardId}
+                  type="button"
+                  disabled={alreadyAdded}
+                  onClick={() => togglePickerSelection(flashcardId)}
+                  className={`overflow-hidden rounded-3xl border text-left transition ${
+                    alreadyAdded
+                      ? "cursor-not-allowed border-border bg-surface opacity-55"
+                      : selected
+                        ? "border-primary/50 bg-primary/10"
+                        : "border-border bg-surface hover:border-primary/35 hover:bg-surface-2"
+                  }`}
+                >
+                  <div className="flex aspect-[4/3] items-center justify-center bg-surface-2 p-3">
+                    {card.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={card.image}
+                        alt={card.word || "Flashcard image"}
+                        className="h-full w-full rounded-2xl object-contain"
+                      />
+                    ) : (
+                      <span className="text-xs text-muted">Sin imagen</span>
+                    )}
+                  </div>
+                  <div className="space-y-1 border-t border-border px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-foreground">{card.word || "Sin word"}</p>
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                        {alreadyAdded ? "Ya agregado" : selected ? "Listo" : "Agregar"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted">{card.meaning || "Sin meaning"}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {!filteredLibraryCards.length ? (
+            <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-6 text-center text-sm text-muted">
+              No hay resultados para esa búsqueda.
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setPickerOpen(false)}
+              className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={confirmPickerSelection}
+              className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+            >
+              Agregar seleccionadas
+            </button>
+          </div>
+        </div>
+      </AppModal>
     </div>
   );
 }

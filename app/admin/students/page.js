@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
-import { STUDENT_LEVELS, LEVEL_NUMBERS } from "@/lib/student-constants";
+import { STUDENT_LEVELS } from "@/lib/student-constants";
 import StudentRowActions from "@/components/student-row-actions";
 import AdminStudentCreateModal from "@/components/admin-student-create-modal";
 import AdminStudentImportModal from "@/components/admin-student-import-modal";
@@ -11,7 +11,6 @@ export const metadata = {
   title: "Gestion de alumnos | Aula Virtual",
 };
 
-const LEVEL_STRINGS = LEVEL_NUMBERS.map((level) => String(level));
 const HOUR_OPTIONS = Array.from({ length: ((1410 - 360) / 30) + 1 }, (_, idx) => 360 + idx * 30);
 const NON_APPROVED_PRE_ENROLLMENT_STATUSES = new Set([
   "PENDING_EMAIL_VERIFICATION",
@@ -53,10 +52,10 @@ function getMissingColumnFromError(error) {
   return plainMatch?.[1] || null;
 }
 
-function FiltersBar({ course, level, search, hour }) {
+function FiltersBar({ course, search, hour }) {
   return (
     <form className="rounded-2xl border border-border bg-surface p-4 text-foreground shadow-sm" method="get">
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-3">
         <div className="space-y-1">
           <label className="text-xs font-semibold uppercase tracking-wide text-muted">Curso</label>
           <select
@@ -66,21 +65,6 @@ function FiltersBar({ course, level, search, hour }) {
           >
             <option value="">Todos</option>
             {STUDENT_LEVELS.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs font-semibold uppercase tracking-wide text-muted">Nivel</label>
-          <select
-            name="level"
-            defaultValue={level}
-            className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-          >
-            <option value="">Todos</option>
-            {LEVEL_NUMBERS.map((option) => (
               <option key={option} value={option}>
                 {option}
               </option>
@@ -226,8 +210,6 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
 
   const rawCourse = typeof searchParams?.course === "string" ? searchParams.course : "";
   const courseFilter = STUDENT_LEVELS.includes(rawCourse) ? rawCourse : "";
-  const rawLevel = typeof searchParams?.level === "string" ? searchParams.level : "";
-  const levelFilter = LEVEL_STRINGS.includes(rawLevel) ? Number(rawLevel) : null;
   const searchTerm = typeof searchParams?.q === "string" ? searchParams.q.trim() : "";
   const rawHour = typeof searchParams?.hour === "string" ? searchParams.hour : "";
   const parsedHour = Number(rawHour);
@@ -245,7 +227,6 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
     "email_verified_at",
     "student_code",
     "course_level",
-    "level_number",
     "is_premium",
     "start_month",
     "enrollment_date",
@@ -268,9 +249,6 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
 
     if (courseFilter) {
       query = query.eq("course_level", courseFilter);
-    }
-    if (levelFilter) {
-      query = query.eq("level_number", levelFilter);
     }
     if (hourFilter != null) {
       query = query.eq("preferred_hour", hourFilter);
@@ -396,7 +374,6 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
 
   const params = new URLSearchParams();
   if (courseFilter) params.set("course", courseFilter);
-  if (levelFilter) params.set("level", String(levelFilter));
   if (searchTerm) params.set("q", searchTerm);
   if (hourFilter != null) params.set("hour", String(hourFilter));
   const downloadHref = `/api/admin/students/export${params.toString() ? `?${params.toString()}` : ""}`;
@@ -432,7 +409,6 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
 
         <FiltersBar
           course={courseFilter}
-          level={levelFilter ? String(levelFilter) : ""}
           search={searchTerm}
           hour={hourFilter != null ? String(hourFilter) : ""}
         />

@@ -26,6 +26,12 @@ import { getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { prepareExercisePayload } from "@/lib/duolingo/exercises";
 import { EXERCISE_SKILL_TAG_VALUES, EXERCISE_TYPE_VALUES } from "@/lib/duolingo/constants";
 import {
+  buildFlashcardLibraryMap,
+  mapLibraryFlashcardRow,
+  parseFlashcardsBatch,
+  resolveAssignedFlashcardRow,
+} from "@/lib/flashcards";
+import {
   archiveExercisesIfOrphaned,
   runExerciseGarbageCollection,
 } from "@/lib/duolingo/exercise-lifecycle";
@@ -1214,22 +1220,64 @@ async function loadTemplateMaterialBySessionIndex(supabase, { courseLevel, frequ
       return acc;
     }, new Map());
 
-    const flashcardsResult = await supabase
-      .from("template_session_flashcards")
-      .select("id, template_session_id, word, meaning, image_url, card_order, accepted_answers")
-      .in("template_session_id", templateSessionIds)
-      .order("card_order", { ascending: true })
-      .order("created_at", { ascending: true });
+    let flashcardColumns = [
+      "id",
+      "template_session_id",
+      "flashcard_id",
+      "word",
+      "meaning",
+      "image_url",
+      "card_order",
+      "accepted_answers",
+    ];
+    let flashcardsResult = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await supabase
+        .from("template_session_flashcards")
+        .select(flashcardColumns.join(","))
+        .in("template_session_id", templateSessionIds)
+        .order("card_order", { ascending: true })
+        .order("created_at", { ascending: true });
+      flashcardsResult = result;
+      if (!result.error) break;
+      const missingColumn = getMissingColumnFromError(result.error);
+      if (!missingColumn || !flashcardColumns.includes(missingColumn)) break;
+      flashcardColumns = flashcardColumns.filter((column) => column !== missingColumn);
+    }
 
-    if (flashcardsResult.error) {
+    if (flashcardsResult?.error) {
       const missingTable = getMissingTableName(flashcardsResult.error);
       if (!missingTable?.endsWith("template_session_flashcards")) {
         return { error: flashcardsResult.error.message || "No se pudo consultar flashcards de plantilla." };
       }
     } else {
+      const flashcardIds = Array.from(
+        new Set(
+          (flashcardsResult?.data || [])
+            .map((row) => String(row?.flashcard_id || "").trim())
+            .filter(Boolean)
+        )
+      );
+      let flashcardsById = new Map();
+      if (flashcardIds.length) {
+        const flashcardsLibraryResult = await supabase
+          .from("flashcards")
+          .select(FLASHCARD_LIBRARY_SELECT)
+          .in("id", flashcardIds);
+        if (flashcardsLibraryResult.error) {
+          return {
+            error:
+              buildFlashcardsSchemaError(flashcardsLibraryResult.error) ||
+              flashcardsLibraryResult.error.message ||
+              "No se pudo cargar la biblioteca de flashcards.",
+          };
+        }
+        flashcardsById = buildFlashcardLibraryMap(flashcardsLibraryResult.data || []);
+      }
+
       flashcardsByTemplateSessionId = (flashcardsResult.data || []).reduce((acc, row) => {
         const current = acc.get(row.template_session_id) || [];
-        current.push(mapSessionFlashcardRow(row, current.length + 1));
+        current.push(resolveAssignedFlashcardRow(row, flashcardsById, current.length + 1));
         acc.set(row.template_session_id, current);
         return acc;
       }, new Map());
@@ -1469,13 +1517,14 @@ async function regenerateCommissionSessions(supabase, commission) {
         });
 
         for (const [index, card] of payload.flashcards.entries()) {
+          const referenceResult = await ensureFlashcardLibraryReference(supabase, card);
+          if (referenceResult.error) {
+            return { error: referenceResult.error };
+          }
           flashcardRows.push({
             session_id: session.id,
-            word: card.word,
-            meaning: card.meaning,
-            image_url: card.image,
+            flashcard_id: referenceResult.card.id,
             card_order: index + 1,
-            accepted_answers: Array.isArray(card.acceptedAnswers) ? card.acceptedAnswers : [],
           });
         }
       }
@@ -1499,11 +1548,12 @@ async function regenerateCommissionSessions(supabase, commission) {
     if (flashcardRows.length) {
       const insertFlashcardsResult = await supabase.from("session_flashcards").insert(flashcardRows);
       if (insertFlashcardsResult.error) {
-        const missingTable = getMissingTableName(insertFlashcardsResult.error);
-        if (missingTable?.endsWith("session_flashcards")) {
-          return { error: "Actualiza el SQL: falta la tabla session_flashcards." };
-        }
-        return { error: insertFlashcardsResult.error.message || "No se pudieron copiar flashcards de plantilla." };
+        return {
+          error:
+            buildFlashcardsSchemaError(insertFlashcardsResult.error) ||
+            insertFlashcardsResult.error.message ||
+            "No se pudieron copiar flashcards de plantilla.",
+        };
       }
     }
   }
@@ -1745,49 +1795,171 @@ function normalizeSessionItemType(value) {
   return allowed.has(raw) ? raw : "note";
 }
 
-function normalizeFlashcardAcceptedAnswers(input) {
-  const source = Array.isArray(input)
-    ? input
-    : String(input || "")
-      .split(/[\r\n,|]+/);
+const FLASHCARD_LIBRARY_SELECT =
+  "id, word, meaning, image_url, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config";
 
-  return Array.from(
-    new Set(
-      source
-        .map((value) => String(value || "").trim())
-        .filter(Boolean)
-    )
-  );
+function buildFlashcardsSchemaError(error) {
+  const message = String(error?.message || "");
+  const missingTable = getMissingTableName(error);
+  if (missingTable === "flashcards" || missingTable?.endsWith(".flashcards")) {
+    return "Falta crear la tabla flashcards. Ejecuta el SQL actualizado de biblioteca central.";
+  }
+  const missingColumn = getMissingColumnFromError(error);
+  if (missingColumn === "flashcard_id") {
+    return "Actualiza el SQL de flashcards: falta la columna flashcard_id en las tablas de asignacion.";
+  }
+  if (/null value in column\s+"?(word|meaning|image_url)"?/i.test(message)) {
+    return "Actualiza el SQL de flashcards: las tablas de asignacion aun requieren contenido embebido.";
+  }
+  return null;
 }
 
-function parseSessionFlashcardsBatch(rawBatch) {
-  let rows = [];
-  try {
-    const parsed = JSON.parse(String(rawBatch || "[]"));
-    rows = Array.isArray(parsed) ? parsed : [];
-  } catch {
-    throw new Error("Formato invalido de flashcards (batchJson).");
+async function ensureFlashcardLibraryReference(supabase, row) {
+  const requestedId = String(row?.flashcardId || "").trim();
+  if (requestedId) {
+    const existingResult = await supabase
+      .from("flashcards")
+      .select(FLASHCARD_LIBRARY_SELECT)
+      .eq("id", requestedId)
+      .maybeSingle();
+
+    if (existingResult.error) {
+      return { error: buildFlashcardsSchemaError(existingResult.error) || existingResult.error.message || "No se pudo validar la flashcard." };
+    }
+
+    if (!existingResult.data?.id) {
+      return { error: "Una de las flashcards seleccionadas ya no existe en la biblioteca." };
+    }
+
+    return { card: mapLibraryFlashcardRow(existingResult.data) };
   }
 
-  return rows.map((row, index) => ({
-    id: String(row?.id || "").trim(),
-    word: String(row?.word || "").trim(),
-    meaning: String(row?.meaning || "").trim(),
-    image: String(row?.image || row?.image_url || "").trim(),
-    order: Number.parseInt(String(row?.order ?? index + 1), 10) || index + 1,
-    acceptedAnswers: normalizeFlashcardAcceptedAnswers(row?.acceptedAnswers ?? row?.accepted_answers),
-  }));
+  if (!row?.word || !row?.meaning || !row?.image) {
+    return { error: "Cada flashcard legacy debe incluir word, meaning e image para migrarse a la biblioteca." };
+  }
+
+  const reuseResult = await supabase
+    .from("flashcards")
+    .select(FLASHCARD_LIBRARY_SELECT)
+    .eq("word", row.word)
+    .eq("meaning", row.meaning)
+    .eq("image_url", row.image)
+    .limit(1)
+    .maybeSingle();
+
+  if (reuseResult.error) {
+    return { error: buildFlashcardsSchemaError(reuseResult.error) || reuseResult.error.message || "No se pudo consultar la biblioteca de flashcards." };
+  }
+
+  if (reuseResult.data?.id) {
+    return { card: mapLibraryFlashcardRow(reuseResult.data) };
+  }
+
+  const insertResult = await supabase
+    .from("flashcards")
+    .insert({
+      word: row.word,
+      meaning: row.meaning,
+      image_url: row.image,
+      accepted_answers: Array.isArray(row.acceptedAnswers) ? row.acceptedAnswers : [],
+      audio_url: row.audioUrl || null,
+      audio_r2_key: row.audioR2Key || null,
+      audio_provider: row.audioProvider || "elevenlabs",
+      voice_id: row.voiceId || null,
+      elevenlabs_config: row.elevenLabsConfig || null,
+      updated_at: new Date().toISOString(),
+    })
+    .select(FLASHCARD_LIBRARY_SELECT)
+    .maybeSingle();
+
+  if (insertResult.error) {
+    return { error: buildFlashcardsSchemaError(insertResult.error) || insertResult.error.message || "No se pudo migrar una flashcard legacy a la biblioteca." };
+  }
+
+  return { card: mapLibraryFlashcardRow(insertResult.data) };
 }
 
-function mapSessionFlashcardRow(row, fallbackOrder = 1) {
-  return {
-    id: String(row?.id || "").trim(),
-    word: String(row?.word || "").trim(),
-    meaning: String(row?.meaning || "").trim(),
-    image: String(row?.image_url || "").trim(),
-    order: Number(row?.card_order || fallbackOrder) || fallbackOrder,
-    acceptedAnswers: normalizeFlashcardAcceptedAnswers(row?.accepted_answers),
-  };
+async function replaceAssignedFlashcards({
+  supabase,
+  tableName,
+  ownerColumn,
+  ownerId,
+  rows,
+}) {
+  if (!rows.length) {
+    const deleteResult = await supabase.from(tableName).delete().eq(ownerColumn, ownerId);
+    if (deleteResult.error) {
+      return {
+        error:
+          buildFlashcardsSchemaError(deleteResult.error) ||
+          deleteResult.error.message ||
+          "No se pudieron limpiar las flashcards previas.",
+      };
+    }
+    return { cards: [] };
+  }
+
+  const existingRowsResult = await supabase
+    .from(tableName)
+    .select("id")
+    .eq(ownerColumn, ownerId);
+  if (existingRowsResult.error) {
+    return {
+      error:
+        buildFlashcardsSchemaError(existingRowsResult.error) ||
+        existingRowsResult.error.message ||
+        "No se pudieron validar las flashcards actuales.",
+    };
+  }
+
+  const insertRows = [];
+  const savedCards = [];
+
+  for (const [index, row] of rows.entries()) {
+    const referenceResult = await ensureFlashcardLibraryReference(supabase, row);
+    if (referenceResult.error) {
+      return { error: referenceResult.error };
+    }
+
+    const libraryCard = referenceResult.card;
+    insertRows.push({
+      [ownerColumn]: ownerId,
+      flashcard_id: libraryCard.id,
+      card_order: index + 1,
+      updated_at: new Date().toISOString(),
+    });
+    savedCards.push({
+      ...libraryCard,
+      order: index + 1,
+      legacyId: "",
+    });
+  }
+
+  const insertResult = await supabase.from(tableName).insert(insertRows);
+  if (insertResult.error) {
+    return {
+      error:
+        buildFlashcardsSchemaError(insertResult.error) ||
+        insertResult.error.message ||
+        "No se pudieron guardar las referencias de flashcards.",
+    };
+  }
+
+  const existingIds = (existingRowsResult.data || [])
+    .map((row) => String(row?.id || "").trim())
+    .filter(Boolean);
+  if (existingIds.length) {
+    const deleteResult = await supabase.from(tableName).delete().in("id", existingIds);
+    if (deleteResult.error) {
+      return {
+        error:
+          deleteResult.error.message ||
+          "Se insertaron nuevas referencias, pero no se pudieron limpiar las anteriores.",
+      };
+    }
+  }
+
+  return { cards: savedCards };
 }
 
 function normalizeLinkSource(value) {
@@ -1812,7 +1984,7 @@ export async function saveSessionFlashcardsBatch(prevState, maybeFormData) {
 
   let rows = [];
   try {
-    rows = parseSessionFlashcardsBatch(getText(formData, "batchJson") || "[]");
+    rows = parseFlashcardsBatch(getText(formData, "batchJson") || "[]");
   } catch (error) {
     return { success: false, error: error?.message || "No se pudo leer el lote de flashcards.", cards: null };
   }
@@ -1865,30 +2037,6 @@ export async function saveSessionFlashcardsBatch(prevState, maybeFormData) {
     };
   }
 
-  for (const [index, row] of rows.entries()) {
-    if (!row.word || !row.meaning || !row.image) {
-      return {
-        success: false,
-        error: `La flashcard ${index + 1} debe incluir word, meaning e image.`,
-        cards: rows,
-        materialTitle,
-      };
-    }
-  }
-
-  const existingRowsResult = await supabase
-    .from("session_flashcards")
-    .select("id")
-    .eq("session_id", sessionId);
-
-  if (existingRowsResult.error) {
-    const missingTable = getMissingTableName(existingRowsResult.error);
-    if (missingTable?.endsWith("session_flashcards")) {
-      return { success: false, error: "Falta crear la tabla session_flashcards. Ejecuta el SQL actualizado.", cards: null };
-    }
-    return { success: false, error: existingRowsResult.error.message || "No se pudieron cargar las flashcards.", cards: null };
-  }
-
   const flashcardsItemResult = await supabase
     .from("session_items")
     .select("id, title")
@@ -1931,61 +2079,15 @@ export async function saveSessionFlashcardsBatch(prevState, maybeFormData) {
     }
   }
 
-  const existingIds = new Set(
-    (existingRowsResult.data || [])
-      .map((row) => String(row?.id || "").trim())
-      .filter(Boolean)
-  );
-  const persistedIds = new Set();
-  const savedCards = [];
-
-  for (const [index, row] of rows.entries()) {
-    const payload = {
-      session_id: sessionId,
-      word: row.word,
-      meaning: row.meaning,
-      image_url: row.image,
-      card_order: index + 1,
-      accepted_answers: row.acceptedAnswers,
-      updated_at: new Date().toISOString(),
-    };
-
-    const isUpdate = row.id && existingIds.has(row.id);
-    const result = isUpdate
-      ? await supabase
-          .from("session_flashcards")
-          .update(payload)
-          .eq("id", row.id)
-          .select("id, word, meaning, image_url, card_order, accepted_answers")
-          .maybeSingle()
-      : await supabase
-          .from("session_flashcards")
-          .insert(payload)
-          .select("id, word, meaning, image_url, card_order, accepted_answers")
-          .maybeSingle();
-
-    if (result.error) {
-      const missingTable = getMissingTableName(result.error);
-      if (missingTable?.endsWith("session_flashcards")) {
-        return { success: false, error: "Falta crear la tabla session_flashcards. Ejecuta el SQL actualizado.", cards: null };
-      }
-      return { success: false, error: result.error.message || "No se pudo guardar una flashcard.", cards: null };
-    }
-
-    const savedRow = result.data || payload;
-    const savedId = String(savedRow?.id || row.id || "").trim();
-    if (savedId) {
-      persistedIds.add(savedId);
-    }
-    savedCards.push(mapSessionFlashcardRow(savedRow, index + 1));
-  }
-
-  const idsToDelete = Array.from(existingIds).filter((id) => !persistedIds.has(id));
-  if (idsToDelete.length) {
-    const deleteRemovedResult = await supabase.from("session_flashcards").delete().in("id", idsToDelete);
-    if (deleteRemovedResult.error) {
-      return { success: false, error: deleteRemovedResult.error.message || "No se pudo limpiar el orden de flashcards.", cards: null };
-    }
+  const replaceResult = await replaceAssignedFlashcards({
+    supabase,
+    tableName: "session_flashcards",
+    ownerColumn: "session_id",
+    ownerId: sessionId,
+    rows,
+  });
+  if (replaceResult.error) {
+    return { success: false, error: replaceResult.error, cards: null };
   }
 
   revalidateCommissionAdminPaths();
@@ -1997,8 +2099,8 @@ export async function saveSessionFlashcardsBatch(prevState, maybeFormData) {
 
   return {
     success: true,
-    message: `Flashcards guardadas (${savedCards.length}).`,
-    cards: savedCards,
+    message: `Flashcards guardadas (${replaceResult.cards.length}).`,
+    cards: replaceResult.cards,
     materialTitle,
   };
 }
@@ -2020,7 +2122,7 @@ export async function saveTemplateSessionFlashcardsBatch(prevState, maybeFormDat
 
   let rows = [];
   try {
-    rows = parseSessionFlashcardsBatch(getText(formData, "batchJson") || "[]");
+    rows = parseFlashcardsBatch(getText(formData, "batchJson") || "[]");
   } catch (error) {
     return { success: false, error: error?.message || "No se pudo leer el lote de flashcards.", cards: null };
   }
@@ -2087,38 +2189,6 @@ export async function saveTemplateSessionFlashcardsBatch(prevState, maybeFormDat
     };
   }
 
-  for (const [index, row] of rows.entries()) {
-    if (!row.word || !row.meaning || !row.image) {
-      return {
-        success: false,
-        error: `La flashcard ${index + 1} debe incluir word, meaning e image.`,
-        cards: rows,
-        materialTitle,
-      };
-    }
-  }
-
-  const existingRowsResult = await supabase
-    .from("template_session_flashcards")
-    .select("id")
-    .eq("template_session_id", templateSessionId);
-
-  if (existingRowsResult.error) {
-    const missingTable = getMissingTableName(existingRowsResult.error);
-    if (missingTable?.endsWith("template_session_flashcards")) {
-      return {
-        success: false,
-        error: "Falta crear la tabla template_session_flashcards. Ejecuta el SQL actualizado.",
-        cards: null,
-      };
-    }
-    return {
-      success: false,
-      error: existingRowsResult.error.message || "No se pudieron cargar las flashcards de plantilla.",
-      cards: null,
-    };
-  }
-
   const flashcardsItemResult = await supabase
     .from("template_session_items")
     .select("id, title")
@@ -2175,76 +2245,15 @@ export async function saveTemplateSessionFlashcardsBatch(prevState, maybeFormDat
     }
   }
 
-  const existingIds = new Set(
-    (existingRowsResult.data || [])
-      .map((row) => String(row?.id || "").trim())
-      .filter(Boolean)
-  );
-  const persistedIds = new Set();
-  const savedCards = [];
-
-  for (const [index, row] of rows.entries()) {
-    const payload = {
-      template_session_id: templateSessionId,
-      word: row.word,
-      meaning: row.meaning,
-      image_url: row.image,
-      card_order: index + 1,
-      accepted_answers: row.acceptedAnswers,
-      updated_at: new Date().toISOString(),
-    };
-
-    const isUpdate = row.id && existingIds.has(row.id);
-    const result = isUpdate
-      ? await supabase
-          .from("template_session_flashcards")
-          .update(payload)
-          .eq("id", row.id)
-          .select("id, word, meaning, image_url, card_order, accepted_answers")
-          .maybeSingle()
-      : await supabase
-          .from("template_session_flashcards")
-          .insert(payload)
-          .select("id, word, meaning, image_url, card_order, accepted_answers")
-          .maybeSingle();
-
-    if (result.error) {
-      const missingTable = getMissingTableName(result.error);
-      if (missingTable?.endsWith("template_session_flashcards")) {
-        return {
-          success: false,
-          error: "Falta crear la tabla template_session_flashcards. Ejecuta el SQL actualizado.",
-          cards: null,
-        };
-      }
-      return {
-        success: false,
-        error: result.error.message || "No se pudo guardar una flashcard de plantilla.",
-        cards: null,
-      };
-    }
-
-    const savedRow = result.data || payload;
-    const savedId = String(savedRow?.id || row.id || "").trim();
-    if (savedId) {
-      persistedIds.add(savedId);
-    }
-    savedCards.push(mapSessionFlashcardRow(savedRow, index + 1));
-  }
-
-  const idsToDelete = Array.from(existingIds).filter((id) => !persistedIds.has(id));
-  if (idsToDelete.length) {
-    const deleteRemovedResult = await supabase
-      .from("template_session_flashcards")
-      .delete()
-      .in("id", idsToDelete);
-    if (deleteRemovedResult.error) {
-      return {
-        success: false,
-        error: deleteRemovedResult.error.message || "No se pudo limpiar el orden de flashcards de plantilla.",
-        cards: null,
-      };
-    }
+  const replaceResult = await replaceAssignedFlashcards({
+    supabase,
+    tableName: "template_session_flashcards",
+    ownerColumn: "template_session_id",
+    ownerId: templateSessionId,
+    rows,
+  });
+  if (replaceResult.error) {
+    return { success: false, error: replaceResult.error, cards: null };
   }
 
   revalidateTemplateAdminPaths(templateId);
@@ -2254,10 +2263,152 @@ export async function saveTemplateSessionFlashcardsBatch(prevState, maybeFormDat
 
   return {
     success: true,
-    message: `Flashcards guardadas (${savedCards.length}).`,
-    cards: savedCards,
+    message: `Flashcards guardadas (${replaceResult.cards.length}).`,
+    cards: replaceResult.cards,
     materialTitle,
   };
+}
+
+export async function upsertFlashcardLibraryEntry(prevState, maybeFormData) {
+  const formData = resolveFormDataArg(prevState, maybeFormData);
+  if (!formData) {
+    return { success: false, error: "No se recibieron datos de la flashcard.", flashcard: null };
+  }
+
+  const supabase = await requireAdmin();
+  const flashcardId = getText(formData, "flashcardId");
+  const word = getText(formData, "word");
+  const meaning = getText(formData, "meaning");
+  const image = getText(formData, "image");
+  const audioUrl = getText(formData, "audioUrl");
+  const audioProvider = getText(formData, "audioProvider") || "elevenlabs";
+  const voiceId = getText(formData, "voiceId");
+  const acceptedAnswers = Array.from(
+    new Set(
+      [word, ...getText(formData, "acceptedAnswers").split(/[\r\n,|]+/)]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (!word || !meaning || !image) {
+    return {
+      success: false,
+      error: "Word, meaning e image son obligatorios.",
+      flashcard: null,
+    };
+  }
+
+  let elevenLabsConfig = null;
+  const elevenLabsConfigText = getText(formData, "elevenLabsConfig");
+  if (elevenLabsConfigText) {
+    try {
+      const parsed = JSON.parse(elevenLabsConfigText);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { success: false, error: "elevenLabsConfig debe ser un objeto JSON.", flashcard: null };
+      }
+      elevenLabsConfig = parsed;
+    } catch {
+      return { success: false, error: "elevenLabsConfig no es JSON valido.", flashcard: null };
+    }
+  }
+
+  const payload = {
+    word,
+    meaning,
+    image_url: image,
+    accepted_answers: acceptedAnswers,
+    audio_url: audioUrl || null,
+    audio_r2_key: getText(formData, "audioR2Key") || null,
+    audio_provider: audioProvider || "elevenlabs",
+    voice_id: voiceId || null,
+    elevenlabs_config: elevenLabsConfig,
+    updated_at: new Date().toISOString(),
+  };
+
+  const result = flashcardId
+    ? await supabase
+        .from("flashcards")
+        .update(payload)
+        .eq("id", flashcardId)
+        .select(FLASHCARD_LIBRARY_SELECT)
+        .maybeSingle()
+    : await supabase
+        .from("flashcards")
+        .insert(payload)
+        .select(FLASHCARD_LIBRARY_SELECT)
+        .maybeSingle();
+
+  if (result.error) {
+    return {
+      success: false,
+      error: buildFlashcardsSchemaError(result.error) || result.error.message || "No se pudo guardar la flashcard.",
+      flashcard: null,
+    };
+  }
+
+  revalidatePath("/admin/flashcards");
+  revalidatePath("/admin/commissions");
+  revalidatePath("/admin/courses/templates");
+  revalidatePath("/app/curso");
+
+  return {
+    success: true,
+    message: flashcardId ? "Flashcard actualizada." : "Flashcard creada.",
+    flashcard: mapLibraryFlashcardRow(result.data),
+  };
+}
+
+export async function deleteFlashcardLibraryEntry(prevState, maybeFormData) {
+  const formData = resolveFormDataArg(prevState, maybeFormData);
+  if (!formData) {
+    return { success: false, error: "No se recibio la flashcard a eliminar." };
+  }
+
+  const supabase = await requireAdmin();
+  const flashcardId = getText(formData, "flashcardId");
+  if (!flashcardId) {
+    return { success: false, error: "Flashcard invalida." };
+  }
+
+  const usageChecks = await Promise.all([
+    supabase.from("session_flashcards").select("id", { count: "exact", head: true }).eq("flashcard_id", flashcardId),
+    supabase
+      .from("template_session_flashcards")
+      .select("id", { count: "exact", head: true })
+      .eq("flashcard_id", flashcardId),
+  ]);
+
+  const usageError = usageChecks.find((result) => result.error)?.error || null;
+  if (usageError) {
+    return {
+      success: false,
+      error: buildFlashcardsSchemaError(usageError) || usageError.message || "No se pudo validar el uso de la flashcard.",
+    };
+  }
+
+  const usageCount = usageChecks.reduce((total, result) => total + Number(result.count || 0), 0);
+  if (usageCount > 0) {
+    return {
+      success: false,
+      error: "No se puede eliminar una flashcard que sigue asignada en clases o plantillas.",
+    };
+  }
+
+  const deleteResult = await supabase.from("flashcards").delete().eq("id", flashcardId);
+  if (deleteResult.error) {
+    return {
+      success: false,
+      error: buildFlashcardsSchemaError(deleteResult.error) || deleteResult.error.message || "No se pudo eliminar la flashcard.",
+    };
+  }
+
+  revalidatePath("/admin/flashcards");
+  revalidatePath("/admin/commissions");
+  revalidatePath("/admin/courses/templates");
+  revalidatePath("/app/curso");
+
+  return { success: true, message: "Flashcard eliminada." };
 }
 
 export async function upsertCourseTemplate(prevState, maybeFormData) {
@@ -4085,7 +4236,6 @@ export async function upsertStudent(prevState, maybeFormData) {
     resolvedStartMonth = commission.start_date ? commission.start_date.slice(0, 7) : resolvedStartMonth;
     resolvedPreferredHour = parseTimeWithSeconds(commission.start_time) ?? resolvedPreferredHour;
     resolvedModality = commission.modality_key || null;
-    resolvedLevelNumber = resolvedLevelNumber || 1;
   }
 
   if (resolvedCourseLevel && !STUDENT_LEVELS.includes(resolvedCourseLevel)) {
@@ -4116,7 +4266,7 @@ export async function upsertStudent(prevState, maybeFormData) {
       studentGrade,
       modalityKey: resolvedModality,
       sendWelcomeEmail: isNewStudent,
-      forcePasswordReset: isNewStudent,
+      forcePasswordReset: false,
     });
 
       if (result?.tempPassword) {
@@ -4227,7 +4377,7 @@ export async function importStudentsCsv(prevState, maybeFormData) {
         preferredHour: normalizedPreferredHour,
         modalityKey: normalizedModality,
         sendWelcomeEmail: true,
-        forcePasswordReset: true,
+        forcePasswordReset: false,
       });
       if (result.wasExisting) {
         updated += 1;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 function shuffleArray(list = []) {
   const next = [...list];
@@ -15,9 +15,12 @@ function normalizeCards(cards = []) {
   return [...(cards || [])]
     .map((card, index) => ({
       id: String(card?.id || `flashcard-${index + 1}`),
+      flashcardId: String(card?.flashcardId || card?.flashcard_id || "").trim(),
       word: String(card?.word || "").trim(),
       meaning: String(card?.meaning || "").trim(),
       image: String(card?.image || "").trim(),
+      audioUrl: String(card?.audioUrl || card?.audio_url || "").trim(),
+      audioR2Key: String(card?.audioR2Key || card?.audio_r2_key || "").trim(),
       order: Number(card?.order || index + 1) || index + 1,
       acceptedAnswers: Array.isArray(card?.acceptedAnswers) ? card.acceptedAnswers : [],
     }))
@@ -81,6 +84,19 @@ function buildWriteState(cards = []) {
   };
 }
 
+function pickPreferredEnglishVoice(voices = []) {
+  const list = Array.isArray(voices) ? voices : [];
+  const byName = (value) => String(value || "").trim().toLowerCase();
+  const byLang = (value) => String(value || "").trim().toLowerCase();
+
+  return (
+    list.find((voice) => byName(voice?.name).includes("microsoft jenny")) ||
+    list.find((voice) => byLang(voice?.lang) === "en-us") ||
+    list.find((voice) => byLang(voice?.lang).startsWith("en")) ||
+    null
+  );
+}
+
 function SpeakerIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -120,9 +136,19 @@ export default function CourseSessionFlashcardsViewer({
   const [writeState, setWriteState] = useState(() => buildWriteState(cards));
   const [draggedTileId, setDraggedTileId] = useState("");
   const [hoveredSolvedId, setHoveredSolvedId] = useState("");
+  const audioRef = useRef(null);
 
   useEffect(() => {
     return () => {
+      if (audioRef.current) {
+        try {
+          audioRef.current.pause();
+          audioRef.current.currentTime = 0;
+        } catch {
+          // no-op
+        }
+        audioRef.current = null;
+      }
       if (
         typeof window !== "undefined" &&
         window.speechSynthesis &&
@@ -142,6 +168,26 @@ export default function CourseSessionFlashcardsViewer({
     typeof window !== "undefined" &&
     Boolean(window.speechSynthesis && typeof window.SpeechSynthesisUtterance !== "undefined");
 
+  function stopCurrentPlayback() {
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      } catch {
+        // no-op
+      }
+      audioRef.current = null;
+    }
+
+    if (
+      typeof window !== "undefined" &&
+      window.speechSynthesis &&
+      typeof window.SpeechSynthesisUtterance !== "undefined"
+    ) {
+      window.speechSynthesis.cancel();
+    }
+  }
+
   function toggleShuffle() {
     const nextShuffled = !studyShuffled;
     setStudyShuffled(nextShuffled);
@@ -157,19 +203,16 @@ export default function CourseSessionFlashcardsViewer({
     setStudyFlipped(false);
   }
 
-  function speakWord(word) {
+  function speakWordFallback(word, errorMessage = "Audio no disponible en tu navegador.") {
     if (!ttsAvailable || !word || typeof window === "undefined") {
-      setTtsMessage("Audio no disponible en tu navegador.");
+      setTtsMessage(errorMessage);
       return;
     }
 
     try {
       const synthesis = window.speechSynthesis;
       const voices = synthesis.getVoices();
-      const preferredVoice =
-        voices.find((voice) => String(voice.lang || "").toLowerCase() === "en-us") ||
-        voices.find((voice) => String(voice.lang || "").toLowerCase().startsWith("en")) ||
-        null;
+      const preferredVoice = pickPreferredEnglishVoice(voices);
       const utterance = new window.SpeechSynthesisUtterance(word);
       utterance.lang = preferredVoice?.lang || "en-US";
       if (preferredVoice) {
@@ -183,6 +226,58 @@ export default function CourseSessionFlashcardsViewer({
     } catch {
       setTtsMessage("No se pudo reproducir el audio.");
     }
+  }
+
+  async function playCardAudio(card) {
+    const word = String(card?.word || "").trim();
+    let audioUrl = String(card?.audioUrl || "").trim();
+    const flashcardId = String(card?.flashcardId || "").trim();
+    const audioR2Key = String(card?.audioR2Key || "").trim();
+
+    stopCurrentPlayback();
+
+    if (typeof window === "undefined") {
+      setTtsMessage("Audio no disponible.");
+      return;
+    }
+
+    if (flashcardId || audioR2Key) {
+      const searchParams = new URLSearchParams();
+      if (flashcardId) {
+        searchParams.set("flashcardId", flashcardId);
+      } else if (audioR2Key) {
+        searchParams.set("r2Key", audioR2Key);
+      }
+      searchParams.set("ts", String(Date.now()));
+      audioUrl = `/api/flashcards/audio?${searchParams.toString()}`;
+    }
+
+    if (audioUrl) {
+      try {
+        const audio = new window.Audio(audioUrl);
+        audioRef.current = audio;
+        audio.onended = () => {
+          if (audioRef.current === audio) {
+            audioRef.current = null;
+          }
+          setTtsMessage("");
+        };
+        audio.onerror = () => {
+          if (audioRef.current === audio) {
+            audioRef.current = null;
+          }
+          speakWordFallback(word, "No se pudo reproducir el audio guardado.");
+        };
+        setTtsMessage("");
+        await audio.play();
+        return;
+      } catch {
+        speakWordFallback(word, "No se pudo reproducir el audio guardado.");
+        return;
+      }
+    }
+
+    speakWordFallback(word);
   }
 
   function resetMatchGame() {
@@ -375,7 +470,7 @@ export default function CourseSessionFlashcardsViewer({
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          speakWord(currentStudyCard?.word);
+                          playCardAudio(currentStudyCard);
                         }}
                         className="inline-flex items-center gap-2 rounded-full border border-primary/35 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition hover:bg-primary/20"
                       >
