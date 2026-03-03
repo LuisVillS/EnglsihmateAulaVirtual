@@ -15,5 +15,7 @@
 \ir migrations/20260228_reading_exercise_type.sql
 \ir migrations/20260301_session_flashcards.sql
 \ir migrations/20260302_flashcards_library.sql
+\ir migrations/20260302_exercise_library.sql
 \ir migrations/20260302_lesson_quiz_attempt_score.sql
 \ir migrations/20260302_user_progress_answer_snapshot.sql
+\ir migrations/20260302_user_progress_lesson_scope.sql

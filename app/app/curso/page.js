@@ -20,6 +20,7 @@ import {
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
+import { extractLessonIdFromQuizUrl } from "@/lib/lesson-quiz-assignments";
 import { getSignedDownloadUrl } from "@/lib/r2";
 
 function getMissingTableName(error) {
@@ -438,6 +439,7 @@ export default async function CourseGatePage() {
       const exerciseIds = Array.from(
         new Set(
           normalizedRows
+            .filter((item) => !extractLessonIdFromQuizUrl(item?.url))
             .map((item) => String(item?.exercise_id || "").trim())
             .filter(Boolean)
         )
@@ -459,15 +461,14 @@ export default async function CourseGatePage() {
       }
 
       sessionItemRows = normalizedRows.map((item) => {
-        const exerciseId = String(item?.exercise_id || "").trim();
-        const resolvedLessonId = lessonIdByExerciseId.get(exerciseId) || null;
-        if (resolvedLessonId) {
-          return { ...item, lesson_id: resolvedLessonId };
+        const fromUrl = extractLessonIdFromQuizUrl(item?.url) || null;
+        if (fromUrl) {
+          return { ...item, lesson_id: fromUrl };
         }
 
-        const url = String(item?.url || "").trim();
-        const fromUrl = url.match(/\/app\/clases\/([^/]+)\/prueba/i)?.[1] || null;
-        return { ...item, lesson_id: fromUrl };
+        const exerciseId = String(item?.exercise_id || "").trim();
+        const resolvedLessonId = lessonIdByExerciseId.get(exerciseId) || null;
+        return { ...item, lesson_id: resolvedLessonId };
       });
 
       itemsBySession = sessionItemRows.reduce((acc, item) => {

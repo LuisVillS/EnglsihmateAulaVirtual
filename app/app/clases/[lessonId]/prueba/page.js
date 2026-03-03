@@ -12,6 +12,7 @@ import {
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
+import { extractLessonIdFromQuizUrl, loadLessonQuizAssignments } from "@/lib/lesson-quiz-assignments";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { restartLessonQuizAttempt, startLessonQuizAttempt } from "./actions";
 
@@ -42,13 +43,6 @@ function parseDateMs(value) {
   return date.getTime();
 }
 
-function parseLessonIdFromQuizUrl(url) {
-  const raw = String(url || "").trim();
-  if (!raw) return "";
-  const match = raw.match(/\/app\/clases\/([^/]+)\/prueba/i);
-  return String(match?.[1] || "").trim();
-}
-
 function formatSessionSubtitle(session) {
   const baseDate = session?.starts_at || session?.session_date;
   const date = new Date(baseDate || "");
@@ -77,66 +71,43 @@ function getEstimatedMinutesFromExercises(exercises = []) {
   return null;
 }
 
-async function loadLessonTestMeta(supabase, lesson, exercises = []) {
-  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
-  const fallbackTitle = String(lesson?.title || "").trim() || "Test de clase";
-  const exerciseIds = Array.from(
-    new Set((exercises || []).map((exercise) => String(exercise?.id || "").trim()).filter(Boolean))
-  );
-  if (!exerciseIds.length) {
-    return {
-      testTitle: fallbackTitle,
-      testNumber: fallbackNumber,
-    };
-  }
-
-  const { data: itemRows, error: itemError } = await supabase
-    .from("session_items")
-    .select("title, session_id, exercise_id")
-    .in("exercise_id", exerciseIds)
-    .eq("type", "exercise")
-    .order("created_at", { ascending: true })
-    .limit(1);
-
-  if (itemError || !itemRows?.length) {
-    return {
-      testTitle: fallbackTitle,
-      testNumber: fallbackNumber,
-    };
-  }
-
-  const firstItem = itemRows[0];
-  let testNumber = fallbackNumber;
-  const sessionId = String(firstItem?.session_id || "").trim();
-  if (sessionId) {
-    const { data: sessionRow } = await supabase
-      .from("course_sessions")
-      .select("session_in_cycle")
-      .eq("id", sessionId)
-      .maybeSingle();
-    const sessionNumber = toInt(sessionRow?.session_in_cycle, 0);
-    if (sessionNumber > 0) {
-      testNumber = sessionNumber;
-    }
-  }
-
-  return {
-    testTitle: String(firstItem?.title || "").trim() || fallbackTitle,
-    testNumber,
-  };
-}
-
-async function loadFallbackProgress(supabase, userId, exerciseIds = []) {
+async function loadFallbackProgress(supabase, userId, lessonId, exerciseIds = []) {
   const ids = Array.from(new Set((exerciseIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
   if (!ids.length) {
     return { completedCount: 0, correctCount: 0 };
   }
 
-  const { data, error } = await supabase
+  let progressQuery = await supabase
     .from("user_progress")
     .select("exercise_id, is_correct")
     .eq("user_id", userId)
-    .in("exercise_id", ids);
+    .in("exercise_id", ids)
+    .eq("lesson_id", lessonId);
+
+  let data = progressQuery.data || [];
+  let error = progressQuery.error;
+
+  if (!error && !data.length) {
+    const legacyQuery = await supabase
+      .from("user_progress")
+      .select("exercise_id, is_correct")
+      .eq("user_id", userId)
+      .in("exercise_id", ids)
+      .is("lesson_id", null);
+    if (!legacyQuery.error) {
+      data = legacyQuery.data || [];
+    }
+  }
+
+  if (error) {
+    const legacyQuery = await supabase
+      .from("user_progress")
+      .select("exercise_id, is_correct")
+      .eq("user_id", userId)
+      .in("exercise_id", ids);
+    data = legacyQuery.data || [];
+    error = legacyQuery.error;
+  }
 
   if (error) {
     return { completedCount: 0, correctCount: 0 };
@@ -244,6 +215,7 @@ async function loadCurrentMonthAvailableQuizzes({
   const exerciseIds = Array.from(
     new Set(
       (itemRows || [])
+        .filter((item) => !extractLessonIdFromQuizUrl(item.url))
         .map((item) => String(item.exercise_id || "").trim())
         .filter(Boolean)
     )
@@ -271,8 +243,9 @@ async function loadCurrentMonthAvailableQuizzes({
     const startsMs = parseDateMs(session.starts_at || session.session_date);
     if (!Number.isFinite(startsMs)) continue;
 
+    const lessonIdFromUrl = extractLessonIdFromQuizUrl(item.url);
     const lessonIdFromExercise = lessonIdByExerciseId.get(String(item.exercise_id || "").trim()) || "";
-    const lessonId = lessonIdFromExercise || parseLessonIdFromQuizUrl(item.url);
+    const lessonId = lessonIdFromUrl || lessonIdFromExercise;
     if (!lessonId) continue;
 
     const current = grouped.get(lessonId) || {
@@ -396,29 +369,18 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
 
   const { data: lesson } = await supabase
     .from("lessons")
-    .select("id, title, level, unit_id, ordering, status")
+    .select("id, title, level, unit_id, ordering, status, description")
     .eq("id", lessonId)
     .maybeSingle();
   if (!lesson?.id) notFound();
 
-  const { data: publishedExercises, error: exerciseError } = await supabase
-    .from("exercises")
-    .select("id, type, status, ordering, prompt, content_json")
-    .eq("lesson_id", lesson.id)
-    .eq("status", "published")
-    .order("ordering", { ascending: true })
-    .order("created_at", { ascending: true });
-
-  if (exerciseError) {
-    throw new Error(exerciseError.message || "No se pudieron cargar ejercicios publicados.");
-  }
-
-  const exercises = publishedExercises || [];
+  const quiz = await loadLessonQuizAssignments(supabase, lesson);
+  const exercises = Array.isArray(quiz?.exercises) ? quiz.exercises : [];
   const totalExercises = exercises.length;
   const estimatedMinutes = getEstimatedMinutesFromExercises(exercises);
-  const testMeta = await loadLessonTestMeta(supabase, lesson, exercises);
-  const testTitle = testMeta.testTitle;
-  const testNumber = testMeta.testNumber;
+  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
+  const testTitle = String(quiz?.title || lesson?.title || "").trim() || "Test de clase";
+  const testNumber = Math.max(1, toInt(quiz?.testNumber, fallbackNumber));
 
   const currentAttemptResult = await loadAttemptRow(supabase, profile.id, lesson.id);
   let trackingAvailable = currentAttemptResult.trackingAvailable;
@@ -428,6 +390,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
     const fallback = await loadFallbackProgress(
       supabase,
       profile.id,
+      lesson.id,
       exercises.map((exercise) => exercise.id)
     );
     currentAttempt = normalizeAttemptRow(

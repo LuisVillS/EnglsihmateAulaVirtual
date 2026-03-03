@@ -13,7 +13,7 @@ import {
   normalizeListeningQuestionType,
 } from "@/lib/listening-exercise";
 
-const EXERCISE_TYPE_OPTIONS = [
+export const EXERCISE_TYPE_OPTIONS = [
   { value: "scramble", label: "Scrambled Sentence" },
   { value: "audio_match", label: "Listening Exercise" },
   { value: "reading_exercise", label: "Reading Exercise" },
@@ -22,10 +22,11 @@ const EXERCISE_TYPE_OPTIONS = [
   { value: "cloze", label: "Fill in the blanks" },
 ];
 
-const SKILL_TAG_OPTIONS = [
+export const SKILL_TAG_OPTIONS = [
   { value: "listening", label: "Listening" },
   { value: "reading", label: "Reading" },
   { value: "grammar", label: "Grammar" },
+  { value: "vocabulary", label: "Vocabulary" },
 ];
 
 const EXERCISE_STATUS_OPTIONS = [
@@ -40,7 +41,7 @@ function normalizeQuizTitle(value) {
   return raw || "Prueba de clase";
 }
 
-function toPrettyJson(value) {
+export function toPrettyJson(value) {
   try {
     return JSON.stringify(value, null, 2);
   } catch {
@@ -48,7 +49,7 @@ function toPrettyJson(value) {
   }
 }
 
-function safeParseJson(value) {
+export function safeParseJson(value) {
   try {
     const parsed = JSON.parse(value || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -70,17 +71,17 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function round2(value) {
+export function round2(value) {
   return Math.round((toNumber(value, 0) + Number.EPSILON) * 100) / 100;
 }
 
-function normalizePointValue(value, fallback = 10) {
+export function normalizePointValue(value, fallback = 10) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return round2(Math.max(0, Math.min(100, parsed)));
 }
 
-function normalizeEstimatedTimeMinutes(value) {
+export function normalizeEstimatedTimeMinutes(value) {
   if (value == null || value === "") return null;
   const parsed = Number.parseInt(String(value), 10);
   if (!Number.isFinite(parsed)) return null;
@@ -101,36 +102,26 @@ function normalizeOptionId(value, fallbackIndex = 1) {
   return `opt_${raw}`;
 }
 
-function extractBlankKeysFromSentence(sentence = "") {
-  const text = String(sentence || "");
-  const regex = /\[\[\s*(blank_[a-z0-9_-]+)\s*\]\]/gi;
-  const seen = new Set();
-  const keys = [];
-  let match = regex.exec(text);
-  while (match) {
-    const key = normalizeBlankKey(match[1], keys.length + 1);
-    if (!seen.has(key)) {
-      seen.add(key);
-      keys.push(key);
-    }
-    match = regex.exec(text);
+function createStableEditorId(prefix = "item") {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${prefix}_${crypto.randomUUID()}`;
   }
-  return keys;
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function getNextOptionId(optionsPool = []) {
-  let maxValue = 0;
-  optionsPool.forEach((option) => {
-    const optionId = String(option?.id || "").trim().toLowerCase();
-    const match = optionId.match(/^opt_(\d+)$/);
-    if (!match) return;
-    const asNumber = toInt(match[1], 0);
-    if (asNumber > maxValue) maxValue = asNumber;
-  });
-  return `opt_${maxValue + 1}`;
+function createBlankId() {
+  return createStableEditorId("blank");
 }
 
-function getDefaultContent(type) {
+function createOptionId() {
+  return createStableEditorId("opt");
+}
+
+function createPairId() {
+  return createStableEditorId("pair");
+}
+
+export function getDefaultContent(type) {
   switch (type) {
     case "scramble":
       return {
@@ -141,6 +132,7 @@ function getDefaultContent(type) {
       };
     case "audio_match":
       return {
+        listening_title: "",
         prompt_native: "Listen to the audio and answer the questions.",
         provider: "youtube",
         source_type: "youtube",
@@ -157,6 +149,7 @@ function getDefaultContent(type) {
     case "reading_exercise":
       return {
         title: "Reading Title",
+        reading_title: "Reading Title",
         text: "Write the reading passage here.",
         image_url: "",
         questions: [
@@ -180,42 +173,34 @@ function getDefaultContent(type) {
       };
     case "pairs":
       return {
+        pairs_title: "",
         pairs: [
-          { native: "Manzana", target: "Apple" },
-          { native: "Pan", target: "Bread" },
+          { id: createPairId(), native: "Manzana", target: "Apple" },
+          { id: createPairId(), native: "Pan", target: "Bread" },
         ],
         point_value: 10,
       };
     case "cloze":
     default:
       return {
-        sentence: "I [[blank_1]] a student.",
+        sentence: "",
         options_pool: [
-          { id: "opt_1", text: "am" },
-          { id: "opt_2", text: "are" },
-          { id: "opt_3", text: "is" },
-          { id: "opt_4", text: "be" },
+          { id: createOptionId(), text: "" },
         ],
-        blanks: [
-          {
-            id: "blank_1",
-            correct_option_id: "opt_1",
-            new_option_ids: ["opt_1", "opt_2", "opt_3", "opt_4"],
-          },
-        ],
+        blanks: [],
         point_value: 10,
       };
   }
 }
 
-function defaultSkillTagByType(type) {
+export function defaultSkillTagByType(type) {
   if (type === "audio_match") return "listening";
   if (type === "reading_exercise") return "reading";
   if (type === "image_match" || type === "pairs") return "reading";
   return "grammar";
 }
 
-function normalizeSkillTag(value, type) {
+export function normalizeSkillTag(value, type) {
   let raw = String(value || "").trim().toLowerCase();
   if (raw === "speaking") {
     raw = defaultSkillTagByType(type);
@@ -230,7 +215,7 @@ function resolveEditableText(rawValue, fallbackValue = "") {
   return String(rawValue);
 }
 
-function normalizeContent(type, rawObject) {
+export function normalizeContent(type, rawObject) {
   const base = getDefaultContent(type);
   const raw = rawObject && typeof rawObject === "object" ? rawObject : {};
   const pointValue = normalizePointValue(raw.point_value ?? raw.pointValue, normalizePointValue(base.point_value, 10));
@@ -240,16 +225,20 @@ function normalizeContent(type, rawObject) {
 
   if (type === "cloze") {
     const fallbackContent = getDefaultContent("cloze");
-    let sentence = String(raw.sentence ?? fallbackContent.sentence ?? "");
+    const sentence = resolveEditableText(raw.sentence, fallbackContent.sentence);
 
     const optionsPool = [];
     const appendPoolOption = (text = "") => {
-      const optionId = getNextOptionId(optionsPool);
+      let optionId = createOptionId();
+      while (optionsPool.some((option) => option.id === optionId)) {
+        optionId = createOptionId();
+      }
       optionsPool.push({ id: optionId, text: String(text || "") });
       return optionId;
     };
     const ensurePoolOption = (optionId, fallbackText = "") => {
-      const safeId = normalizeOptionId(optionId, optionsPool.length + 1);
+      const requestedId = String(optionId || "").trim();
+      const safeId = requestedId ? normalizeOptionId(requestedId, optionsPool.length + 1) : createOptionId();
       const existing = optionsPool.find((option) => option.id === safeId);
       if (existing) {
         if (!String(existing.text || "").trim() && String(fallbackText || "").trim()) {
@@ -259,20 +248,6 @@ function normalizeContent(type, rawObject) {
       }
       optionsPool.push({ id: safeId, text: String(fallbackText || "") });
       return safeId;
-    };
-    const normalizeIdList = (values, minCount = 0) => {
-      const normalized = Array.from(
-        new Set(
-          (Array.isArray(values) ? values : [])
-            .map((value) => String(value || "").trim())
-            .filter(Boolean)
-            .map((value) => ensurePoolOption(value, ""))
-        )
-      );
-      while (normalized.length < minCount) {
-        normalized.push(appendPoolOption(""));
-      }
-      return normalized;
     };
 
     const rawPool = Array.isArray(raw.options_pool)
@@ -290,146 +265,68 @@ function normalizeContent(type, rawObject) {
       );
     });
 
-    const incomingBlanks = Array.isArray(raw.blanks) ? raw.blanks : [];
-    const hasPoolShape =
-      rawPool.length > 0 ||
-      incomingBlanks.some((blank) => {
-        const source = blank && typeof blank === "object" ? blank : {};
-        return (
-          source.correct_option_id != null ||
-          source.correctOptionId != null ||
-          source.new_option_ids != null ||
-          source.newOptionIds != null
-        );
-      });
-
-    let blanks = [];
-
-    if (hasPoolShape) {
-      blanks = incomingBlanks.map((blank, idx) => {
-        const source = blank && typeof blank === "object" ? blank : {};
-        const blankId = normalizeBlankKey(source.id || source.key || `blank_${idx + 1}`, idx + 1);
-        const desiredCount = idx === 0 ? 4 : 2;
-        let newOptionIds = normalizeIdList(source.new_option_ids || source.newOptionIds, desiredCount);
-        if (!newOptionIds.length && optionsPool.length) {
-          newOptionIds = normalizeIdList(optionsPool.slice(0, desiredCount).map((option) => option.id), desiredCount);
-        }
-
-        let correctOptionId = String(source.correct_option_id || source.correctOptionId || "").trim();
-        if (correctOptionId) {
-          correctOptionId = ensurePoolOption(correctOptionId, "");
-        }
-        if (!correctOptionId) {
-          const answerText = String(source.answer || source.correct || "").trim();
-          if (answerText) {
-            const byText = optionsPool.find(
-              (option) => String(option.text || "").trim().toLowerCase() === answerText.toLowerCase()
-            );
-            correctOptionId = byText?.id || appendPoolOption(answerText);
-            if (!newOptionIds.includes(correctOptionId)) {
-              newOptionIds.push(correctOptionId);
-            }
-          }
-        }
-        if (!correctOptionId && newOptionIds.length) {
-          const fromIndex = Math.max(0, Math.min(newOptionIds.length - 1, toInt(source.correct_index ?? source.correctIndex, 0)));
-          correctOptionId = newOptionIds[fromIndex];
-        }
-        if (!correctOptionId) {
-          correctOptionId = newOptionIds[0] || appendPoolOption("");
-        }
-        if (idx > 0 && !newOptionIds.includes(correctOptionId)) {
-          correctOptionId = newOptionIds[0] || appendPoolOption("");
-        }
-
-        return {
-          id: blankId,
-          correct_option_id: correctOptionId,
-          new_option_ids: Array.from(new Set(newOptionIds)),
-        };
-      });
-    }
-
-    if (!blanks.length) {
-      const legacyBlanks = incomingBlanks.length
-        ? incomingBlanks
-        : [{
-          key: "blank_1",
-          options: Array.isArray(raw.options) ? raw.options : fallbackContent.options_pool.map((option) => option.text),
-          correct_index: toInt(raw.correct_index ?? raw.correctIndex, 0),
-          answer: raw.answer || raw.correct || "",
-        }];
-
-      blanks = legacyBlanks.map((blank, idx) => {
-        const source = blank && typeof blank === "object" ? blank : {};
-        const blankId = normalizeBlankKey(source.key || source.id || `blank_${idx + 1}`, idx + 1);
-        const desiredCount = idx === 0 ? 4 : 2;
-        const optionTexts = Array.isArray(source.options)
-          ? source.options.map((value) => String(value || ""))
-          : [];
-        const answerText = String(source.answer || source.correct || "").trim();
-        if (
-          answerText &&
-          !optionTexts.some((value) => String(value || "").trim().toLowerCase() === answerText.toLowerCase())
-        ) {
-          optionTexts.push(answerText);
-        }
-        while (optionTexts.length < desiredCount) {
-          optionTexts.push("");
-        }
-        const optionIds = optionTexts.map((text) => appendPoolOption(text));
-        const correctIndex = Math.max(0, Math.min(optionIds.length - 1, toInt(source.correct_index ?? source.correctIndex, 0)));
-        const correctOptionId = optionIds[correctIndex] || optionIds[0] || appendPoolOption("");
-        return {
-          id: blankId,
-          correct_option_id: correctOptionId,
-          new_option_ids: optionIds,
-        };
-      });
-    }
-
-    if (!optionsPool.length) {
-      fallbackContent.options_pool.forEach((option) => {
-        optionsPool.push({
-          id: normalizeOptionId(option.id, optionsPool.length + 1),
-          text: String(option.text || ""),
-        });
-      });
-    }
-
-    const sentenceBlankKeys = extractBlankKeysFromSentence(sentence);
-    if (!sentenceBlankKeys.length && blanks.length) {
-      if (/_{2,}/.test(sentence)) {
-        sentence = sentence.replace(/_{2,}/, `[[${blanks[0].id}]]`);
-      } else {
-        const seed = sentence || "Complete the sentence";
-        sentence = `${seed} [[${blanks[0].id}]]`.trim();
-      }
-    }
-
-    const orderedKeys = extractBlankKeysFromSentence(sentence);
-    const blankById = new Map(blanks.map((blank) => [blank.id, blank]));
-    const normalizedBlanks = orderedKeys.map((blankId, idx) => {
-      const current = blankById.get(blankId) || {};
-      const desiredCount = idx === 0 ? 4 : 2;
-      const newOptionIds = normalizeIdList(current.new_option_ids, desiredCount);
-      let correctOptionId = String(current.correct_option_id || "").trim();
+    const resolveCorrectOptionId = (source = {}, fallbackOptionIds = []) => {
+      let correctOptionId = String(source.correct_option_id || source.correctOptionId || "").trim();
       if (correctOptionId) {
-        correctOptionId = ensurePoolOption(correctOptionId, "");
+        return ensurePoolOption(correctOptionId, "");
       }
-      if (!correctOptionId || (idx > 0 && !newOptionIds.includes(correctOptionId))) {
-        correctOptionId = newOptionIds[0] || appendPoolOption("");
+
+      const answerText = String(source.answer || source.correct || "").trim();
+      if (answerText) {
+        const byText = optionsPool.find(
+          (option) => String(option.text || "").trim().toLowerCase() === answerText.toLowerCase()
+        );
+        return byText?.id || appendPoolOption(answerText);
       }
+
+      const correctIndex = toInt(source.correct_index ?? source.correctIndex, -1);
+      if (correctIndex >= 0 && correctIndex < fallbackOptionIds.length) {
+        return fallbackOptionIds[correctIndex];
+      }
+
+      return null;
+    };
+
+    const rawBlanks = Array.isArray(raw.blanks) ? raw.blanks : [];
+    const blanks = rawBlanks.map((blank, idx) => {
+      const source = blank && typeof blank === "object" ? blank : {};
+      const requestedId = String(source.id || source.key || "").trim();
       return {
-        id: blankId,
-        correct_option_id: correctOptionId,
-        new_option_ids: Array.from(new Set(newOptionIds)),
+        id: requestedId ? normalizeBlankKey(requestedId, idx + 1) : createBlankId(),
+        correct_option_id: resolveCorrectOptionId(source),
       };
     });
 
+    if (!blanks.length) {
+      const legacyOptionTexts = Array.isArray(raw.options)
+        ? raw.options.map((value) => String(value || ""))
+        : [];
+      const hasLegacyBlank =
+        legacyOptionTexts.length > 0 ||
+        raw.answer != null ||
+        raw.correct != null ||
+        raw.correct_index != null ||
+        raw.correctIndex != null;
+
+      if (hasLegacyBlank) {
+        const legacyOptionIds = legacyOptionTexts.map((text) => appendPoolOption(text));
+        blanks.push({
+          id: createBlankId(),
+          correct_option_id: resolveCorrectOptionId(raw, legacyOptionIds),
+        });
+      }
+    }
+
+    if (!optionsPool.length) {
+      optionsPool.push({
+        id: String(fallbackContent.options_pool?.[0]?.id || "").trim() || createOptionId(),
+        text: String(fallbackContent.options_pool?.[0]?.text || ""),
+      });
+    }
+
     return {
       sentence,
-      blanks: normalizedBlanks.length ? normalizedBlanks : fallbackContent.blanks,
+      blanks,
       options_pool: optionsPool,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
@@ -459,6 +356,7 @@ function normalizeContent(type, rawObject) {
     const explicitYoutubeUrl = resolveEditableText(explicitYouTubeValue, "");
     const youtubeUrl = explicitYoutubeUrl || (isYouTubeUrl(legacyAudioUrl) ? legacyAudioUrl : "");
     return {
+      listening_title: resolveEditableText(raw.listening_title ?? raw.listeningTitle ?? raw.title, base.listening_title ?? ""),
       prompt_native: resolveEditableText(raw.prompt_native ?? raw.promptNative ?? raw.instructions, base.prompt_native),
       provider: youtubeUrl ? "youtube" : String(raw.provider ?? base.provider ?? "youtube"),
       source_type: youtubeUrl ? "youtube" : (legacyAudioUrl ? "audio" : "youtube"),
@@ -477,8 +375,10 @@ function normalizeContent(type, rawObject) {
   }
 
   if (type === "reading_exercise") {
+    const readingTitle = resolveEditableText(raw.title ?? raw.reading_title ?? raw.readingTitle, base.title);
     return {
-      title: resolveEditableText(raw.title ?? raw.reading_title ?? raw.readingTitle, base.title),
+      title: readingTitle,
+      reading_title: readingTitle,
       text: resolveEditableText(
         raw.text ?? raw.reading_text ?? raw.readingText ?? raw.body ?? raw.passage,
         base.text
@@ -549,12 +449,20 @@ function normalizeContent(type, rawObject) {
     const pairs = Array.isArray(raw.pairs)
       ? raw.pairs
           .map((pair) => ({
+            id: String(pair?.id || "").trim() || createPairId(),
             native: resolveEditableText(pair?.native, ""),
             target: resolveEditableText(pair?.target, ""),
           }))
-      : base.pairs;
+      : (Array.isArray(base.pairs)
+        ? base.pairs.map((pair) => ({
+          id: String(pair?.id || "").trim() || createPairId(),
+          native: resolveEditableText(pair?.native, ""),
+          target: resolveEditableText(pair?.target, ""),
+        }))
+        : []);
     return {
-      pairs: pairs.length ? pairs : base.pairs,
+      pairs_title: resolveEditableText(raw.pairs_title ?? raw.pairsTitle ?? raw.title, base.pairs_title ?? ""),
+      pairs,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
     };
@@ -570,7 +478,7 @@ function createLocalId() {
   return `draft-${Date.now()}-${Math.random()}`;
 }
 
-function createDraft(overrides = {}) {
+export function createDraft(overrides = {}) {
   const type = overrides.type || "cloze";
   const rawContent = overrides.contentJson;
   const parsed = typeof rawContent === "string" ? safeParseJson(rawContent) : rawContent;
@@ -589,14 +497,14 @@ function createDraft(overrides = {}) {
   };
 }
 
-function moveArrayItem(list, fromIndex, toIndex) {
+export function moveArrayItem(list, fromIndex, toIndex) {
   const next = [...list];
   const [item] = next.splice(fromIndex, 1);
   next.splice(toIndex, 0, item);
   return next;
 }
 
-function GuidedEditor({ item, content, onPatch }) {
+export function GuidedEditor({ item, content, onPatch }) {
   const [newScrambleWord, setNewScrambleWord] = useState("");
   const [scrambleDragIndex, setScrambleDragIndex] = useState(null);
   const clozeSentenceRef = useRef(null);
@@ -607,12 +515,20 @@ function GuidedEditor({ item, content, onPatch }) {
     const poolMap = new Map(
       optionsPool.map((option) => [String(option?.id || "").trim(), { ...option }])
     );
+    const usedOptionIds = new Set(
+      blanks
+        .map((blank) => String(blank?.correct_option_id || "").trim())
+        .filter(Boolean)
+    );
 
-    const updateBlank = (blankIndex, patchObject) => {
-      const next = blanks.map((blank, idx) => {
-        if (idx !== blankIndex) return blank;
-        return { ...blank, ...patchObject };
-      });
+    const updateBlank = (blankId, patchObject) => {
+      const safeBlankId = String(blankId || "").trim();
+      if (!safeBlankId) return;
+      const next = blanks.map((blank) => (
+        String(blank?.id || "").trim() === safeBlankId
+          ? { ...blank, ...patchObject }
+          : blank
+      ));
       onPatch({ blanks: next });
     };
 
@@ -628,8 +544,7 @@ function GuidedEditor({ item, content, onPatch }) {
     };
 
     const addBlankToken = () => {
-      const nextIndex = blanks.length + 1;
-      const blankId = normalizeBlankKey(`blank_${nextIndex}`, nextIndex);
+      const blankId = createBlankId();
       const token = `[[${blankId}]]`;
       const sentence = String(content.sentence || "");
       const node = clozeSentenceRef.current;
@@ -641,87 +556,45 @@ function GuidedEditor({ item, content, onPatch }) {
       } else {
         nextSentence = `${sentence}${sentence ? " " : ""}${token}`;
       }
-      const nextPool = [...optionsPool];
-      const optionCount = blanks.length === 0 ? 4 : 2;
-      const newOptionIds = [];
-      for (let idx = 0; idx < optionCount; idx += 1) {
-        const optionId = getNextOptionId(nextPool);
-        nextPool.push({ id: optionId, text: "" });
-        newOptionIds.push(optionId);
-      }
       const nextBlanks = [...blanks, {
         id: blankId,
-        correct_option_id: newOptionIds[0] || "",
-        new_option_ids: newOptionIds,
+        correct_option_id: null,
       }];
       onPatch({
         sentence: nextSentence,
         blanks: nextBlanks,
-        options_pool: nextPool,
       });
     };
 
-    const addTwoOptionsToBlank = (blankIndex) => {
-      const target = blanks[blankIndex];
-      if (!target) return;
-      const nextPool = [...optionsPool];
-      const createdIds = [];
-      for (let idx = 0; idx < 2; idx += 1) {
-        const optionId = getNextOptionId(nextPool);
-        nextPool.push({ id: optionId, text: "" });
-        createdIds.push(optionId);
-      }
-      const currentIds = Array.isArray(target.new_option_ids) ? target.new_option_ids : [];
-      const nextIds = Array.from(new Set([...currentIds, ...createdIds]));
-      const currentCorrect = String(target.correct_option_id || "").trim();
-      const nextBlanks = blanks.map((blank, idx) =>
-        idx === blankIndex
-          ? {
-            ...blank,
-            new_option_ids: nextIds,
-            correct_option_id: currentCorrect || nextIds[0] || "",
-          }
-          : blank
-      );
+    const addOption = () => {
       onPatch({
-        blanks: nextBlanks,
-        options_pool: nextPool,
+        options_pool: [...optionsPool, { id: createOptionId(), text: "" }],
       });
     };
 
-    const removeBlank = (blankIndex) => {
-      const target = blanks[blankIndex];
-      if (!target) return;
-      const targetBlankId = normalizeBlankKey(target.id || target.key || `blank_${blankIndex + 1}`, blankIndex + 1);
-      const nextBlanks = blanks.filter((_, idx) => idx !== blankIndex);
+    const removeOption = (optionId) => {
+      const safeOptionId = String(optionId || "").trim();
+      if (!safeOptionId || usedOptionIds.has(safeOptionId) || optionsPool.length <= 1) return;
+      const nextPool = optionsPool.filter((option) => String(option?.id || "").trim() !== safeOptionId);
+      onPatch({
+        options_pool: nextPool.length ? nextPool : [{ id: createOptionId(), text: "" }],
+      });
+    };
+
+    const removeBlank = (blankId) => {
+      const safeBlankId = String(blankId || "").trim();
+      if (!safeBlankId) return;
+      const targetBlankId = normalizeBlankKey(safeBlankId, 1);
+      const nextBlanks = blanks.filter((blank) => String(blank?.id || "").trim() !== safeBlankId);
       const tokenRegex = new RegExp(`\\[\\[\\s*${targetBlankId}\\s*\\]\\]`, "gi");
       const nextSentence = String(content.sentence || "")
         .replace(tokenRegex, "____")
         .replace(/\s{2,}/g, " ")
         .trim();
 
-      const removedOptionIds = new Set(
-        (Array.isArray(target.new_option_ids) ? target.new_option_ids : [])
-          .map((value) => String(value || "").trim())
-          .filter(Boolean)
-      );
-      const stillReferencedIds = new Set(
-        nextBlanks.flatMap((blank) => {
-          const ids = Array.isArray(blank.new_option_ids) ? blank.new_option_ids : [];
-          const correctId = String(blank.correct_option_id || "").trim();
-          return [...ids, correctId].map((value) => String(value || "").trim()).filter(Boolean);
-        })
-      );
-      const nextPool = optionsPool.filter((option) => {
-        const optionId = String(option?.id || "").trim();
-        if (!removedOptionIds.has(optionId)) return true;
-        return stillReferencedIds.has(optionId);
-      });
-
       onPatch({
         sentence: nextSentence,
         blanks: nextBlanks,
-        options_pool: nextPool,
       });
     };
 
@@ -733,6 +606,9 @@ function GuidedEditor({ item, content, onPatch }) {
           rows={3}
           value={content.sentence}
           onChange={(event) => onPatch({ sentence: event.target.value })}
+          onKeyDownCapture={(event) => {
+            event.stopPropagation();
+          }}
           className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
           placeholder="Ej: I [[blank_1]] to school and [[blank_2]] English."
         />
@@ -745,109 +621,121 @@ function GuidedEditor({ item, content, onPatch }) {
             + Agregar blank
           </button>
           <p className="text-xs text-muted">
-            Inserta el token en la posicion del cursor. Cada blank nuevo agrega 2 opciones al pool global.
+            Inserta el token en la posicion del cursor. Despues asigna la respuesta correcta desde el pool global.
           </p>
         </div>
 
         <div className="rounded-xl border border-border bg-surface p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted">Pool global de opciones ({optionsPool.length})</p>
-          <p className="mt-1 text-xs text-muted">
-            El alumno ve todas las opciones juntas. Cada blank define 1 opcion correcta por ID.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Pool global de opciones ({optionsPool.length})
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                El alumno ve todas las opciones juntas. Cada blank define 1 opcion correcta por ID.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={addOption}
+              className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+            >
+              + Agregar opcion
+            </button>
+          </div>
+
+          <div className="mt-3 grid gap-2">
+            {optionsPool.map((option, optionIndex) => {
+              const optionId = String(option?.id || "").trim();
+              const isUsed = usedOptionIds.has(optionId);
+              const cannotRemove = isUsed || optionsPool.length <= 1;
+              return (
+                <div
+                  key={`cloze-option-${optionId}`}
+                  className="grid gap-2 rounded-xl border border-border bg-surface-2 p-3 md:grid-cols-[minmax(0,1fr)_auto]"
+                >
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      Opcion {optionIndex + 1} ({optionId})
+                    </p>
+                    <input
+                      value={String(option?.text || "")}
+                      onChange={(event) => updateOptionText(optionId, event.target.value)}
+                      className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                      placeholder="Texto de opcion"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={cannotRemove}
+                    onClick={() => removeOption(optionId)}
+                    className="rounded-lg border border-danger/60 px-3 py-2 text-xs font-semibold text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         <div className="space-y-3">
           {blanks.map((blank, blankIndex) => {
             const blankId = normalizeBlankKey(blank.id || blank.key || `blank_${blankIndex + 1}`, blankIndex + 1);
-            const ownOptionIds = Array.from(
-              new Set(
-                (Array.isArray(blank.new_option_ids) ? blank.new_option_ids : [])
-                  .map((value) => String(value || "").trim())
-                  .filter(Boolean)
-              )
-            );
-            const selectableOptions = blankIndex === 0
-              ? optionsPool
-              : optionsPool.filter((option) => ownOptionIds.includes(String(option?.id || "").trim()));
             const currentCorrectId = String(blank.correct_option_id || "").trim();
-            const correctIsOutsideRange = blankIndex > 0 && currentCorrectId && !ownOptionIds.includes(currentCorrectId);
+            const missingCorrect = currentCorrectId && !poolMap.has(currentCorrectId);
 
             return (
-              <div key={`${item.localId}-blank-${blankId}-${blankIndex}`} className="rounded-xl border border-border bg-surface p-3">
+              <div key={`cloze-blank-${blankId}`} className="rounded-xl border border-border bg-surface p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                     Blank {blankIndex + 1} ({blankId})
                   </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => addTwoOptionsToBlank(blankIndex)}
-                      className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-                    >
-                      +2 opciones
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeBlank(blankIndex)}
-                      className="rounded-lg border border-danger/60 px-2 py-1 text-xs font-semibold text-danger transition hover:bg-danger/10"
-                    >
-                      Quitar blank
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeBlank(blankId)}
+                    className="rounded-lg border border-danger/60 px-2 py-1 text-xs font-semibold text-danger transition hover:bg-danger/10"
+                  >
+                    Eliminar blank
+                  </button>
                 </div>
 
                 <div className="mt-3 grid gap-2">
                   <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                    Opcion correcta del blank
+                    Respuesta correcta
                   </label>
                   <select
                     value={currentCorrectId}
                     onChange={(event) =>
-                      updateBlank(blankIndex, { correct_option_id: event.target.value })
+                      updateBlank(blankId, { correct_option_id: event.target.value || null })
                     }
                     className="w-full rounded-lg border border-border bg-surface-2 px-2 py-2 text-sm text-foreground"
                   >
-                    {selectableOptions.map((option) => {
+                    <option value="">Selecciona una opcion</option>
+                    {optionsPool.map((option) => {
                       const optionId = String(option?.id || "").trim();
                       return (
-                        <option key={`${item.localId}-blank-correct-${blankId}-${optionId}`} value={optionId}>
-                          {optionId} - {String(option?.text || "").trim() || "(sin texto)"}
+                        <option key={`cloze-blank-correct-${blankId}-${optionId}`} value={optionId}>
+                          {String(option?.text || "").trim() || "(sin texto)"}
                         </option>
                       );
                     })}
                   </select>
-                  {correctIsOutsideRange ? (
+                  {missingCorrect ? (
                     <p className="text-xs text-danger">
-                      Para este blank, la correcta debe estar dentro de sus opciones nuevas.
+                      La opcion correcta actual ya no existe en el pool global.
                     </p>
                   ) : null}
                 </div>
-
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {ownOptionIds.map((optionId, optionIndex) => (
-                    <div
-                      key={`${item.localId}-blank-${blankId}-option-${optionId}-${optionIndex}`}
-                      className="grid gap-1 rounded-lg border border-border bg-surface-2 p-2"
-                    >
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                        Opcion {optionIndex + 1} ({optionId})
-                      </p>
-                      <input
-                        value={String(poolMap.get(optionId)?.text || "")}
-                        onChange={(event) => updateOptionText(optionId, event.target.value)}
-                        className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
-                        placeholder="Texto de opcion"
-                      />
-                    </div>
-                  ))}
-                </div>
-                {!ownOptionIds.length ? (
-                  <p className="mt-2 text-xs text-muted">Sin opciones asociadas a este blank.</p>
-                ) : null}
               </div>
             );
           })}
         </div>
+        {!blanks.length ? (
+          <p className="text-xs text-muted">
+            Este ejercicio puede empezar sin blanks. Usa "Agregar blank" para construirlo desde cero.
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -1001,13 +889,26 @@ function GuidedEditor({ item, content, onPatch }) {
       <div className="grid gap-3">
         {isAudioExercise ? (
           <>
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Instrucciones</label>
-            <input
-              value={content.prompt_native || ""}
-              onChange={(event) => onPatch({ prompt_native: event.target.value })}
-              className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-              placeholder="Listen to the audio and answer the questions."
-            />
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo</label>
+                <input
+                  value={content.listening_title || ""}
+                  onChange={(event) => onPatch({ listening_title: event.target.value })}
+                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  placeholder="Listening Title"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Instrucciones</label>
+                <input
+                  value={content.prompt_native || ""}
+                  onChange={(event) => onPatch({ prompt_native: event.target.value })}
+                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  placeholder="Listen to the audio and answer the questions."
+                />
+              </div>
+            </div>
 
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_120px]">
               <div className="space-y-1">
@@ -1358,11 +1259,20 @@ function GuidedEditor({ item, content, onPatch }) {
     const pairs = Array.isArray(content.pairs) ? content.pairs : [];
     return (
       <div className="grid gap-3">
+        <div className="space-y-1">
+          <label className="text-xs font-semibold uppercase tracking-wide text-muted">Titulo</label>
+          <input
+            value={content.pairs_title || ""}
+            onChange={(event) => onPatch({ pairs_title: event.target.value })}
+            className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+            placeholder="Pairs title"
+          />
+        </div>
         <p className="text-xs font-semibold uppercase tracking-wide text-muted">Pares de palabras</p>
         <div className="space-y-2">
           {pairs.map((pair, idx) => (
             <div
-              key={`${item.localId}-pair-${idx}`}
+              key={`pair-row-${String(pair?.id || idx)}`}
               className="grid gap-2 rounded-xl border border-border bg-surface p-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
             >
               <input
@@ -1397,9 +1307,12 @@ function GuidedEditor({ item, content, onPatch }) {
             </div>
           ))}
         </div>
+        {!pairs.length ? (
+          <p className="text-xs text-muted">Aun no agregaste pares.</p>
+        ) : null}
         <button
           type="button"
-          onClick={() => onPatch({ pairs: [...pairs, { native: "", target: "" }] })}
+          onClick={() => onPatch({ pairs: [...pairs, { id: createPairId(), native: "", target: "" }] })}
           className="w-full rounded-xl border border-border px-3 py-2 text-sm font-semibold text-foreground transition hover:border-primary hover:bg-surface-2 sm:w-auto"
         >
           + Agregar par

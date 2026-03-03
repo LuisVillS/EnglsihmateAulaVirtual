@@ -11,6 +11,7 @@ import {
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
+import { loadLessonQuizAssignments } from "@/lib/lesson-quiz-assignments";
 
 const LESSON_QUIZ_MAX_WRONG_ATTEMPTS = 1;
 
@@ -84,17 +85,18 @@ async function requireStudentUser() {
 }
 
 async function loadPublishedExerciseCount(supabase, lessonId) {
-  const { count, error } = await supabase
-    .from("exercises")
-    .select("id", { count: "exact", head: true })
-    .eq("lesson_id", lessonId)
-    .eq("status", "published");
+  const { data: lesson, error: lessonError } = await supabase
+    .from("lessons")
+    .select("id, title, description")
+    .eq("id", lessonId)
+    .maybeSingle();
 
-  if (error) {
-    throw new Error(error.message || "No se pudo contar ejercicios de la prueba.");
+  if (lessonError || !lesson?.id) {
+    throw new Error(lessonError?.message || "No se pudo cargar la leccion del test.");
   }
 
-  return Number(count || 0) || 0;
+  const quiz = await loadLessonQuizAssignments(supabase, lesson);
+  return Array.isArray(quiz?.exercises) ? quiz.exercises.length : 0;
 }
 
 async function upsertAttemptAsStarted({ supabase, userId, lessonId, totalExercises, restartCount = 0 }) {
@@ -367,16 +369,49 @@ export async function submitLessonQuizStep(formData) {
       ? (safeWrongAttempts <= 0 ? 5 : safeWrongAttempts === 1 ? 4 : 3)
       : 0;
 
-    const { data: existingProgress } = await supabase
-      .from("user_progress")
-      .select("times_seen, times_correct, streak_count")
-      .eq("user_id", userId)
-      .eq("exercise_id", exerciseId)
-      .maybeSingle();
+    let existingProgress = null;
+    {
+      let progressLookup = await supabase
+        .from("user_progress")
+        .select("times_seen, times_correct, streak_count")
+        .eq("user_id", userId)
+        .eq("exercise_id", exerciseId)
+        .eq("lesson_id", lessonId)
+        .maybeSingle();
+
+      if (progressLookup.error) {
+        progressLookup = await supabase
+          .from("user_progress")
+          .select("times_seen, times_correct, streak_count")
+          .eq("user_id", userId)
+          .eq("exercise_id", exerciseId)
+          .maybeSingle();
+      } else if (!progressLookup.data) {
+        progressLookup = await supabase
+          .from("user_progress")
+          .select("times_seen, times_correct, streak_count")
+          .eq("user_id", userId)
+          .eq("exercise_id", exerciseId)
+          .is("lesson_id", null)
+          .maybeSingle();
+
+        if (progressLookup.error) {
+          progressLookup = await supabase
+            .from("user_progress")
+            .select("times_seen, times_correct, streak_count")
+            .eq("user_id", userId)
+            .eq("exercise_id", exerciseId)
+            .maybeSingle();
+        }
+      }
+
+      existingProgress = progressLookup.error ? null : progressLookup.data || null;
+    }
 
     const progressPayload = {
       user_id: userId,
       exercise_id: exerciseId,
+      lesson_id: lessonId,
       is_correct: isCorrect,
       attempts: safeAttempts,
       last_practiced: nowIso,
@@ -395,15 +430,16 @@ export async function submitLessonQuizStep(formData) {
     };
 
     let progressUpsertError = null;
-    const { error: upsertProgressError } = await supabase
+    let { error: upsertProgressError } = await supabase
       .from("user_progress")
-      .upsert(progressPayload, { onConflict: "user_id,exercise_id" });
+      .upsert(progressPayload, { onConflict: "user_id,exercise_id,lesson_id" });
     progressUpsertError = upsertProgressError;
 
     if (progressUpsertError && isMissingUserProgressQuizColumnsError(progressUpsertError)) {
       const fallbackPayload = {
         user_id: userId,
         exercise_id: exerciseId,
+        lesson_id: lessonId,
         is_correct: isCorrect,
         attempts: safeAttempts,
         last_practiced: nowIso,
@@ -415,10 +451,43 @@ export async function submitLessonQuizStep(formData) {
         streak_count: isCorrect ? Math.max(0, toInt(existingProgress?.streak_count, 0) + 1) : 0,
         updated_at: nowIso,
       };
-      const { error: fallbackUpsertError } = await supabase
+      let { error: fallbackUpsertError } = await supabase
         .from("user_progress")
-        .upsert(fallbackPayload, { onConflict: "user_id,exercise_id" });
+        .upsert(fallbackPayload, { onConflict: "user_id,exercise_id,lesson_id" });
       progressUpsertError = fallbackUpsertError;
+    }
+
+    if (progressUpsertError) {
+      const legacyPayload = {
+        ...progressPayload,
+      };
+      delete legacyPayload.lesson_id;
+
+      let { error: legacyUpsertError } = await supabase
+        .from("user_progress")
+        .upsert(legacyPayload, { onConflict: "user_id,exercise_id" });
+
+      if (legacyUpsertError && isMissingUserProgressQuizColumnsError(legacyUpsertError)) {
+        const legacyFallbackPayload = {
+          user_id: userId,
+          exercise_id: exerciseId,
+          is_correct: isCorrect,
+          attempts: safeAttempts,
+          last_practiced: nowIso,
+          interval_days: 1,
+          next_due_at: nowIso,
+          last_quality: quality,
+          times_seen: Math.max(1, toInt(existingProgress?.times_seen, 0) + 1),
+          times_correct: Math.max(0, toInt(existingProgress?.times_correct, 0) + (isCorrect ? 1 : 0)),
+          streak_count: isCorrect ? Math.max(0, toInt(existingProgress?.streak_count, 0) + 1) : 0,
+          updated_at: nowIso,
+        };
+        ({ error: legacyUpsertError } = await supabase
+          .from("user_progress")
+          .upsert(legacyFallbackPayload, { onConflict: "user_id,exercise_id" }));
+      }
+
+      progressUpsertError = legacyUpsertError;
     }
 
     if (progressUpsertError) {

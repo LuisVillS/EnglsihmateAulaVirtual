@@ -9,6 +9,7 @@ import {
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
+import { loadLessonQuizAssignments } from "@/lib/lesson-quiz-assignments";
 import LessonQuizPlayer from "./lesson-quiz-player";
 
 function ArrowLeftIcon() {
@@ -22,55 +23,6 @@ function ArrowLeftIcon() {
 function toInt(value, fallback = 0) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-async function loadLessonTestMeta(supabase, lesson, exercises = []) {
-  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
-  const fallbackTitle = String(lesson?.title || "").trim() || "Test de clase";
-  const exerciseIds = Array.from(
-    new Set((exercises || []).map((exercise) => String(exercise?.id || "").trim()).filter(Boolean))
-  );
-  if (!exerciseIds.length) {
-    return {
-      testTitle: fallbackTitle,
-      testNumber: fallbackNumber,
-    };
-  }
-
-  const { data: itemRows, error: itemError } = await supabase
-    .from("session_items")
-    .select("title, session_id, exercise_id")
-    .in("exercise_id", exerciseIds)
-    .eq("type", "exercise")
-    .order("created_at", { ascending: true })
-    .limit(1);
-
-  if (itemError || !itemRows?.length) {
-    return {
-      testTitle: fallbackTitle,
-      testNumber: fallbackNumber,
-    };
-  }
-
-  const firstItem = itemRows[0];
-  let testNumber = fallbackNumber;
-  const sessionId = String(firstItem?.session_id || "").trim();
-  if (sessionId) {
-    const { data: sessionRow } = await supabase
-      .from("course_sessions")
-      .select("session_in_cycle")
-      .eq("id", sessionId)
-      .maybeSingle();
-    const sessionNumber = toInt(sessionRow?.session_in_cycle, 0);
-    if (sessionNumber > 0) {
-      testNumber = sessionNumber;
-    }
-  }
-
-  return {
-    testTitle: String(firstItem?.title || "").trim() || fallbackTitle,
-    testNumber,
-  };
 }
 
 export const metadata = {
@@ -99,28 +51,17 @@ export default async function LessonQuizPlayPage({ params: paramsPromise }) {
 
   const { data: lesson } = await supabase
     .from("lessons")
-    .select("id, title, level, unit_id, ordering")
+    .select("id, title, level, unit_id, ordering, description")
     .eq("id", lessonId)
     .maybeSingle();
   if (!lesson?.id) notFound();
 
-  const { data: exercises, error: exercisesError } = await supabase
-    .from("exercises")
-    .select("id, type, prompt, content_json, ordering")
-    .eq("lesson_id", lesson.id)
-    .eq("status", "published")
-    .order("ordering", { ascending: true })
-    .order("created_at", { ascending: true });
-
-  if (exercisesError) {
-    throw new Error(exercisesError.message || "No se pudo cargar la prueba.");
-  }
-
-  const published = exercises || [];
+  const quiz = await loadLessonQuizAssignments(supabase, lesson);
+  const published = Array.isArray(quiz?.exercises) ? quiz.exercises : [];
   const totalExercises = published.length;
-  const testMeta = await loadLessonTestMeta(supabase, lesson, published);
-  const testTitle = testMeta.testTitle;
-  const testNumber = testMeta.testNumber;
+  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
+  const testTitle = String(quiz?.title || lesson?.title || "").trim() || "Test de clase";
+  const testNumber = Math.max(1, toInt(quiz?.testNumber, fallbackNumber));
   const exercisePointValues = published.map((exercise) => {
     const parsed = Number(exercise?.content_json?.point_value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;

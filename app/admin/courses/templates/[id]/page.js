@@ -2,6 +2,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
+  deleteTemplateSessionExerciseBatch,
   upsertTemplateSession,
   upsertTemplateSessionItem,
   deleteTemplateSessionItem,
@@ -19,6 +20,18 @@ const MATERIAL_TYPE_OPTIONS = [
   { value: "file", label: "Archivo" },
   { value: "video", label: "Video" },
 ];
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 7h16" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+      <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+    </svg>
+  );
+}
 
 function formatFrequencyLabel(value) {
   const map = {
@@ -417,6 +430,9 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                     const sessionBadge = buildSessionBadge(monthIndex, session.sessionInMonth, sessionsPerMonth);
                     const slideMeta = parseGoogleSlideMeta(session.class_slide_url);
                     const slidePreviewUrl = buildSlidePreviewUrl(session.class_slide_url);
+                    const hasQuizRows = items.some(
+                      (item) => item.type === "exercise" || Boolean(item.exercise_id)
+                    );
                     const hasQuiz = exerciseItems.length > 0;
 
                     return (
@@ -526,16 +542,32 @@ export default async function CourseTemplateDetailPage({ params: paramsPromise }
                           <div className="space-y-3">
                             <div className="rounded-2xl border border-primary/30 bg-primary/8 p-4">
                               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Prueba / Test</p>
-                              <p className="mt-1 text-sm text-foreground">{hasQuiz ? "Creada" : "No creada"}</p>
+                              <p className="mt-1 text-sm text-foreground">{hasQuizRows ? "Creada" : "No creada"}</p>
                               <p className="text-xs text-muted">
                                 {exerciseItems.length} ejercicio{exerciseItems.length === 1 ? "" : "s"}
                               </p>
-                              <Link
-                                href={`/admin/courses/templates/${template.id}/sessions/${session.id}/exercises`}
-                                className="mt-3 inline-flex w-full justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
-                              >
-                                {hasQuiz ? "Editar prueba" : "Crear prueba para esta clase"}
-                              </Link>
+                              <div className="mt-3 flex items-center gap-2">
+                                <Link
+                                  href={`/admin/courses/templates/${template.id}/sessions/${session.id}/exercises`}
+                                  className="inline-flex flex-1 justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+                                >
+                                  {hasQuizRows ? "Editar prueba" : "Crear prueba para esta clase"}
+                                </Link>
+                                {hasQuizRows ? (
+                                  <form action={deleteTemplateSessionExerciseBatch}>
+                                    <input type="hidden" name="templateId" value={template.id} />
+                                    <input type="hidden" name="templateSessionId" value={session.id} />
+                                    <button
+                                      type="submit"
+                                      title="Eliminar prueba completa"
+                                      aria-label="Eliminar prueba completa"
+                                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-danger/60 text-danger transition hover:bg-danger/10"
+                                    >
+                                      <TrashIcon />
+                                    </button>
+                                  </form>
+                                ) : null}
+                              </div>
                             </div>
 
                             <div className="rounded-2xl border border-border bg-surface p-4">

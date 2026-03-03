@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import SessionExerciseLibraryEditor from "@/components/session-exercise-library-editor";
+import {
+  mapExerciseCategoryRow,
+  mapExerciseLibraryRow,
+  sortExerciseLibrary,
+} from "@/lib/exercise-library";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
-import TemplateSessionExerciseBuilder from "@/components/template-session-exercise-builder";
 
 export const metadata = {
   title: "Editar prueba | Plantilla",
@@ -12,17 +17,25 @@ function getMissingColumnFromError(error) {
   const couldNotFindMatch = message.match(/could not find the '([^']+)' column/i);
   if (couldNotFindMatch?.[1]) return couldNotFindMatch[1];
   const relationMatch = message.match(/column\s+\w+\.([a-zA-Z0-9_]+)\s+does not exist/i);
-  if (relationMatch?.[1]) return relationMatch[1];
+  if (relationMatch?.[1]) return relationMatch?.[1];
   const plainMatch = message.match(/column\s+([a-zA-Z0-9_]+)\s+does not exist/i);
   return plainMatch?.[1] || null;
 }
 
-function readEstimatedTimeMinutes(content) {
-  if (!content || typeof content !== "object" || Array.isArray(content)) return null;
-  const candidate = content.estimated_time_minutes ?? content.estimatedTimeMinutes;
-  const parsed = Number.parseInt(String(candidate ?? ""), 10);
-  if (!Number.isFinite(parsed)) return null;
-  return Math.max(1, parsed);
+function getMissingTableName(error) {
+  const message = String(error?.message || "");
+  const relationMatch = message.match(/relation\s+"([^"]+)"/i);
+  if (relationMatch?.[1]) return relationMatch[1];
+  return null;
+}
+
+function sortAssignmentRows(rows = []) {
+  return [...rows].sort((left, right) => {
+    const leftOrder = Number(left?.exercise_order || 0);
+    const rightOrder = Number(right?.exercise_order || 0);
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return String(left?.created_at || "").localeCompare(String(right?.created_at || ""));
+  });
 }
 
 export default async function TemplateSessionExercisePage({ params: paramsPromise }) {
@@ -57,77 +70,129 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
     .maybeSingle();
   if (!session?.id) redirect(`/admin/courses/templates/${template.id}`);
 
-  let itemRows = [];
-  let itemsError = null;
-  let missingExerciseColumn = false;
+  let initialAssignments = [];
+  let initialQuizTitle = "Prueba de clase";
+  let libraryExercises = [];
+  let libraryCategories = [];
+  let itemsError = "";
+  let libraryError = "";
+  let hiddenInactiveItems = 0;
 
   const itemsResult = await supabase
     .from("template_session_items")
-    .select("id, template_session_id, type, title, url, exercise_id")
+    .select("id, title, exercise_id, exercise_points, exercise_order, created_at")
     .eq("template_session_id", session.id)
-    .eq("type", "exercise")
-    .order("created_at", { ascending: true });
+    .eq("type", "exercise");
 
   if (itemsResult.error) {
-    if (getMissingColumnFromError(itemsResult.error) === "exercise_id") {
-      missingExerciseColumn = true;
-    } else {
-      itemsError = itemsResult.error.message || "No se pudieron cargar ejercicios de la clase.";
-    }
+    const missingColumn = getMissingColumnFromError(itemsResult.error);
+    itemsError =
+      missingColumn === "exercise_points" || missingColumn === "exercise_order" || missingColumn === "exercise_id"
+        ? "Faltan columnas de Exercise Library en template_session_items. Ejecuta el SQL actualizado."
+        : (itemsResult.error.message || "No se pudieron cargar los ejercicios asignados.");
   } else {
-    itemRows = itemsResult.data || [];
-  }
+    const itemRows = sortAssignmentRows(itemsResult.data || []);
+    const exerciseIds = Array.from(
+      new Set(itemRows.map((item) => String(item?.exercise_id || "").trim()).filter(Boolean))
+    );
 
-  const exerciseIds = Array.from(
-    new Set(itemRows.map((item) => String(item?.exercise_id || "").trim()).filter(Boolean))
-  );
-  const exerciseById = new Map();
-  if (!missingExerciseColumn && !itemsError && exerciseIds.length) {
-    const { data: exercises, error: exercisesError } = await supabase
-      .from("exercises")
-      .select("id, lesson_id, type, status, skill_tag, ordering, content_json")
-      .in("id", exerciseIds);
+    const exerciseById = new Map();
+    if (exerciseIds.length) {
+      const { data: exerciseRows, error: exerciseRowsError } = await supabase
+        .from("exercises")
+        .select(`
+          id,
+          title,
+          prompt,
+          type,
+          status,
+          skill_tag,
+          cefr_level,
+          category_id,
+          content_json,
+          category:exercise_categories (
+            id,
+            name,
+            skill,
+            cefr_level
+          )
+        `)
+        .in("id", exerciseIds);
 
-    if (exercisesError) {
-      itemsError = exercisesError.message || "No se pudieron cargar los ejercicios guardados.";
-    } else {
-      (exercises || []).forEach((exercise) => {
-        exerciseById.set(String(exercise.id), exercise);
-      });
+      if (exerciseRowsError) {
+        itemsError = exerciseRowsError.message || "No se pudieron cargar los ejercicios de la biblioteca.";
+      } else {
+        (exerciseRows || []).forEach((row) => {
+          exerciseById.set(String(row.id || "").trim(), mapExerciseLibraryRow(row));
+        });
+      }
     }
+
+    const activeAssignments = itemRows
+      .map((item) => {
+        const exercise = exerciseById.get(String(item?.exercise_id || "").trim()) || null;
+        if (!exercise?.id) return null;
+        if (exercise.status !== "draft" && exercise.status !== "published") return null;
+        return {
+          itemId: String(item.id || "").trim(),
+          exerciseId: exercise.id,
+          points: Number(item.exercise_points || 10) || 10,
+          ...exercise,
+        };
+      })
+      .filter(Boolean);
+
+    hiddenInactiveItems = Math.max(0, itemRows.length - activeAssignments.length);
+    initialAssignments = activeAssignments;
+    initialQuizTitle = String(itemRows[0]?.title || "Prueba de clase").trim() || "Prueba de clase";
   }
 
-  const activeItemRows = itemRows.filter((item) => {
-    const exercise = exerciseById.get(String(item?.exercise_id || "").trim());
-    const status = String(exercise?.status || "").trim().toLowerCase();
-    return exercise?.id && (status === "draft" || status === "published");
-  });
-  const orderedActiveItemRows = [...activeItemRows].sort((left, right) => {
-    const leftOrder = Number(exerciseById.get(String(left?.exercise_id || "").trim())?.ordering || 0);
-    const rightOrder = Number(exerciseById.get(String(right?.exercise_id || "").trim())?.ordering || 0);
-    return leftOrder - rightOrder;
-  });
-  const hiddenInactiveItems = Math.max(0, itemRows.length - activeItemRows.length);
+  const libraryResult = await supabase
+    .from("exercises")
+    .select(`
+      id,
+      title,
+      prompt,
+      type,
+      status,
+      skill_tag,
+      cefr_level,
+      category_id,
+      content_json,
+      updated_at,
+      created_at,
+      category:exercise_categories (
+        id,
+        name,
+        skill,
+        cefr_level
+      )
+    `)
+    .in("status", ["draft", "published"])
+    .order("updated_at", { ascending: false })
+    .order("created_at", { ascending: false });
 
-  const initialItems = orderedActiveItemRows
-    .map((item) => {
-      const exercise = exerciseById.get(String(item?.exercise_id || "").trim());
-      if (!exercise?.id) return null;
-      return {
-        itemId: item.id,
-        exerciseId: exercise.id,
-        type: exercise.type,
-        status: exercise.status,
-        title: item.title || "",
-        lessonId: exercise.lesson_id || "",
-        skillTag: exercise.skill_tag || "",
-        contentJson: exercise.content_json || {},
-      };
-    })
-    .filter(Boolean);
+  if (libraryResult.error) {
+    const missingTable = getMissingTableName(libraryResult.error);
+    libraryError = missingTable?.endsWith("exercise_categories")
+      ? "Falta crear la tabla exercise_categories. Ejecuta el SQL actualizado."
+      : (libraryResult.error.message || "No se pudo cargar la Exercise Library.");
+  } else {
+    libraryExercises = sortExerciseLibrary((libraryResult.data || []).map((row) => mapExerciseLibraryRow(row)));
+  }
 
-  const initialQuizTitle = orderedActiveItemRows[0]?.title || "Prueba de clase";
-  const initialEstimatedTimeMinutes = readEstimatedTimeMinutes(initialItems[0]?.contentJson);
+  const categoriesResult = await supabase
+    .from("exercise_categories")
+    .select("id, name, skill, cefr_level")
+    .order("skill", { ascending: true })
+    .order("cefr_level", { ascending: true })
+    .order("name", { ascending: true });
+
+  if (categoriesResult.error && !libraryError) {
+    libraryError = categoriesResult.error.message || "No se pudieron cargar las categorias.";
+  } else if (!categoriesResult.error) {
+    libraryCategories = (categoriesResult.data || []).map((row) => mapExerciseCategoryRow(row));
+  }
 
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
@@ -170,13 +235,6 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
           </div>
         </div>
 
-        {missingExerciseColumn ? (
-          <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-            Falta la columna `exercise_id` en `template_session_items`. Ejecuta el SQL actualizado antes de editar
-            pruebas.
-          </div>
-        ) : null}
-
         {itemsError ? (
           <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
             {itemsError}
@@ -185,25 +243,27 @@ export default async function TemplateSessionExercisePage({ params: paramsPromis
 
         {hiddenInactiveItems ? (
           <div className="rounded-2xl border border-accent/45 bg-accent/12 px-4 py-3 text-sm text-accent">
-            Se ocultaron {hiddenInactiveItems} ejercicio(s) archivados o eliminados. Solo se editan ejercicios activos.
+            Se ocultaron {hiddenInactiveItems} ejercicio(s) archivados o eliminados. Solo se muestran referencias activas.
           </div>
         ) : null}
 
-        {!missingExerciseColumn ? (
+        {!itemsError ? (
           <div className="rounded-2xl border border-border bg-surface p-5">
             <p className="text-xs uppercase tracking-[0.24em] text-muted">Editor de prueba</p>
-            <h2 className="mt-1 text-xl font-semibold">Toda la prueba se edita en un solo flujo</h2>
+            <h2 className="mt-1 text-xl font-semibold">Selecciona ejercicios desde la biblioteca</h2>
             <p className="mt-1 text-sm text-muted">
-              El titulo y el tiempo estimado son globales. Los ejercicios ya guardados cargan en el mismo editor guiado.
+              El contenido se administra en Exercise Library. Aqui solo eliges referencias, orden y puntos por instancia.
             </p>
             <div className="mt-4">
-              <TemplateSessionExerciseBuilder
+              <SessionExerciseLibraryEditor
                 scope="template"
                 templateId={template.id}
                 templateSessionId={session.id}
-                initialItems={initialItems}
+                initialAssignments={initialAssignments}
                 initialQuizTitle={initialQuizTitle}
-                initialEstimatedTimeMinutes={initialEstimatedTimeMinutes}
+                libraryExercises={libraryExercises}
+                libraryCategories={libraryCategories}
+                libraryError={libraryError}
               />
             </div>
           </div>

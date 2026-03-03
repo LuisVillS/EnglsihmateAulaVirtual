@@ -10,6 +10,7 @@ const NAV_LINKS = [
   { href: "/admin/students", label: "Alumnos" },
   { href: "/admin/prematriculas", label: "Pre-matriculas" },
   { href: "/admin/courses/templates", label: "Plantillas" },
+  { href: "/admin/exercises", label: "Exercises" },
   { href: "/admin/flashcards", label: "Flashcards" },
 ];
 

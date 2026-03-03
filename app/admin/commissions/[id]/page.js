@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { formatSessionDateLabel, getFrequencyReference } from "@/lib/course-sessions";
 import {
+  deleteCourseSessionExerciseBatch,
   deleteSessionItem,
   ensureCommissionSessions,
   sendManualZoomReminderForSession,
@@ -23,6 +24,18 @@ const MATERIAL_TYPE_OPTIONS = [
   { value: "link", label: "Enlace" },
   { value: "video", label: "Video" },
 ];
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 7h16" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+      <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+    </svg>
+  );
+}
 
 function getMissingColumnFromError(error) {
   const message = String(error?.message || "");
@@ -576,12 +589,28 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
                               <p className="mt-2 text-xs text-muted">
                                 Los ejercicios de esta clase se editan juntos desde un solo editor.
                               </p>
-                              <Link
-                                href={`/admin/commissions/${commission.id}/sessions/${session.id}/exercises`}
-                                className="mt-3 inline-flex w-full justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
-                              >
-                                {hasQuiz ? "Editar prueba" : "Crear prueba para esta clase"}
-                              </Link>
+                              <div className="mt-3 flex items-center gap-2">
+                                <Link
+                                  href={`/admin/commissions/${commission.id}/sessions/${session.id}/exercises`}
+                                  className="inline-flex flex-1 justify-center rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+                                >
+                                  {hasQuiz ? "Editar prueba" : "Crear prueba para esta clase"}
+                                </Link>
+                                {hasQuiz ? (
+                                  <form action={deleteCourseSessionExerciseBatch}>
+                                    <input suppressHydrationWarning type="hidden" name="commissionId" value={commission.id} />
+                                    <input suppressHydrationWarning type="hidden" name="courseSessionId" value={session.id} />
+                                    <button suppressHydrationWarning
+                                      type="submit"
+                                      title="Eliminar prueba completa"
+                                      aria-label="Eliminar prueba completa"
+                                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-danger/60 text-danger transition hover:bg-danger/10"
+                                    >
+                                      <TrashIcon />
+                                    </button>
+                                  </form>
+                                ) : null}
+                              </div>
                             </div>
 
                             <div className="rounded-2xl border border-border bg-surface p-4">

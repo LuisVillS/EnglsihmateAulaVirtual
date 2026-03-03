@@ -13,6 +13,7 @@ import {
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
+import { loadLessonQuizAssignments } from "@/lib/lesson-quiz-assignments";
 import { restartLessonQuizAttempt } from "../actions";
 
 function ArrowLeftIcon() {
@@ -260,55 +261,6 @@ function buildExerciseAnswerLines(exercise) {
   return [];
 }
 
-async function loadLessonTestMeta(supabase, lesson, exercises = []) {
-  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
-  const fallbackTitle = String(lesson?.title || "").trim() || "Test de clase";
-  const exerciseIds = Array.from(
-    new Set((exercises || []).map((exercise) => String(exercise?.id || "").trim()).filter(Boolean))
-  );
-  if (!exerciseIds.length) {
-    return {
-      testTitle: fallbackTitle,
-      testNumber: fallbackNumber,
-    };
-  }
-
-  const { data: itemRows, error: itemError } = await supabase
-    .from("session_items")
-    .select("title, session_id, exercise_id")
-    .in("exercise_id", exerciseIds)
-    .eq("type", "exercise")
-    .order("created_at", { ascending: true })
-    .limit(1);
-
-  if (itemError || !itemRows?.length) {
-    return {
-      testTitle: fallbackTitle,
-      testNumber: fallbackNumber,
-    };
-  }
-
-  const firstItem = itemRows[0];
-  let testNumber = fallbackNumber;
-  const sessionId = String(firstItem?.session_id || "").trim();
-  if (sessionId) {
-    const { data: sessionRow } = await supabase
-      .from("course_sessions")
-      .select("session_in_cycle")
-      .eq("id", sessionId)
-      .maybeSingle();
-    const sessionNumber = toInt(sessionRow?.session_in_cycle, 0);
-    if (sessionNumber > 0) {
-      testNumber = sessionNumber;
-    }
-  }
-
-  return {
-    testTitle: String(firstItem?.title || "").trim() || fallbackTitle,
-    testNumber,
-  };
-}
-
 function computeExerciseWeight(totalExercises, exerciseIndex) {
   const total = Math.max(1, Number(totalExercises) || 1);
   const index = Math.max(0, Number(exerciseIndex) || 0);
@@ -345,6 +297,62 @@ function isMissingUserProgressQuizColumnsError(error) {
   );
 }
 
+async function loadLessonProgressRows(supabase, userId, lessonId, exerciseIds = []) {
+  const ids = Array.from(
+    new Set((exerciseIds || []).map((value) => String(value || "").trim()).filter(Boolean))
+  );
+  if (!ids.length) return [];
+
+  async function runProgressQuery(scope = "lesson") {
+    let query = supabase
+      .from("user_progress")
+      .select("exercise_id, is_correct, attempts, wrong_attempts, final_status, score_awarded, answered_at, answer_snapshot")
+      .eq("user_id", userId)
+      .in("exercise_id", ids);
+
+    if (scope === "lesson") {
+      query = query.eq("lesson_id", lessonId);
+    } else if (scope === "legacy") {
+      query = query.is("lesson_id", null);
+    }
+
+    let { data, error } = await query;
+
+    if (error && isMissingUserProgressQuizColumnsError(error)) {
+      let fallbackQuery = supabase
+        .from("user_progress")
+        .select("exercise_id, is_correct, attempts, last_practiced")
+        .eq("user_id", userId)
+        .in("exercise_id", ids);
+
+      if (scope === "lesson") {
+        fallbackQuery = fallbackQuery.eq("lesson_id", lessonId);
+      } else if (scope === "legacy") {
+        fallbackQuery = fallbackQuery.is("lesson_id", null);
+      }
+
+      ({ data, error } = await fallbackQuery);
+    }
+
+    return {
+      data: data || [],
+      error,
+    };
+  }
+
+  const scoped = await runProgressQuery("lesson");
+  if (scoped.error) {
+    const noScope = await runProgressQuery("any");
+    return noScope.error ? [] : noScope.data;
+  }
+  if (scoped.data.length) {
+    return scoped.data;
+  }
+
+  const legacy = await runProgressQuery("legacy");
+  return legacy.error ? scoped.data : legacy.data;
+}
+
 export const metadata = {
   title: "Resultados de test | Aula Virtual",
 };
@@ -372,28 +380,17 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
 
   const { data: lesson } = await supabase
     .from("lessons")
-    .select("id, title, level, unit_id, ordering")
+    .select("id, title, level, unit_id, ordering, description")
     .eq("id", lessonId)
     .maybeSingle();
   if (!lesson?.id) notFound();
 
-  const { data: exercises, error: exercisesError } = await supabase
-    .from("exercises")
-    .select("id, type, prompt, ordering, content_json")
-    .eq("lesson_id", lesson.id)
-    .eq("status", "published")
-    .order("ordering", { ascending: true })
-    .order("created_at", { ascending: true });
-
-  if (exercisesError) {
-    throw new Error(exercisesError.message || "No se pudieron cargar ejercicios de resultados.");
-  }
-
-  const published = exercises || [];
+  const quiz = await loadLessonQuizAssignments(supabase, lesson);
+  const published = Array.isArray(quiz?.exercises) ? quiz.exercises : [];
   const totalExercises = published.length;
-  const testMeta = await loadLessonTestMeta(supabase, lesson, published);
-  const testTitle = testMeta.testTitle;
-  const testNumber = testMeta.testNumber;
+  const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
+  const testTitle = String(quiz?.title || lesson?.title || "").trim() || "Test de clase";
+  const testNumber = Math.max(1, toInt(quiz?.testNumber, fallbackNumber));
   const exercisePointValues = published.map((exercise) => {
     const parsed = Number(exercise?.content_json?.point_value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -448,28 +445,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
   }
 
   const exerciseIds = published.map((exercise) => exercise.id);
-  let progressRows = [];
-  if (exerciseIds.length) {
-    let data = null;
-    let error = null;
-    ({ data, error } = await supabase
-      .from("user_progress")
-      .select("exercise_id, is_correct, attempts, wrong_attempts, final_status, score_awarded, answered_at, answer_snapshot")
-      .eq("user_id", profile.id)
-      .in("exercise_id", exerciseIds));
-
-    if (error && isMissingUserProgressQuizColumnsError(error)) {
-      ({ data, error } = await supabase
-        .from("user_progress")
-        .select("exercise_id, is_correct, attempts, last_practiced")
-        .eq("user_id", profile.id)
-        .in("exercise_id", exerciseIds));
-    }
-
-    if (!error) {
-      progressRows = data || [];
-    }
-  }
+  const progressRows = await loadLessonProgressRows(supabase, profile.id, lesson.id, exerciseIds);
 
   const progressByExercise = new Map(
     normalizeArray(progressRows).map((row) => [String(row.exercise_id || "").trim(), row])
