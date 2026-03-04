@@ -4473,7 +4473,7 @@ export async function upsertExercise(formData) {
       ],
     }
     : {
-      sentence: prompt || "Complete the sentence: ____",
+      sentence: prompt || "Complete the sentence: [Blank]",
       options: choices,
       correct_index: choices.length
         ? Math.max(0, choices.findIndex((choice) => choice.toLowerCase() === answer.toLowerCase()))

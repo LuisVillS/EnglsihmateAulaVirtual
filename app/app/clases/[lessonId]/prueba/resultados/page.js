@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import RestartLessonQuizButton from "@/components/restart-lesson-quiz-button";
+import { splitClozeSentenceSegments, tokenizeClozeSentence, toClozeDisplayText } from "@/lib/cloze-blanks";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
   LESSON_QUIZ_MAX_RESTARTS,
@@ -68,29 +69,6 @@ function normalizeExerciseTypeLabel(type) {
   return EXERCISE_TYPE_LABELS[normalized] || "Ejercicio";
 }
 
-function splitSentenceByBlankTokens(sentence = "") {
-  const text = String(sentence || "");
-  const regex = /\[\[\s*(blank_[a-z0-9_-]+)\s*\]\]/gi;
-  const segments = [];
-  let lastIndex = 0;
-  let match = regex.exec(text);
-
-  while (match) {
-    if (match.index > lastIndex) {
-      segments.push({ kind: "text", value: text.slice(lastIndex, match.index) });
-    }
-    segments.push({ kind: "blank", key: String(match[1] || "").trim().toLowerCase() });
-    lastIndex = match.index + match[0].length;
-    match = regex.exec(text);
-  }
-
-  if (lastIndex < text.length) {
-    segments.push({ kind: "text", value: text.slice(lastIndex) });
-  }
-
-  return segments.length ? segments : [{ kind: "text", value: text }];
-}
-
 function buildClozeReviewLayout(exercise, answerSnapshot, revealAll = false) {
   const content = normalizeObject(exercise?.content_json);
   const rawBlanks = normalizeArray(content.blanks);
@@ -128,13 +106,11 @@ function buildClozeReviewLayout(exercise, answerSnapshot, revealAll = false) {
 
   let sentence = String(content.sentence || exercise?.prompt || "").trim();
   if (!sentence) sentence = "Complete the sentence.";
-  if (!/\[\[\s*blank_/i.test(sentence)) {
-    if (/_{2,}/.test(sentence)) {
-      sentence = sentence.replace(/_{2,}/, `[[${blanks[0].key}]]`);
-    } else if (blanks.length === 1) {
-      sentence = `${sentence} [[${blanks[0].key}]]`.trim();
-    }
-  }
+  const tokenized = tokenizeClozeSentence(
+    sentence,
+    blanks.map((blank, index) => String(blank?.key || `blank_${index + 1}`).trim().toLowerCase())
+  );
+  sentence = tokenized.sentence;
 
   const snapshot = normalizeObject(answerSnapshot);
   const snapshotByKey = new Map(
@@ -156,7 +132,7 @@ function buildClozeReviewLayout(exercise, answerSnapshot, revealAll = false) {
   );
 
   return {
-    segments: splitSentenceByBlankTokens(sentence),
+    segments: splitClozeSentenceSegments(sentence).segments,
     hasPerBlankReview: snapshotByKey.size > 0,
     displayByKey,
   };
@@ -587,7 +563,8 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
               const showClozePartial = hasResult && !showStandardAnswer && Boolean(clozeReview?.hasPerBlankReview);
               const answerLines = buildExerciseAnswerLines(exercise);
               const typeLabel = normalizeExerciseTypeLabel(exercise.type);
-              const title = String(exercise.prompt || "").trim() || typeLabel;
+              const rawTitle = String(exercise.prompt || "").trim() || typeLabel;
+              const title = exerciseType === "cloze" ? toClozeDisplayText(rawTitle) : rawTitle;
 
               return (
                 <article
@@ -678,7 +655,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                     </p>
                     {showStandardAnswer ? (
                       clozeReview ? (
-                        <div className="mt-2 rounded-2xl border border-border bg-surface-2 px-3 py-3 text-sm font-semibold text-foreground">
+                        <div className="mt-2 rounded-2xl border border-border bg-surface-2 px-3 py-3 text-sm font-semibold text-foreground whitespace-pre-wrap leading-8">
                           {clozeReview.segments.map((segment, segmentIndex) => {
                             if (segment.kind !== "blank") {
                               return <span key={`${exercise.id}-segment-text-${segmentIndex}`}>{segment.value}</span>;
@@ -693,7 +670,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                                     : "border-dashed border-border bg-surface"
                                 }`}
                               >
-                                {value ? value : <span className="block h-4 w-10" aria-hidden="true" />}
+                                {value ? value : <span className="inline-flex h-4 w-10 rounded border border-border bg-white/90" aria-hidden="true" />}
                               </span>
                             );
                           })}
@@ -710,7 +687,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                         <p className="mt-2 text-sm text-muted">No hay respuesta visible para este ejercicio.</p>
                       )
                     ) : showClozePartial ? (
-                      <div className="mt-2 rounded-2xl border border-border bg-surface-2 px-3 py-3 text-sm font-semibold text-foreground">
+                      <div className="mt-2 rounded-2xl border border-border bg-surface-2 px-3 py-3 text-sm font-semibold text-foreground whitespace-pre-wrap leading-8">
                         {clozeReview.segments.map((segment, segmentIndex) => {
                           if (segment.kind !== "blank") {
                             return <span key={`${exercise.id}-segment-text-${segmentIndex}`}>{segment.value}</span>;
@@ -725,7 +702,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                                   : "border-dashed border-border bg-surface"
                               }`}
                             >
-                              {value ? value : <span className="block h-4 w-10" aria-hidden="true" />}
+                              {value ? value : <span className="inline-flex h-4 w-10 rounded border border-border bg-white/90" aria-hidden="true" />}
                             </span>
                           );
                         })}

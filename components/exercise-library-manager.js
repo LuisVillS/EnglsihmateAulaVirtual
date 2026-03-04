@@ -23,6 +23,7 @@ import {
   matchesExerciseLibrarySearch,
   sortExerciseLibrary,
 } from "@/lib/exercise-library";
+import { tokenizeClozeSentence } from "@/lib/cloze-blanks";
 
 function sortCategories(list = []) {
   return [...(Array.isArray(list) ? list : [])].sort((left, right) => {
@@ -66,7 +67,7 @@ const CSV_TEMPLATE_TYPES = [
 const CSV_TEMPLATE_FILES = {
   cloze: [
     "skill,cefr_level,category,sentence,answers,options",
-    'grammar,A1,Verb To Be,"I ____ a student and you ____ a teacher.","am|are","am|is|are|be"',
+    'grammar,A1,Verb To Be,"I [Blank] a student and you [Blank] a teacher.","am|are","am|is|are|be"',
   ].join("\n"),
   scramble: [
     "skill,cefr_level,category,prompt_native,target_words",
@@ -166,23 +167,6 @@ function splitPipeList(value) {
     .filter(Boolean);
 }
 
-function injectBlankTokens(sentence, blankIds) {
-  let cursor = 0;
-  let nextSentence = String(sentence || "").replace(/_{2,}/g, () => {
-    if (cursor >= blankIds.length) return "____";
-    const token = `[[${blankIds[cursor]}]]`;
-    cursor += 1;
-    return token;
-  });
-
-  if (cursor < blankIds.length) {
-    const trailingTokens = blankIds.slice(cursor).map((blankId) => `[[${blankId}]]`).join(" ");
-    nextSentence = `${nextSentence} ${trailingTokens}`.trim();
-  }
-
-  return nextSentence;
-}
-
 function buildCsvImportPreview(type, text) {
   const { headers, rows } = parseCsvText(text);
   if (!headers.length) {
@@ -219,7 +203,7 @@ function buildCsvImportPreview(type, text) {
           };
         });
         rawContent = {
-          sentence: injectBlankTokens(getCell("sentence"), blanks.map((blank) => blank.id)),
+          sentence: tokenizeClozeSentence(getCell("sentence"), blanks.map((blank) => blank.id)).sentence,
           blanks,
           options_pool: optionTexts.map((option, optionIndex) => ({
             id: `opt_csv_${index + 1}_${optionIndex + 1}`,

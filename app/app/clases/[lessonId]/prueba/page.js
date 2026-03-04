@@ -518,9 +518,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
               </div>
               <div className="h-3 w-full overflow-hidden rounded-full bg-surface-2">
                 <div
-                  className={`h-full rounded-full transition-all duration-500 ${
-                    quizState === LESSON_QUIZ_STATUS.COMPLETED ? "bg-success" : "bg-primary"
-                  }`}
+                  className="h-full rounded-full bg-success transition-all duration-500"
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { extractYouTubeVideoId, parseListeningTimeValue } from "@/lib/listening-exercise";
 
 const YT_PLAYER_STATES = {
@@ -83,6 +83,9 @@ function SpeakerIcon() {
   );
 }
 
+const LISTENING_RING_BLUE = "#3b82f6";
+const LISTENING_RING_TRACK = "rgba(59,130,246,0.22)";
+
 export default function ListeningPlaybackControl({
   youtubeUrl = "",
   audioUrl = "",
@@ -107,12 +110,15 @@ export default function ListeningPlaybackControl({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(() => hasAudioSource);
   const [helperText, setHelperText] = useState("");
+  const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  const [playbackDuration, setPlaybackDuration] = useState(0);
 
   const audioRef = useRef(null);
   const youtubeHostRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const isPlayingRef = useRef(false);
   const stopTimerRef = useRef(null);
+  const progressTimerRef = useRef(null);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -122,6 +128,10 @@ export default function ListeningPlaybackControl({
     if (stopTimerRef.current) {
       window.clearInterval(stopTimerRef.current);
       stopTimerRef.current = null;
+    }
+    if (progressTimerRef.current) {
+      window.clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
     }
   }, []);
 
@@ -156,6 +166,10 @@ export default function ListeningPlaybackControl({
         events: {
           onReady: () => {
             setIsPlayerReady(true);
+            const totalDuration = Number(youtubePlayerRef.current?.getDuration?.() ?? 0);
+            if (Number.isFinite(totalDuration) && totalDuration > 0) {
+              setPlaybackDuration(totalDuration);
+            }
           },
           onStateChange: (event) => {
             if (event.data === YT_PLAYER_STATES.PLAYING) {
@@ -165,6 +179,11 @@ export default function ListeningPlaybackControl({
             }
             if (event.data === YT_PLAYER_STATES.ENDED) {
               setIsPlaying(false);
+              const totalDuration = Number(event.target?.getDuration?.() ?? 0);
+              const endValue = normalizedEndTime != null ? normalizedEndTime : totalDuration;
+              if (Number.isFinite(endValue) && endValue > 0) {
+                setPlaybackCurrentTime(endValue);
+              }
               return;
             }
             if (event.data === YT_PLAYER_STATES.PAUSED && isPlayingRef.current) {
@@ -181,6 +200,10 @@ export default function ListeningPlaybackControl({
         window.clearInterval(stopTimerRef.current);
         stopTimerRef.current = null;
       }
+      if (progressTimerRef.current) {
+        window.clearInterval(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
       if (youtubePlayerRef.current?.destroy) {
         youtubePlayerRef.current.destroy();
       }
@@ -189,23 +212,47 @@ export default function ListeningPlaybackControl({
   }, [hasYouTubeSource, videoId, normalizedEndTime, normalizedStartTime]);
 
   useEffect(() => {
-    if (!hasYouTubeSource || !isPlaying || normalizedEndTime == null || !youtubePlayerRef.current) {
+    if (!hasYouTubeSource || !isPlaying || !youtubePlayerRef.current) {
       if (stopTimerRef.current) {
         window.clearInterval(stopTimerRef.current);
         stopTimerRef.current = null;
       }
+      if (progressTimerRef.current) {
+        window.clearInterval(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
       return undefined;
     }
 
-    stopTimerRef.current = window.setInterval(() => {
-      const currentTime = Number(youtubePlayerRef.current?.getCurrentTime?.() ?? 0);
-      if (Number.isFinite(currentTime) && currentTime >= normalizedEndTime) {
-        youtubePlayerRef.current?.stopVideo?.();
-        setIsPlaying(false);
+    progressTimerRef.current = window.setInterval(() => {
+      const player = youtubePlayerRef.current;
+      if (!player) return;
+      const currentTime = Number(player.getCurrentTime?.() ?? 0);
+      const totalDuration = Number(player.getDuration?.() ?? 0);
+      if (Number.isFinite(currentTime)) {
+        setPlaybackCurrentTime(currentTime);
       }
-    }, 200);
+      if (Number.isFinite(totalDuration) && totalDuration > 0) {
+        setPlaybackDuration(totalDuration);
+      }
+    }, 140);
+
+    if (normalizedEndTime != null) {
+      stopTimerRef.current = window.setInterval(() => {
+        const currentTime = Number(youtubePlayerRef.current?.getCurrentTime?.() ?? 0);
+        if (Number.isFinite(currentTime) && currentTime >= normalizedEndTime) {
+          youtubePlayerRef.current?.stopVideo?.();
+          setIsPlaying(false);
+          setPlaybackCurrentTime(normalizedEndTime);
+        }
+      }, 200);
+    }
 
     return () => {
+      if (progressTimerRef.current) {
+        window.clearInterval(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
       if (stopTimerRef.current) {
         window.clearInterval(stopTimerRef.current);
         stopTimerRef.current = null;
@@ -237,6 +284,7 @@ export default function ListeningPlaybackControl({
         await node.play();
         setPlaysUsed((current) => current + 1);
         setIsPlaying(true);
+        setPlaybackCurrentTime(normalizedStartTime);
       } catch {
         setHelperText("No se pudo reproducir el audio.");
       }
@@ -252,10 +300,23 @@ export default function ListeningPlaybackControl({
     setIsPlaying(true);
     youtubePlayerRef.current.seekTo?.(normalizedStartTime, true);
     youtubePlayerRef.current.playVideo?.();
+    setPlaybackCurrentTime(normalizedStartTime);
   }
 
   const remainingPlays = Math.max(0, normalizedMaxPlays - playsUsed);
   const canPlay = hasSource && !isPlaying && remainingPlays > 0;
+  const effectiveEndTime = normalizedEndTime != null
+    ? normalizedEndTime
+    : (Number.isFinite(playbackDuration) && playbackDuration > 0 ? playbackDuration : 0);
+  const effectiveDuration = Math.max(0, effectiveEndTime - normalizedStartTime);
+  const elapsed = Math.max(0, playbackCurrentTime - normalizedStartTime);
+  const progressRatio = useMemo(() => {
+    if (!Number.isFinite(effectiveDuration) || effectiveDuration <= 0) return 0;
+    return Math.min(1, Math.max(0, elapsed / effectiveDuration));
+  }, [elapsed, effectiveDuration]);
+  const ringRadius = 47;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const ringDashOffset = ringCircumference * (1 - progressRatio);
 
   return (
     <div className="space-y-4 rounded-2xl border border-border bg-surface-2 p-4">
@@ -265,16 +326,32 @@ export default function ListeningPlaybackControl({
           src={audioUrl}
           preload="metadata"
           className="hidden"
+          onLoadedMetadata={(event) => {
+            const node = event.currentTarget;
+            if (Number.isFinite(node.duration) && node.duration > 0) {
+              setPlaybackDuration(node.duration);
+            }
+          }}
           onTimeUpdate={(event) => {
+            setPlaybackCurrentTime(event.currentTarget.currentTime || 0);
             if (normalizedEndTime == null) return;
             const node = event.currentTarget;
             if (node.currentTime >= normalizedEndTime) {
               node.pause();
               node.currentTime = normalizedEndTime;
               setIsPlaying(false);
+              setPlaybackCurrentTime(normalizedEndTime);
             }
           }}
-          onEnded={() => setIsPlaying(false)}
+          onEnded={(event) => {
+            setIsPlaying(false);
+            const node = event.currentTarget;
+            const endValue =
+              normalizedEndTime != null
+                ? normalizedEndTime
+                : (Number.isFinite(node.duration) ? node.duration : 0);
+            setPlaybackCurrentTime(endValue);
+          }}
         />
       ) : null}
 
@@ -285,19 +362,48 @@ export default function ListeningPlaybackControl({
       ) : null}
 
       <div className="flex flex-col items-center justify-center gap-3 text-center">
-        <button
-          type="button"
-          onClick={handlePlay}
-          disabled={!canPlay}
-          className={`inline-flex h-28 w-28 items-center justify-center rounded-full border-2 transition sm:h-32 sm:w-32 ${
-            canPlay
-              ? "border-primary bg-primary text-primary-foreground hover:bg-primary-2"
-              : "border-border bg-surface text-muted"
-          }`}
-          aria-label="Reproducir audio"
-        >
-          <SpeakerIcon />
-        </button>
+        <div className="relative h-28 w-28 sm:h-32 sm:w-32">
+          <svg
+            viewBox="0 0 100 100"
+            className="pointer-events-none absolute -inset-1 z-0 h-[calc(100%+0.5rem)] w-[calc(100%+0.5rem)] -rotate-90"
+            aria-hidden="true"
+          >
+            <circle
+              cx="50"
+              cy="50"
+              r={ringRadius}
+              fill="none"
+              stroke={LISTENING_RING_TRACK}
+              strokeWidth="4"
+            />
+            <circle
+              cx="50"
+              cy="50"
+              r={ringRadius}
+              fill="none"
+              stroke={LISTENING_RING_BLUE}
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeDasharray={`${ringCircumference} ${ringCircumference}`}
+              strokeDashoffset={ringDashOffset}
+            />
+          </svg>
+          <button
+            type="button"
+            onClick={handlePlay}
+            disabled={!canPlay}
+            className={`relative z-10 inline-flex h-full w-full items-center justify-center rounded-full border-2 transition ${
+              canPlay
+                ? "border-primary bg-primary text-primary-foreground hover:bg-primary-2"
+                : "border-border bg-surface text-muted"
+            }`}
+            aria-label="Reproducir audio"
+          >
+            <span className="relative z-10">
+              <SpeakerIcon />
+            </span>
+          </button>
+        </div>
 
         <div className="space-y-1">
           <p className="text-sm font-semibold text-foreground">
@@ -306,7 +412,6 @@ export default function ListeningPlaybackControl({
           <p className="text-xs text-muted">
             Usadas: {playsUsed}/{normalizedMaxPlays}
           </p>
-          <p className="text-xs text-muted">Mientras corre el audio no se puede pausar ni adelantar.</p>
           {normalizedStartTime > 0 || normalizedEndTime != null ? (
             <p className="text-xs text-muted">
               Fragmento: desde {normalizedStartTime}s{normalizedEndTime != null ? ` hasta ${normalizedEndTime}s` : " hasta el final"}

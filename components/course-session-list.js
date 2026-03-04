@@ -144,6 +144,37 @@ function toVimeoEmbedUrl(url) {
   }
 }
 
+function toYouTubeEmbedUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    let videoId = "";
+
+    if (host.includes("youtu.be")) {
+      videoId = parsed.pathname.replace(/^\/+/, "").split("/")[0] || "";
+    } else if (host.includes("youtube.com")) {
+      if (parsed.pathname.includes("/embed/")) {
+        return raw;
+      }
+      if (parsed.pathname.includes("/shorts/")) {
+        videoId = parsed.pathname.split("/shorts/")[1]?.split("/")[0] || "";
+      } else if (parsed.pathname.includes("/watch")) {
+        videoId = parsed.searchParams.get("v") || "";
+      } else if (parsed.pathname.includes("/live/")) {
+        videoId = parsed.pathname.split("/live/")[1]?.split("/")[0] || "";
+      }
+    }
+
+    if (!videoId) return null;
+    return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+  } catch {
+    return null;
+  }
+}
+
 function FolderIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -237,6 +268,10 @@ function isVideoItem(item) {
     url.includes("vimeo.com") ||
     url.includes("loom.com")
   );
+}
+
+function isExternalLinkItem(item) {
+  return String(item?.type || "").trim().toLowerCase() === "link";
 }
 
 function isExerciseItem(item) {
@@ -364,6 +399,7 @@ export default function CourseSessionList({
 }) {
   const [openSessionId, setOpenSessionId] = useState(null);
   const [viewerType, setViewerType] = useState("slide");
+  const [openMaterialItemId, setOpenMaterialItemId] = useState(null);
   const [openCycleMap, setOpenCycleMap] = useState({});
   const [expandedSessionMap, setExpandedSessionMap] = useState({});
   const nowMs = new Date(nowIso || "1970-01-01T00:00:00.000Z").getTime();
@@ -478,9 +514,21 @@ export default function CourseSessionList({
   const selectedRecordingLink = String(selectedSession?.recording_link || "").trim();
   const selectedRecordingPasscode = String(selectedSession?.recording_passcode || "").trim();
   const selectedFlashcardsItem = selectedItems.find((item) => isFlashcardsItem(item)) || null;
+  const selectedMaterialItem =
+    selectedItems.find((item) => String(item?.id || "").trim() === String(openMaterialItemId || "").trim()) || null;
   const selectedFlashcards = Array.isArray(selectedFlashcardsItem?.flashcards) ? selectedFlashcardsItem.flashcards : [];
   const embedUrl = toSlidesEmbedUrl(selectedSlideUrl);
   const recordingEmbedUrl = toVimeoEmbedUrl(selectedRecordingLink);
+  const selectedMaterialUrl = String(selectedMaterialItem?.url || "").trim();
+  const selectedMaterialTitle = String(selectedMaterialItem?.title || "").trim() || "Material de clase";
+  const selectedMaterialType = String(selectedMaterialItem?.type || "").trim().toLowerCase();
+  const selectedMaterialIsSlides = isSlidesItem(selectedMaterialItem);
+  const selectedMaterialIsVideo = isVideoItem(selectedMaterialItem);
+  const selectedMaterialEmbedUrl = selectedMaterialIsSlides
+    ? toSlidesEmbedUrl(selectedMaterialUrl)
+    : selectedMaterialIsVideo
+      ? (toYouTubeEmbedUrl(selectedMaterialUrl) || toVimeoEmbedUrl(selectedMaterialUrl))
+      : selectedMaterialUrl || null;
 
   function toggleMonth(monthKey) {
     setOpenCycleMap((previous) => ({ ...previous, [monthKey]: !previous[monthKey] }));
@@ -494,23 +542,34 @@ export default function CourseSessionList({
   function openSlide(sessionId, disabled) {
     if (disabled) return;
     setViewerType("slide");
+    setOpenMaterialItemId(null);
     setOpenSessionId(sessionId);
   }
 
   function openRecording(sessionId, disabled) {
     if (disabled) return;
     setViewerType("recording");
+    setOpenMaterialItemId(null);
     setOpenSessionId(sessionId);
   }
 
   function openFlashcards(sessionId, disabled) {
     if (disabled) return;
     setViewerType("flashcards");
+    setOpenMaterialItemId(null);
+    setOpenSessionId(sessionId);
+  }
+
+  function openMaterial(sessionId, itemId, disabled) {
+    if (disabled) return;
+    setViewerType("material");
+    setOpenMaterialItemId(String(itemId || "").trim() || null);
     setOpenSessionId(sessionId);
   }
 
   function closeViewer() {
     setOpenSessionId(null);
+    setOpenMaterialItemId(null);
     setViewerType("slide");
   }
 
@@ -707,7 +766,7 @@ export default function CourseSessionList({
                                         >
                                           {getResourceActionLabel(item)}
                                         </button>
-                                      ) : item.url ? (
+                                      ) : isExternalLinkItem(item) ? (
                                         <a
                                           href={item.url}
                                           target="_blank"
@@ -716,6 +775,14 @@ export default function CourseSessionList({
                                         >
                                           {getResourceActionLabel(item)}
                                         </a>
+                                      ) : item.url ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => openMaterial(session.id, item.id, monthLocked)}
+                                          className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
+                                        >
+                                          {getResourceActionLabel(item)}
+                                        </button>
                                       ) : (
                                         <button
                                           type="button"
@@ -849,6 +916,8 @@ export default function CourseSessionList({
         title={
           viewerType === "recording"
             ? "Grabacion de clase"
+            : viewerType === "material"
+              ? "Material de clase"
             : viewerType === "flashcards"
               ? "Flashcards"
               : "Slide de la clase"
@@ -923,6 +992,43 @@ export default function CourseSessionList({
                 className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Ver grabación en otra ventana
+              </button>
+            </div>
+          </div>
+        ) : viewerType === "material" ? (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <p className="text-lg font-semibold text-foreground">{selectedMaterialTitle}</p>
+              <p className="text-sm text-muted">{selectedClassTitle || "Material de la clase"}</p>
+            </div>
+            {selectedMaterialEmbedUrl ? (
+              <div className="relative w-full aspect-[16/9] overflow-hidden rounded-2xl border border-border bg-surface-2">
+                <iframe
+                  title={selectedMaterialTitle}
+                  src={selectedMaterialEmbedUrl}
+                  className="absolute inset-0 h-full w-full"
+                  allow={selectedMaterialIsVideo ? "autoplay; fullscreen; picture-in-picture; encrypted-media" : undefined}
+                  allowFullScreen
+                />
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
+                {selectedMaterialType === "video"
+                  ? "Este video no se puede mostrar dentro del aula."
+                  : "Este material no se puede previsualizar dentro del aula."}
+              </div>
+            )}
+            {selectedMaterialItem?.note ? (
+              <p className="text-sm text-muted">{selectedMaterialItem.note}</p>
+            ) : null}
+            <div className="flex justify-end border-t border-border pt-3">
+              <button
+                type="button"
+                onClick={() => openInAnotherWindow(selectedMaterialUrl)}
+                disabled={!selectedMaterialUrl}
+                className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Abrir en otra ventana
               </button>
             </div>
           </div>

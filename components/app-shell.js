@@ -15,13 +15,15 @@ export default function AppShell({
   studyWithMeUnlocked = false,
   studyWithMeLockMessage = "Disponible solo para alumnos Premium.",
 }) {
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem(STORAGE_KEY) === "1";
-  });
+  const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setCollapsed(window.localStorage.getItem(STORAGE_KEY) === "1");
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

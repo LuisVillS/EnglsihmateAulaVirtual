@@ -12,6 +12,12 @@ import {
   normalizeListeningQuestion,
   normalizeListeningQuestionType,
 } from "@/lib/listening-exercise";
+import {
+  normalizeBlankKey as normalizeClozeBlankKey,
+  splitClozeSentenceSegments,
+  tokenizeClozeSentence,
+  toClozeDisplayText,
+} from "@/lib/cloze-blanks";
 
 export const EXERCISE_TYPE_OPTIONS = [
   { value: "scramble", label: "Scrambled Sentence" },
@@ -89,10 +95,7 @@ export function normalizeEstimatedTimeMinutes(value) {
 }
 
 function normalizeBlankKey(value, fallbackIndex = 1) {
-  const raw = String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
-  if (!raw) return `blank_${fallbackIndex}`;
-  if (raw.startsWith("blank_")) return raw;
-  return `blank_${raw}`;
+  return normalizeClozeBlankKey(value, fallbackIndex);
 }
 
 function normalizeOptionId(value, fallbackIndex = 1) {
@@ -225,7 +228,7 @@ export function normalizeContent(type, rawObject) {
 
   if (type === "cloze") {
     const fallbackContent = getDefaultContent("cloze");
-    const sentence = resolveEditableText(raw.sentence, fallbackContent.sentence);
+    const rawSentence = resolveEditableText(raw.sentence, fallbackContent.sentence);
 
     const optionsPool = [];
     const appendPoolOption = (text = "") => {
@@ -324,9 +327,18 @@ export function normalizeContent(type, rawObject) {
       });
     }
 
+    const blankById = new Map(blanks.map((blank, index) => [normalizeBlankKey(blank.id, index + 1), blank]));
+    const fallbackBlankKeys = blanks.map((blank, index) => normalizeBlankKey(blank.id, index + 1));
+    const tokenized = tokenizeClozeSentence(rawSentence, fallbackBlankKeys);
+    const orderedBlanks = tokenized.orderedKeys.map((key) => {
+      const existing = blankById.get(key);
+      if (existing) return { ...existing, id: key };
+      return { id: key, correct_option_id: null };
+    });
+
     return {
-      sentence,
-      blanks,
+      sentence: tokenized.sentence,
+      blanks: orderedBlanks,
       options_pool: optionsPool,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
@@ -512,6 +524,7 @@ export function GuidedEditor({ item, content, onPatch }) {
   if (item.type === "cloze") {
     const blanks = Array.isArray(content.blanks) ? content.blanks : [];
     const optionsPool = Array.isArray(content.options_pool) ? content.options_pool : [];
+    const sentenceEditorValue = toClozeDisplayText(String(content.sentence || ""));
     const poolMap = new Map(
       optionsPool.map((option) => [String(option?.id || "").trim(), { ...option }])
     );
@@ -543,10 +556,38 @@ export function GuidedEditor({ item, content, onPatch }) {
       onPatch({ options_pool: nextPool });
     };
 
+    const patchSentenceFromEditor = (editorSentence, sourceBlanks = blanks) => {
+      const currentBlanks = Array.isArray(sourceBlanks) ? sourceBlanks : [];
+      const fallbackKeys = currentBlanks.map((blank, index) =>
+        normalizeBlankKey(blank?.id || blank?.key || `blank_${index + 1}`, index + 1)
+      );
+      const tokenized = tokenizeClozeSentence(editorSentence, fallbackKeys);
+      const blankById = new Map(
+        currentBlanks.map((blank, index) => [
+          normalizeBlankKey(blank?.id || blank?.key || `blank_${index + 1}`, index + 1),
+          blank,
+        ])
+      );
+      const nextBlanks = tokenized.orderedKeys.map((key) => {
+        const existing = blankById.get(key);
+        if (existing) return { ...existing, id: key };
+        return { id: key, correct_option_id: null };
+      });
+
+      onPatch({
+        sentence: tokenized.sentence,
+        blanks: nextBlanks,
+      });
+    };
+
     const addBlankToken = () => {
       const blankId = createBlankId();
-      const token = `[[${blankId}]]`;
-      const sentence = String(content.sentence || "");
+      const token = "[Blank]";
+      const sentence = sentenceEditorValue;
+      const nextBlanks = [...blanks, {
+        id: blankId,
+        correct_option_id: null,
+      }];
       const node = clozeSentenceRef.current;
       let nextSentence = sentence;
       if (node && typeof node.selectionStart === "number" && typeof node.selectionEnd === "number") {
@@ -556,14 +597,7 @@ export function GuidedEditor({ item, content, onPatch }) {
       } else {
         nextSentence = `${sentence}${sentence ? " " : ""}${token}`;
       }
-      const nextBlanks = [...blanks, {
-        id: blankId,
-        correct_option_id: null,
-      }];
-      onPatch({
-        sentence: nextSentence,
-        blanks: nextBlanks,
-      });
+      patchSentenceFromEditor(nextSentence, nextBlanks);
     };
 
     const addOption = () => {
@@ -585,17 +619,19 @@ export function GuidedEditor({ item, content, onPatch }) {
       const safeBlankId = String(blankId || "").trim();
       if (!safeBlankId) return;
       const targetBlankId = normalizeBlankKey(safeBlankId, 1);
-      const nextBlanks = blanks.filter((blank) => String(blank?.id || "").trim() !== safeBlankId);
-      const tokenRegex = new RegExp(`\\[\\[\\s*${targetBlankId}\\s*\\]\\]`, "gi");
-      const nextSentence = String(content.sentence || "")
-        .replace(tokenRegex, "____")
-        .replace(/\s{2,}/g, " ")
-        .trim();
+      const nextBlanks = blanks.filter(
+        (blank) => normalizeBlankKey(blank?.id || blank?.key || "", 1) !== targetBlankId
+      );
+      const split = splitClozeSentenceSegments(
+        String(content.sentence || ""),
+        blanks.map((blank, index) => normalizeBlankKey(blank?.id || blank?.key || `blank_${index + 1}`, index + 1))
+      );
+      const nextSentenceDisplay = split.segments
+        .filter((segment) => !(segment.kind === "blank" && normalizeBlankKey(segment.key || "", 1) === targetBlankId))
+        .map((segment) => (segment.kind === "blank" ? "[Blank]" : String(segment.value || "")))
+        .join("");
 
-      onPatch({
-        sentence: nextSentence,
-        blanks: nextBlanks,
-      });
+      patchSentenceFromEditor(nextSentenceDisplay, nextBlanks);
     };
 
     return (
@@ -604,13 +640,13 @@ export function GuidedEditor({ item, content, onPatch }) {
         <textarea
           ref={clozeSentenceRef}
           rows={3}
-          value={content.sentence}
-          onChange={(event) => onPatch({ sentence: event.target.value })}
+          value={sentenceEditorValue}
+          onChange={(event) => patchSentenceFromEditor(event.target.value, blanks)}
           onKeyDownCapture={(event) => {
             event.stopPropagation();
           }}
           className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
-          placeholder="Ej: I [[blank_1]] to school and [[blank_2]] English."
+          placeholder="Ej: I [Blank] to school and [Blank] English."
         />
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -621,7 +657,7 @@ export function GuidedEditor({ item, content, onPatch }) {
             + Agregar blank
           </button>
           <p className="text-xs text-muted">
-            Inserta el token en la posicion del cursor. Despues asigna la respuesta correcta desde el pool global.
+            Inserta [Blank] en la posicion del cursor. Despues asigna la respuesta correcta desde el pool global.
           </p>
         </div>
 
@@ -632,7 +668,7 @@ export function GuidedEditor({ item, content, onPatch }) {
                 Pool global de opciones ({optionsPool.length})
               </p>
               <p className="mt-1 text-xs text-muted">
-                El alumno ve todas las opciones juntas. Cada blank define 1 opcion correcta por ID.
+                El alumno ve todas las opciones juntas. Cada blank define 1 opcion correcta.
               </p>
             </div>
             <button
@@ -656,7 +692,7 @@ export function GuidedEditor({ item, content, onPatch }) {
                 >
                   <div className="space-y-1">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      Opcion {optionIndex + 1} ({optionId})
+                      Opcion {optionIndex + 1}
                     </p>
                     <input
                       value={String(option?.text || "")}
@@ -689,7 +725,7 @@ export function GuidedEditor({ item, content, onPatch }) {
               <div key={`cloze-blank-${blankId}`} className="rounded-xl border border-border bg-surface p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                    Blank {blankIndex + 1} ({blankId})
+                    Blank {blankIndex + 1}
                   </p>
                   <button
                     type="button"

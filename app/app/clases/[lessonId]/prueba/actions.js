@@ -33,6 +33,17 @@ function getJsonObject(formData, key) {
   }
 }
 
+function getJsonArray(formData, key) {
+  const raw = getText(formData, key);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function toInt(value, fallback = 0) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -256,25 +267,69 @@ export async function restartLessonQuizAttempt(formData) {
 export async function submitLessonQuizStep(formData) {
   const lessonId = getText(formData, "lessonId");
   if (!lessonId) return;
+  const responseMode = getText(formData, "responseMode").toLowerCase();
+  const isBackgroundMode = responseMode === "background" || responseMode === "json";
+  const requestKey = getText(formData, "requestKey");
 
-  const exerciseId = getText(formData, "exerciseId");
-  const submittedIndex = Math.max(0, toInt(getText(formData, "currentIndex"), 0));
+  const submittedPageIndex = Math.max(0, toInt(getText(formData, "currentIndex"), 0));
   const submittedTotal = Math.max(0, toInt(getText(formData, "totalExercises"), 0));
-  const submittedWrongAttempts = clamp(
+  const pageResults = getJsonArray(formData, "pageResults");
+  const singleExerciseId = getText(formData, "exerciseId");
+  const singleWrongAttempts = clamp(
     toInt(getText(formData, "wrongAttempts"), 0),
     0,
     LESSON_QUIZ_MAX_WRONG_ATTEMPTS
   );
-  const submittedFinalStatus = getText(formData, "finalStatus").toLowerCase();
-  const submittedScoreAwarded = round2(toNumber(getText(formData, "scoreAwarded"), 0));
-  const submittedAnswerSnapshot = getJsonObject(formData, "answerSnapshot");
+  const singleFinalStatusRaw = getText(formData, "finalStatus").toLowerCase();
+  const singleScoreAwarded = clamp(round2(toNumber(getText(formData, "scoreAwarded"), 0)), 0, 100);
+  const singleAnswerSnapshot = getJsonObject(formData, "answerSnapshot");
 
-  const finalStatus =
-    submittedWrongAttempts >= LESSON_QUIZ_MAX_WRONG_ATTEMPTS || submittedFinalStatus === "failed"
-      ? "failed"
-      : "passed";
-  const isCorrect = finalStatus === "passed";
-  const scoreAwarded = clamp(submittedScoreAwarded, 0, 100);
+  const normalizedPageResults = (Array.isArray(pageResults) ? pageResults : [])
+    .map((entry, index) => {
+      const source = entry && typeof entry === "object" && !Array.isArray(entry) ? entry : {};
+      const exerciseId = String(source.exerciseId || source.exercise_id || "").trim();
+      const exerciseIndex = Math.max(0, toInt(source.exerciseIndex ?? source.currentIndex, submittedPageIndex + index));
+      const wrongAttempts = clamp(
+        toInt(source.wrongAttempts ?? source.wrong_attempts, 0),
+        0,
+        LESSON_QUIZ_MAX_WRONG_ATTEMPTS
+      );
+      const finalStatusRaw = String(source.finalStatus || source.final_status || "").trim().toLowerCase();
+      const finalStatus = wrongAttempts >= LESSON_QUIZ_MAX_WRONG_ATTEMPTS || finalStatusRaw === "failed" ? "failed" : "passed";
+      const scoreAwarded = clamp(round2(toNumber(source.scoreAwarded ?? source.score_awarded, 0)), 0, 100);
+      const answerSnapshot =
+        source.answerSnapshot && typeof source.answerSnapshot === "object" && !Array.isArray(source.answerSnapshot)
+          ? source.answerSnapshot
+          : null;
+      return {
+        exerciseId,
+        exerciseIndex,
+        wrongAttempts,
+        finalStatus,
+        isCorrect: finalStatus === "passed",
+        scoreAwarded,
+        answerSnapshot,
+      };
+    })
+    .filter((entry) => entry.exerciseId);
+
+  const submissions = normalizedPageResults.length
+    ? normalizedPageResults
+    : [{
+        exerciseId: singleExerciseId,
+        exerciseIndex: submittedPageIndex,
+        wrongAttempts: singleWrongAttempts,
+        finalStatus:
+          singleWrongAttempts >= LESSON_QUIZ_MAX_WRONG_ATTEMPTS || singleFinalStatusRaw === "failed"
+            ? "failed"
+            : "passed",
+        isCorrect:
+          !(
+            singleWrongAttempts >= LESSON_QUIZ_MAX_WRONG_ATTEMPTS || singleFinalStatusRaw === "failed"
+          ),
+        scoreAwarded: singleScoreAwarded,
+        answerSnapshot: singleAnswerSnapshot,
+      }];
 
   const { supabase, userId } = await requireStudentUser();
 
@@ -283,6 +338,9 @@ export async function submitLessonQuizStep(formData) {
     totalExercises = await loadPublishedExerciseCount(supabase, lessonId);
   }
   if (!totalExercises) {
+    if (isBackgroundMode) {
+      throw new Error("No hay ejercicios publicados para esta prueba.");
+    }
     revalidateLessonQuizPaths(lessonId);
     redirect(`/app/clases/${lessonId}/prueba`);
   }
@@ -330,6 +388,9 @@ export async function submitLessonQuizStep(formData) {
     }
   } catch (error) {
     if (isMissingLessonQuizTableError(error)) {
+      if (isBackgroundMode) {
+        throw error instanceof Error ? error : new Error("No se encontro la tabla de intentos.");
+      }
       redirect(`/app/clases/${lessonId}/prueba?tracking=missing`);
     }
     throw error instanceof Error ? error : new Error(String(error?.message || "No se pudo enviar el progreso."));
@@ -338,14 +399,54 @@ export async function submitLessonQuizStep(formData) {
   const current = normalizeAttemptRow(existingAttempt, totalExercises);
   const nowIso = new Date().toISOString();
   const startedAtIso = current.started_at || nowIso;
-  const safeCurrentIndex = Math.max(0, Math.min(totalExercises - 1, Number.isFinite(submittedIndex) ? submittedIndex : current.current_index));
-  const nextCompleted = Math.min(totalExercises, Math.max(current.completed_count, safeCurrentIndex) + 1);
-  const nextCorrect = current.correct_count + (isCorrect ? 1 : 0);
+  const safeSubmissionResults = submissions
+    .map((entry, index) => ({
+      ...entry,
+      exerciseIndex: Math.max(
+        0,
+        Math.min(totalExercises - 1, Number.isFinite(entry.exerciseIndex) ? entry.exerciseIndex : submittedPageIndex + index)
+      ),
+    }))
+    .filter((entry) => entry.exerciseId);
+  if (!safeSubmissionResults.length) {
+    throw new Error("No se recibieron respuestas del bloque de ejercicios.");
+  }
+
+  const highestSubmittedIndex = safeSubmissionResults.length
+    ? safeSubmissionResults.reduce((max, entry) => Math.max(max, entry.exerciseIndex), 0)
+    : Math.max(0, Math.min(totalExercises - 1, Number.isFinite(submittedPageIndex) ? submittedPageIndex : current.current_index));
+  const alreadyProcessed = current.completed_count > highestSubmittedIndex;
+  if (alreadyProcessed) {
+    const alreadyCompleted =
+      current.attempt_status === LESSON_QUIZ_STATUS.COMPLETED ||
+      current.completed_count >= totalExercises;
+    revalidateLessonQuizPaths(lessonId);
+    if (isBackgroundMode) {
+      return {
+        ok: true,
+        deduped: true,
+        requestKey: requestKey || null,
+        isCompleted: alreadyCompleted,
+        nextIndex: Math.max(0, Math.min(totalExercises - 1, toInt(current.current_index, 0))),
+      };
+    }
+    if (alreadyCompleted) {
+      redirect(`/app/clases/${lessonId}/prueba/resultados`);
+    }
+    redirect(`/app/clases/${lessonId}/prueba/jugar?i=${Math.max(0, Math.min(totalExercises - 1, toInt(current.current_index, 0)))}`);
+  }
+  const nextCompleted = Math.min(totalExercises, Math.max(current.completed_count, highestSubmittedIndex + 1));
+  const pageCorrectCount = safeSubmissionResults.reduce(
+    (count, entry) => count + (entry.isCorrect ? 1 : 0),
+    0
+  );
+  const nextCorrect = current.correct_count + pageCorrectCount;
   const isCompleted = nextCompleted >= totalExercises;
   const nextStatus = isCompleted ? LESSON_QUIZ_STATUS.COMPLETED : LESSON_QUIZ_STATUS.IN_PROGRESS;
-  const nextIndex = isCompleted ? totalExercises - 1 : safeCurrentIndex + 1;
+  const nextIndex = isCompleted ? totalExercises - 1 : nextCompleted;
   const currentAttemptScore = clamp(round2(toNumber(current.attempt_score_percent, 0)), 0, 100);
-  const nextAttemptScore = clamp(round2(currentAttemptScore + scoreAwarded), 0, 100);
+  const pageScoreAwarded = safeSubmissionResults.reduce((sum, entry) => sum + entry.scoreAwarded, 0);
+  const nextAttemptScore = clamp(round2(currentAttemptScore + pageScoreAwarded), 0, 100);
   const historicalBestScore = clamp(round2(toNumber(current.score_percent, 0)), 0, 100);
   const nextBestScore = legacyScoreMode
     ? nextAttemptScore
@@ -362,14 +463,18 @@ export async function submitLessonQuizStep(formData) {
       )
     : null;
 
-  if (exerciseId) {
-    const safeWrongAttempts = submittedWrongAttempts;
+  for (const entry of safeSubmissionResults) {
+    const exerciseId = entry.exerciseId;
+    if (!exerciseId) continue;
+
+    const safeWrongAttempts = entry.wrongAttempts;
     const safeAttempts = Math.max(1, safeWrongAttempts + 1);
-    const quality = isCorrect
+    const quality = entry.isCorrect
       ? (safeWrongAttempts <= 0 ? 5 : safeWrongAttempts === 1 ? 4 : 3)
       : 0;
 
     let existingProgress = null;
+    let existingProgressScope = null;
     {
       let progressLookup = await supabase
         .from("user_progress")
@@ -386,6 +491,7 @@ export async function submitLessonQuizStep(formData) {
           .eq("user_id", userId)
           .eq("exercise_id", exerciseId)
           .maybeSingle();
+        existingProgressScope = progressLookup.error ? null : (progressLookup.data ? "legacy" : null);
       } else if (!progressLookup.data) {
         progressLookup = await supabase
           .from("user_progress")
@@ -402,7 +508,12 @@ export async function submitLessonQuizStep(formData) {
             .eq("user_id", userId)
             .eq("exercise_id", exerciseId)
             .maybeSingle();
+          existingProgressScope = progressLookup.error ? null : (progressLookup.data ? "legacy" : null);
+        } else {
+          existingProgressScope = progressLookup.data ? "legacy" : null;
         }
+      } else {
+        existingProgressScope = "lesson";
       }
 
       existingProgress = progressLookup.error ? null : progressLookup.data || null;
@@ -412,82 +523,100 @@ export async function submitLessonQuizStep(formData) {
       user_id: userId,
       exercise_id: exerciseId,
       lesson_id: lessonId,
-      is_correct: isCorrect,
+      is_correct: entry.isCorrect,
       attempts: safeAttempts,
       last_practiced: nowIso,
       interval_days: 1,
       next_due_at: nowIso,
       last_quality: quality,
       times_seen: Math.max(1, toInt(existingProgress?.times_seen, 0) + 1),
-      times_correct: Math.max(0, toInt(existingProgress?.times_correct, 0) + (isCorrect ? 1 : 0)),
-      streak_count: isCorrect ? Math.max(0, toInt(existingProgress?.streak_count, 0) + 1) : 0,
+      times_correct: Math.max(0, toInt(existingProgress?.times_correct, 0) + (entry.isCorrect ? 1 : 0)),
+      streak_count: entry.isCorrect ? Math.max(0, toInt(existingProgress?.streak_count, 0) + 1) : 0,
       updated_at: nowIso,
       wrong_attempts: safeWrongAttempts,
-      final_status: finalStatus,
-      score_awarded: scoreAwarded,
+      final_status: entry.finalStatus,
+      score_awarded: entry.scoreAwarded,
       answered_at: nowIso,
-      answer_snapshot: submittedAnswerSnapshot,
+      answer_snapshot: entry.answerSnapshot,
     };
+    const legacyProgressPayload = { ...progressPayload };
+    delete legacyProgressPayload.lesson_id;
+    const progressFallbackPayload = {
+      user_id: userId,
+      exercise_id: exerciseId,
+      lesson_id: lessonId,
+      is_correct: entry.isCorrect,
+      attempts: safeAttempts,
+      last_practiced: nowIso,
+      interval_days: 1,
+      next_due_at: nowIso,
+      last_quality: quality,
+      times_seen: Math.max(1, toInt(existingProgress?.times_seen, 0) + 1),
+      times_correct: Math.max(0, toInt(existingProgress?.times_correct, 0) + (entry.isCorrect ? 1 : 0)),
+      streak_count: entry.isCorrect ? Math.max(0, toInt(existingProgress?.streak_count, 0) + 1) : 0,
+      updated_at: nowIso,
+    };
+    const legacyProgressFallbackPayload = { ...progressFallbackPayload };
+    delete legacyProgressFallbackPayload.lesson_id;
 
     let progressUpsertError = null;
-    let { error: upsertProgressError } = await supabase
-      .from("user_progress")
-      .upsert(progressPayload, { onConflict: "user_id,exercise_id,lesson_id" });
-    progressUpsertError = upsertProgressError;
-
-    if (progressUpsertError && isMissingUserProgressQuizColumnsError(progressUpsertError)) {
-      const fallbackPayload = {
-        user_id: userId,
-        exercise_id: exerciseId,
-        lesson_id: lessonId,
-        is_correct: isCorrect,
-        attempts: safeAttempts,
-        last_practiced: nowIso,
-        interval_days: 1,
-        next_due_at: nowIso,
-        last_quality: quality,
-        times_seen: Math.max(1, toInt(existingProgress?.times_seen, 0) + 1),
-        times_correct: Math.max(0, toInt(existingProgress?.times_correct, 0) + (isCorrect ? 1 : 0)),
-        streak_count: isCorrect ? Math.max(0, toInt(existingProgress?.streak_count, 0) + 1) : 0,
-        updated_at: nowIso,
-      };
-      let { error: fallbackUpsertError } = await supabase
+    if (existingProgressScope === "lesson") {
+      let { error } = await supabase
         .from("user_progress")
-        .upsert(fallbackPayload, { onConflict: "user_id,exercise_id,lesson_id" });
-      progressUpsertError = fallbackUpsertError;
-    }
+        .update(progressPayload)
+        .eq("user_id", userId)
+        .eq("exercise_id", exerciseId)
+        .eq("lesson_id", lessonId);
+      progressUpsertError = error;
 
-    if (progressUpsertError) {
-      const legacyPayload = {
-        ...progressPayload,
-      };
-      delete legacyPayload.lesson_id;
-
-      let { error: legacyUpsertError } = await supabase
-        .from("user_progress")
-        .upsert(legacyPayload, { onConflict: "user_id,exercise_id" });
-
-      if (legacyUpsertError && isMissingUserProgressQuizColumnsError(legacyUpsertError)) {
-        const legacyFallbackPayload = {
-          user_id: userId,
-          exercise_id: exerciseId,
-          is_correct: isCorrect,
-          attempts: safeAttempts,
-          last_practiced: nowIso,
-          interval_days: 1,
-          next_due_at: nowIso,
-          last_quality: quality,
-          times_seen: Math.max(1, toInt(existingProgress?.times_seen, 0) + 1),
-          times_correct: Math.max(0, toInt(existingProgress?.times_correct, 0) + (isCorrect ? 1 : 0)),
-          streak_count: isCorrect ? Math.max(0, toInt(existingProgress?.streak_count, 0) + 1) : 0,
-          updated_at: nowIso,
-        };
-        ({ error: legacyUpsertError } = await supabase
+      if (progressUpsertError && isMissingUserProgressQuizColumnsError(progressUpsertError)) {
+        ({ error: progressUpsertError } = await supabase
           .from("user_progress")
-          .upsert(legacyFallbackPayload, { onConflict: "user_id,exercise_id" }));
+          .update(progressFallbackPayload)
+          .eq("user_id", userId)
+          .eq("exercise_id", exerciseId)
+          .eq("lesson_id", lessonId));
+      }
+    } else if (existingProgressScope === "legacy") {
+      let { error } = await supabase
+        .from("user_progress")
+        .update(legacyProgressPayload)
+        .eq("user_id", userId)
+        .eq("exercise_id", exerciseId);
+      progressUpsertError = error;
+
+      if (progressUpsertError && isMissingUserProgressQuizColumnsError(progressUpsertError)) {
+        ({ error: progressUpsertError } = await supabase
+          .from("user_progress")
+          .update(legacyProgressFallbackPayload)
+          .eq("user_id", userId)
+          .eq("exercise_id", exerciseId));
+      }
+    } else {
+      let { error } = await supabase
+        .from("user_progress")
+        .insert(progressPayload);
+      progressUpsertError = error;
+
+      if (progressUpsertError && isMissingUserProgressQuizColumnsError(progressUpsertError)) {
+        ({ error: progressUpsertError } = await supabase
+          .from("user_progress")
+          .insert(progressFallbackPayload));
       }
 
-      progressUpsertError = legacyUpsertError;
+      if (progressUpsertError) {
+        let { error: legacyInsertError } = await supabase
+          .from("user_progress")
+          .insert(legacyProgressPayload);
+
+        if (legacyInsertError && isMissingUserProgressQuizColumnsError(legacyInsertError)) {
+          ({ error: legacyInsertError } = await supabase
+            .from("user_progress")
+            .insert(legacyProgressFallbackPayload));
+        }
+
+        progressUpsertError = legacyInsertError;
+      }
     }
 
     if (progressUpsertError) {
@@ -537,12 +666,23 @@ export async function submitLessonQuizStep(formData) {
 
   if (upsertError) {
     if (isMissingLessonQuizTableError(upsertError)) {
+      if (isBackgroundMode) {
+        throw new Error(upsertError.message || "No se encontro la tabla de intentos.");
+      }
       redirect(`/app/clases/${lessonId}/prueba?tracking=missing`);
     }
     throw new Error(upsertError.message || "No se pudo actualizar la prueba.");
   }
 
   revalidateLessonQuizPaths(lessonId);
+  if (isBackgroundMode) {
+    return {
+      ok: true,
+      requestKey: requestKey || null,
+      isCompleted,
+      nextIndex,
+    };
+  }
   if (isCompleted) {
     redirect(`/app/clases/${lessonId}/prueba/resultados`);
   }

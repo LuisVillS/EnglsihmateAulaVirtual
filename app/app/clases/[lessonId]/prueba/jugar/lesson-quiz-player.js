@@ -1,20 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import ListeningPlaybackControl from "@/components/listening-playback-control";
 import {
   buildListeningQuestionsFromContent,
   getListeningEndTime,
   getListeningMaxPlays,
   getListeningPrompt,
-  getListeningQuestionCorrectAnswerText,
   getListeningStartTime,
   LISTENING_QUESTION_TYPES,
   summarizeListeningQuestionResults,
 } from "@/lib/listening-exercise";
+import { splitClozeSentenceSegments, tokenizeClozeSentence } from "@/lib/cloze-blanks";
 import { submitLessonQuizStep } from "../actions";
-
-const MAX_WRONG_ATTEMPTS = 1;
 
 const TYPE_LABELS = {
   scramble: "Scrambled Sentence",
@@ -84,7 +82,7 @@ function computeExerciseWeightFromPoints(totalExercises, exerciseIndex, exercise
   return round2(raw);
 }
 
-function computeExerciseScore(weight, wrongAttempts, finalStatus, itemStats = null) {
+function computeExerciseScore(weight, finalStatus, itemStats = null) {
   let ratio = finalStatus === "passed" ? 1 : 0;
   const correctItems = Number(itemStats?.correctItems);
   const totalItems = Number(itemStats?.totalItems);
@@ -92,9 +90,7 @@ function computeExerciseScore(weight, wrongAttempts, finalStatus, itemStats = nu
     ratio = Math.min(1, Math.max(0, correctItems / totalItems));
   }
   if (ratio <= 0) return 0;
-  const wrong = Math.max(0, Math.min(2, Number(wrongAttempts) || 0));
-  const multipliers = [1, 0.8, 0.6];
-  return round2((Number(weight) || 0) * ratio * multipliers[wrong]);
+  return round2((Number(weight) || 0) * ratio);
 }
 
 function isArrayEqual(a = [], b = []) {
@@ -103,23 +99,6 @@ function isArrayEqual(a = [], b = []) {
     if (normalizeText(a[idx]) !== normalizeText(b[idx])) return false;
   }
   return true;
-}
-
-function buildScrambleSolutionIds(answerWords = [], chips = []) {
-  const used = new Set();
-  const result = [];
-  answerWords.forEach((word) => {
-    const normalizedWord = normalizeText(word);
-    const match = chips.find((chip) => {
-      if (used.has(chip.id)) return false;
-      return normalizeText(chip.word) === normalizedWord;
-    });
-    if (match) {
-      used.add(match.id);
-      result.push(match.id);
-    }
-  });
-  return result;
 }
 
 function buildShuffledScrambleWords(words = [], answerWords = []) {
@@ -135,43 +114,6 @@ function buildShuffledScrambleWords(words = [], answerWords = []) {
     }
   }
   return shuffled;
-}
-
-function extractBlankTokens(sentence = "") {
-  const text = String(sentence || "");
-  const regex = /\[\[\s*(blank_[a-z0-9_-]+)\s*\]\]/gi;
-  const tokens = [];
-  const seen = new Set();
-  let match = regex.exec(text);
-  while (match) {
-    const key = String(match[1] || "").trim().toLowerCase();
-    if (key && !seen.has(key)) {
-      seen.add(key);
-      tokens.push(key);
-    }
-    match = regex.exec(text);
-  }
-  return tokens;
-}
-
-function splitSentenceByBlankTokens(sentence = "") {
-  const text = String(sentence || "");
-  const regex = /\[\[\s*(blank_[a-z0-9_-]+)\s*\]\]/gi;
-  const segments = [];
-  let lastIndex = 0;
-  let match = regex.exec(text);
-  while (match) {
-    if (match.index > lastIndex) {
-      segments.push({ kind: "text", value: text.slice(lastIndex, match.index) });
-    }
-    segments.push({ kind: "blank", key: String(match[1] || "").trim().toLowerCase() });
-    lastIndex = match.index + match[0].length;
-    match = regex.exec(text);
-  }
-  if (lastIndex < text.length) {
-    segments.push({ kind: "text", value: text.slice(lastIndex) });
-  }
-  return segments.length ? segments : [{ kind: "text", value: text }];
 }
 
 function buildClozeAnswerSnapshot(data = {}, selections = {}) {
@@ -202,17 +144,6 @@ function buildClozeAnswerSnapshot(data = {}, selections = {}) {
       };
     }),
   };
-}
-
-function getDefaultExplanation(type, data) {
-  if (type === "cloze") return "Se usa la opcion gramatical correcta para completar la frase.";
-  if (type === "scramble") return "El orden correcto sigue sujeto + verbo + complemento.";
-  if (type === "pairs") return "Estos son los pares correctos entre ambos idiomas.";
-  if (type === "image_match") return "La imagen correcta corresponde al termino solicitado.";
-  if (type === "audio_match") return "Las respuestas correctas se obtienen a partir del audio escuchado.";
-  if (type === "reading_exercise") return "Las respuestas correctas se obtienen a partir del texto de lectura.";
-  if (data?.correctAnswer) return "Esa es la respuesta correcta para este ejercicio.";
-  return "Revisa la solucion para entender la regla de este ejercicio.";
 }
 
 function resolveExerciseData(exercise) {
@@ -247,20 +178,6 @@ function resolveExerciseData(exercise) {
       optionsPool.push({ id: safeId, text: String(fallbackText || "").trim() });
       return safeId;
     };
-    const normalizeOptionIds = (values, minCount = 0) => {
-      const ids = Array.from(
-        new Set(
-          normalizeArray(values)
-            .map((value) => String(value || "").trim())
-            .filter(Boolean)
-            .map((value) => ensurePoolOption(value, ""))
-        )
-      );
-      while (ids.length < minCount) {
-        ids.push(appendPoolOption(""));
-      }
-      return ids;
-    };
 
     const rawPool = normalizeArray(content.options_pool || content.optionsPool);
     rawPool.forEach((entry) => {
@@ -276,131 +193,90 @@ function resolveExerciseData(exercise) {
     });
 
     const rawBlanks = normalizeArray(content.blanks);
-    const hasPoolShape =
-      rawPool.length > 0 ||
-      rawBlanks.some((blank) => {
-        const source = blank && typeof blank === "object" ? blank : {};
-        return (
-          source.correct_option_id != null ||
-          source.correctOptionId != null ||
-          source.new_option_ids != null ||
-          source.newOptionIds != null
+    const resolveCorrectOptionId = (source = {}, fallbackOptionIds = []) => {
+      let correctOptionId = String(source.correct_option_id || source.correctOptionId || "").trim();
+      if (correctOptionId) {
+        return ensurePoolOption(correctOptionId, "");
+      }
+
+      const answerText = String(source.answer || source.correct || "").trim();
+      if (answerText) {
+        const byText = optionsPool.find(
+          (option) => normalizeText(option.text) === normalizeText(answerText)
         );
-      });
+        return byText?.id || appendPoolOption(answerText);
+      }
 
-    let blanks = [];
+      const correctIndex = Number.parseInt(
+        String(source.correct_index ?? source.correctIndex ?? ""),
+        10
+      );
+      if (Number.isFinite(correctIndex) && correctIndex >= 0 && correctIndex < fallbackOptionIds.length) {
+        return fallbackOptionIds[correctIndex];
+      }
 
-    if (hasPoolShape) {
-      blanks = rawBlanks.map((blank, idx) => {
-        const source = blank && typeof blank === "object" ? blank : {};
-        const key = String(source.id || source.key || `blank_${idx + 1}`).trim().toLowerCase();
-        const minOptions = idx === 0 ? 4 : 2;
-        let newOptionIds = normalizeOptionIds(source.new_option_ids || source.newOptionIds, minOptions);
-        if (!newOptionIds.length && optionsPool.length) {
-          newOptionIds = normalizeOptionIds(
-            optionsPool.slice(0, minOptions).map((option) => option.id),
-            minOptions
-          );
-        }
+      return "";
+    };
 
-        let correctOptionId = String(source.correct_option_id || source.correctOptionId || "").trim();
-        if (correctOptionId) {
-          correctOptionId = ensurePoolOption(correctOptionId, "");
-        }
-        if (!correctOptionId && newOptionIds.length) {
-          const fromIndex = Math.max(0, Math.min(newOptionIds.length - 1, Number(source.correct_index) || 0));
-          correctOptionId = newOptionIds[fromIndex];
-        }
-        if (!correctOptionId) {
-          const answerText = String(source.answer || source.correct || "").trim();
-          if (answerText) {
-            const byText = optionsPool.find(
-              (option) => normalizeText(option.text) === normalizeText(answerText)
-            );
-            correctOptionId = byText?.id || appendPoolOption(answerText);
-            if (!newOptionIds.includes(correctOptionId)) {
-              newOptionIds.push(correctOptionId);
-            }
-          }
-        }
-        if (!correctOptionId) {
-          correctOptionId = newOptionIds[0] || appendPoolOption("");
-        }
-        if (idx > 0 && !newOptionIds.includes(correctOptionId)) {
-          correctOptionId = newOptionIds[0] || appendPoolOption("");
-        }
-
-        return {
-          key,
-          correctOptionId,
-          newOptionIds: Array.from(new Set(newOptionIds)),
-        };
-      });
-    }
+    let blanks = rawBlanks.map((blank, idx) => {
+      const source = blank && typeof blank === "object" ? blank : {};
+      const key = String(source.id || source.key || `blank_${idx + 1}`).trim().toLowerCase();
+      return {
+        key,
+        correctOptionId: resolveCorrectOptionId(source),
+      };
+    });
 
     if (!blanks.length) {
-      const legacyBlanks = rawBlanks.length
-        ? rawBlanks
-        : [{
+      const legacyOptionTexts = normalizeArray(content.options)
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+      const hasLegacyBlank =
+        legacyOptionTexts.length > 0 ||
+        content.answer != null ||
+        content.correct != null ||
+        content.correct_index != null ||
+        content.correctIndex != null;
+
+      if (hasLegacyBlank) {
+        const optionIds = legacyOptionTexts.map((text) => appendPoolOption(text));
+        blanks = [{
           key: "blank_1",
-          options: normalizeArray(content.options).map((value) => String(value || "").trim()).filter(Boolean),
-          correct_index: Number(content.correct_index || 0),
-          answer: String(content.answer || content.correct || "").trim(),
+          correctOptionId: resolveCorrectOptionId(content, optionIds),
         }];
-
-      blanks = legacyBlanks.map((blank, idx) => {
-        const source = blank && typeof blank === "object" ? blank : {};
-        const key = String(source.key || source.id || `blank_${idx + 1}`).trim().toLowerCase();
-        const minOptions = idx === 0 ? 4 : 2;
-        const optionTexts = normalizeArray(source.options).map((value) => String(value || "").trim());
-        const answerText = String(source.answer || source.correct || "").trim();
-        if (answerText && !optionTexts.some((value) => normalizeText(value) === normalizeText(answerText))) {
-          optionTexts.push(answerText);
-        }
-        while (optionTexts.length < minOptions) {
-          optionTexts.push("");
-        }
-        const optionIds = optionTexts.map((text) => appendPoolOption(text));
-        const correctIndex = Math.max(0, Math.min(optionIds.length - 1, Number(source.correct_index) || 0));
-        const correctOptionId = optionIds[correctIndex] || optionIds[0] || appendPoolOption("");
-        return {
-          key,
-          correctOptionId,
-          newOptionIds: optionIds,
-        };
-      });
-    }
-
-    if (!sentence) sentence = "I ____ a student.";
-    if (!extractBlankTokens(sentence).length && blanks.length) {
-      if (/_{2,}/.test(sentence)) {
-        sentence = sentence.replace(/_{2,}/, `[[${blanks[0].key || "blank_1"}]]`);
-      } else {
-        sentence = `${sentence} [[${blanks[0].key || "blank_1"}]]`.trim();
       }
     }
 
-    const orderedKeys = extractBlankTokens(sentence);
+    if (!optionsPool.length) {
+      appendPoolOption("");
+    }
+
+    if (!sentence) sentence = "I [Blank] a student.";
+    const tokenized = tokenizeClozeSentence(
+      sentence,
+      blanks.map((blank, index) => String(blank?.key || `blank_${index + 1}`))
+    );
+    sentence = tokenized.sentence;
+
+    const orderedKeys = tokenized.orderedKeys.map((key, index) => String(key || `blank_${index + 1}`).toLowerCase());
     const blankByKey = new Map(blanks.map((blank) => [blank.key, blank]));
     const orderedBlanks = orderedKeys.map((key, idx) => {
       const current = blankByKey.get(key) || {};
-      const minOptions = idx === 0 ? 4 : 2;
-      const newOptionIds = normalizeOptionIds(current.newOptionIds || current.new_option_ids, minOptions);
       let correctOptionId = String(current.correctOptionId || current.correct_option_id || "").trim();
       if (correctOptionId) {
         correctOptionId = ensurePoolOption(correctOptionId, "");
       }
-      if (!correctOptionId || (idx > 0 && !newOptionIds.includes(correctOptionId))) {
-        correctOptionId = newOptionIds[0] || appendPoolOption("");
-      }
       return {
         key,
         correctOptionId,
-        newOptionIds,
       };
     });
 
-    const segments = splitSentenceByBlankTokens(sentence);
+    const split = splitClozeSentenceSegments(
+      sentence,
+      orderedBlanks.map((blank, index) => String(blank?.key || `blank_${index + 1}`))
+    );
+    const segments = split.segments;
     return {
       type,
       explanation,
@@ -527,44 +403,6 @@ function resolveExerciseData(exercise) {
   };
 }
 
-function buildCorrectAnswerText(type, data) {
-  if (type === "cloze") {
-    const blanks = normalizeArray(data.blanks);
-    const poolMap = new Map(
-      normalizeArray(data.optionsPool).map((option) => [
-        String(option?.id || "").trim(),
-        String(option?.text || "").trim(),
-      ])
-    );
-    if (!blanks.length) return "-";
-    return blanks
-      .map((blank, idx) => {
-        const correct = poolMap.get(String(blank.correctOptionId || "").trim()) || "-";
-        return `Blank ${idx + 1}: ${correct}`;
-      })
-      .join(" | ");
-  }
-  if (type === "scramble") return normalizeArray(data.answerWords).join(" ");
-  if (type === "pairs") {
-    return normalizeArray(data.pairs)
-      .map((pair) => `${pair.left} = ${pair.right}`)
-      .join(" | ");
-  }
-  if (type === "image_match") {
-    const correct = data.options?.[data.correctIndex];
-    return correct?.label || correct?.vocabId || "Opcion correcta";
-  }
-  if (type === "audio_match" || type === "reading_exercise") {
-    const questions = normalizeArray(data.questions);
-    if (!questions.length && data.textTarget) return data.textTarget;
-    if (!questions.length) return "-";
-    return questions
-      .map((question, idx) => `Q${idx + 1}: ${getListeningQuestionCorrectAnswerText(question)}`)
-      .join(" | ");
-  }
-  return "-";
-}
-
 function ExerciseTypeHeading({ type }) {
   const label = TYPE_LABELS[String(type || "").trim()] || "Ejercicio";
   return (
@@ -574,14 +412,15 @@ function ExerciseTypeHeading({ type }) {
   );
 }
 
-export default function LessonQuizPlayer({
+const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
   lessonId,
   currentIndex,
   totalExercises,
   exercise,
   exercisePointValues = [],
-  revealCorrectAnswers = false,
-}) {
+  showSubmitButton = true,
+  showTypeHeading = true,
+}, ref) {
   const data = useMemo(() => resolveExerciseData(exercise), [exercise]);
   const type = data.type;
   const listeningExerciseKey = String(exercise?.id || `${lessonId}-${currentIndex}`);
@@ -590,7 +429,6 @@ export default function LessonQuizPlayer({
     [totalExercises, currentIndex, exercisePointValues]
   );
 
-  const [wrongAttempts, setWrongAttempts] = useState(0);
   const [finalStatus, setFinalStatus] = useState(null);
   const [scoreAwarded, setScoreAwarded] = useState(0);
   const [resultSnapshot, setResultSnapshot] = useState(null);
@@ -600,6 +438,7 @@ export default function LessonQuizPlayer({
 
   const [clozeSelections, setClozeSelections] = useState({});
   const [activeClozeBlank, setActiveClozeBlank] = useState(null);
+  const [clozeDraggingOptionId, setClozeDraggingOptionId] = useState("");
 
   const [selectedScrambleIds, setSelectedScrambleIds] = useState([]);
 
@@ -622,8 +461,12 @@ export default function LessonQuizPlayer({
   );
 
   const pairBoardRef = useRef(null);
+  const exerciseRootRef = useRef(null);
   const leftPairRefs = useRef(new Map());
   const rightPairRefs = useRef(new Map());
+  const suppressClozeClickRef = useRef(false);
+  const clozeDragRef = useRef(null);
+  const clozeDragRafRef = useRef(0);
   const [pairLinesTick, setPairLinesTick] = useState(0);
   const [pairLines, setPairLines] = useState([]);
 
@@ -647,7 +490,6 @@ export default function LessonQuizPlayer({
     return data.shuffle ? shuffleList(items) : items;
   }, [pairRows, data.shuffle]);
 
-  const correctAnswerText = useMemo(() => buildCorrectAnswerText(type, data), [type, data]);
   const answerSnapshotValue = useMemo(() => {
     if (!resultSnapshot) return "";
     try {
@@ -656,7 +498,6 @@ export default function LessonQuizPlayer({
       return "";
     }
   }, [resultSnapshot]);
-  const explanationText = String(data.explanation || getDefaultExplanation(type, data)).trim();
   const resolvedActiveClozeBlank = useMemo(() => {
     const blankKeys = normalizeArray(data.blanks).map((blank, idx) =>
       String(blank?.key || `blank_${idx + 1}`).toLowerCase()
@@ -718,6 +559,23 @@ export default function LessonQuizPlayer({
     return () => window.cancelAnimationFrame(frameId);
   }, [type, pairAssignments, isResolved, pairLinesTick, leftPairCards, rightPairCards]);
 
+  useEffect(() => () => {
+    if (clozeDragRafRef.current) {
+      window.cancelAnimationFrame(clozeDragRafRef.current);
+      clozeDragRafRef.current = 0;
+    }
+  }, []);
+
+  useEffect(() => {
+    const root = exerciseRootRef.current;
+    if (!root) return undefined;
+    const handleSelectStart = (event) => handleExerciseSelectStart(event);
+    root.addEventListener("selectstart", handleSelectStart);
+    return () => {
+      root.removeEventListener("selectstart", handleSelectStart);
+    };
+  }, []);
+
   function clearIncorrectFeedback() {
     if (feedback?.kind === "incorrect" || feedback?.kind === "incomplete") {
       setFeedback(null);
@@ -725,46 +583,59 @@ export default function LessonQuizPlayer({
     }
   }
 
-  function markPassed(itemStats = null) {
+  function buildSubmissionPayload(status, awarded, snapshotValue = null) {
+    const safeStatus = String(status || "").trim().toLowerCase();
+    if (!safeStatus || !exercise?.id) return null;
+    return {
+      exerciseId: String(exercise.id || "").trim(),
+      exerciseIndex: currentIndex,
+      wrongAttempts: 0,
+      finalStatus: safeStatus === "failed" ? "failed" : "passed",
+      scoreAwarded: round2(Number(awarded) || 0),
+      answerSnapshot:
+        snapshotValue && typeof snapshotValue === "object" && !Array.isArray(snapshotValue)
+          ? snapshotValue
+          : null,
+    };
+  }
+
+  function markPassed(itemStats = null, snapshotValue = null) {
     if (isResolved) return;
-    const awarded = computeExerciseScore(exerciseWeight, wrongAttempts, "passed", itemStats);
+    const awarded = computeExerciseScore(exerciseWeight, "passed", itemStats);
     setFinalStatus("passed");
     setScoreAwarded(awarded);
     setFeedback({ kind: "correct", text: "Correcto!" });
     setErrorFlash(false);
+    return buildSubmissionPayload("passed", awarded, snapshotValue);
   }
 
-  function markFailed(onReveal, options = {}) {
+  function markFailed(options = {}, snapshotValue = null) {
     if (isResolved) return;
-    const awarded = computeExerciseScore(exerciseWeight, wrongAttempts, "failed", options.itemStats);
-    setWrongAttempts(MAX_WRONG_ATTEMPTS);
+    const awarded = computeExerciseScore(exerciseWeight, "failed", options.itemStats);
     setFinalStatus("failed");
     setScoreAwarded(awarded);
-    const baseScoreMessage = awarded > 0 ? `Puntaje parcial: ${awarded}/${exerciseWeight}.` : "";
     setFeedback({
-      kind: "reveal",
-      text:
-        options.message ||
-        (revealCorrectAnswers
-          ? `${baseScoreMessage}${baseScoreMessage ? " " : ""}Respuesta correcta mostrada.`
-          : `${baseScoreMessage}${baseScoreMessage ? " " : ""}La respuesta correcta se mostrara cuando se agoten tus intentos.`),
+      kind: "incorrect",
+      text: options.message || (awarded > 0 ? `Incorrecto. Puntaje parcial: ${awarded}/${exerciseWeight}.` : "Incorrecto."),
     });
     setErrorFlash(false);
-    if (typeof onReveal === "function") onReveal();
+    return buildSubmissionPayload("failed", awarded, snapshotValue);
   }
 
-  function registerIncorrect({ onRetry, onReveal } = {}) {
-    if (isResolved) return;
-    const nextWrongAttempts = Math.min(MAX_WRONG_ATTEMPTS, wrongAttempts + 1);
-    if (nextWrongAttempts >= MAX_WRONG_ATTEMPTS) {
-      markFailed(onReveal);
-      return;
-    }
-    setWrongAttempts(nextWrongAttempts);
-    setFeedback({ kind: "incorrect", text: "Incorrecto, intenta de nuevo." });
-    setErrorFlash(true);
-    window.setTimeout(() => setErrorFlash(false), 280);
-    if (typeof onRetry === "function") onRetry();
+  function getOrderedClozeBlankKeys() {
+    return normalizeArray(data.blanks)
+      .map((blank, idx) => String(blank?.key || `blank_${idx + 1}`).toLowerCase())
+      .filter(Boolean);
+  }
+
+  function getNextClozeBlankKey(blankKeys, selections, currentKey) {
+    if (!blankKeys.length) return "";
+    const currentIndex = Math.max(0, blankKeys.indexOf(currentKey));
+    const nextAfterCurrent = blankKeys.slice(currentIndex + 1).find((key) => !selections[key]);
+    if (nextAfterCurrent) return nextAfterCurrent;
+    const firstEmpty = blankKeys.find((key) => !selections[key]);
+    if (firstEmpty) return firstEmpty;
+    return currentKey || blankKeys[0] || "";
   }
 
   function assignClozeOption(blankKey, optionId) {
@@ -773,65 +644,190 @@ export default function LessonQuizPlayer({
     const safeOptionId = String(optionId || "").trim().toLowerCase();
     if (!safeKey) return;
     if (!safeOptionId) return;
-    setActiveClozeBlank(safeKey);
+    const blankKeys = getOrderedClozeBlankKeys();
+    let nextActiveKey = safeKey;
     setClozeSelections((current) => {
       const next = { ...current };
+      const sourceKey = Object.keys(next).find((key) => String(next[key] || "").toLowerCase() === safeOptionId);
+      const targetOptionId = String(next[safeKey] || "").toLowerCase();
+
+      if (sourceKey && sourceKey !== safeKey) {
+        if (targetOptionId && targetOptionId !== safeOptionId) {
+          next[sourceKey] = targetOptionId;
+        } else {
+          delete next[sourceKey];
+        }
+      }
+
       Object.keys(next).forEach((key) => {
+        if (key === safeKey) return;
+        if (sourceKey && key === sourceKey) return;
         if (String(next[key] || "").toLowerCase() === safeOptionId) {
           delete next[key];
         }
       });
+
       next[safeKey] = safeOptionId;
+      nextActiveKey = getNextClozeBlankKey(blankKeys, next, safeKey);
+      return next;
+    });
+    setActiveClozeBlank(nextActiveKey);
+  }
+
+  function clearClozeSelection(blankKey) {
+    if (type !== "cloze" || isResolved) return;
+    const safeKey = String(blankKey || "").trim().toLowerCase();
+    if (!safeKey) return;
+    clearIncorrectFeedback();
+    setActiveClozeBlank(safeKey);
+    setClozeSelections((current) => {
+      if (!current[safeKey]) return current;
+      const next = { ...current };
+      delete next[safeKey];
       return next;
     });
   }
 
+  function paintClozeDragFrame() {
+    clozeDragRafRef.current = 0;
+    const drag = clozeDragRef.current;
+    if (!drag?.dragging || !drag?.node) return;
+
+    const nextX = drag.pointerX - drag.offsetX;
+    const nextY = drag.pointerY - drag.offsetY;
+    drag.node.style.transform = `translate3d(${nextX - drag.originLeft}px, ${nextY - drag.originTop}px, 0)`;
+  }
+
+  function scheduleClozeDragPaint() {
+    if (clozeDragRafRef.current) return;
+    clozeDragRafRef.current = window.requestAnimationFrame(paintClozeDragFrame);
+  }
+
+  function finishClozeDrag(event) {
+    const drag = clozeDragRef.current;
+    if (!drag) return;
+
+    window.removeEventListener("pointermove", drag.handleMove);
+    window.removeEventListener("pointerup", drag.handleUp);
+    window.removeEventListener("pointercancel", drag.handleUp);
+
+    if (clozeDragRafRef.current) {
+      window.cancelAnimationFrame(clozeDragRafRef.current);
+      clozeDragRafRef.current = 0;
+    }
+
+    if (drag.node) {
+      drag.node.style.position = "";
+      drag.node.style.left = "";
+      drag.node.style.top = "";
+      drag.node.style.zIndex = "";
+      drag.node.style.width = "";
+      drag.node.style.pointerEvents = "";
+      drag.node.style.transform = "";
+      drag.node.style.willChange = "";
+    }
+
+    if (drag.dragging) {
+      const dropTarget = document.elementFromPoint(event.clientX, event.clientY);
+      const blankNode = dropTarget?.closest?.("[data-cloze-blank-key]");
+      const dropKey = String(blankNode?.getAttribute?.("data-cloze-blank-key") || "").trim().toLowerCase();
+      if (dropKey) {
+        assignClozeOption(dropKey, drag.optionId);
+      }
+    }
+
+    clozeDragRef.current = null;
+    setClozeDraggingOptionId("");
+    window.setTimeout(() => {
+      suppressClozeClickRef.current = false;
+    }, 0);
+  }
+
+  function handleClozePointerDown(event, optionId) {
+    if (type !== "cloze" || isResolved) return;
+    if (event.button != null && event.button !== 0) return;
+
+    const node = event.currentTarget;
+    const rect = node.getBoundingClientRect();
+    const safeOptionId = String(optionId || "").trim().toLowerCase();
+    const handleMove = (moveEvent) => {
+      const drag = clozeDragRef.current;
+      if (!drag) return;
+
+      const deltaX = moveEvent.clientX - drag.startX;
+      const deltaY = moveEvent.clientY - drag.startY;
+      if (!drag.dragging && Math.abs(deltaX) <= 6 && Math.abs(deltaY) <= 6) {
+        return;
+      }
+
+      if (!drag.dragging) {
+        drag.dragging = true;
+        suppressClozeClickRef.current = true;
+        setClozeDraggingOptionId(drag.optionId);
+        drag.node.style.position = "fixed";
+        drag.node.style.left = `${drag.originLeft}px`;
+        drag.node.style.top = `${drag.originTop}px`;
+        drag.node.style.width = `${drag.width}px`;
+        drag.node.style.zIndex = "60";
+        drag.node.style.pointerEvents = "none";
+        drag.node.style.willChange = "transform";
+      }
+
+      drag.pointerX = moveEvent.clientX;
+      drag.pointerY = moveEvent.clientY;
+      scheduleClozeDragPaint();
+    };
+    const handleUp = (upEvent) => finishClozeDrag(upEvent);
+
+    clozeDragRef.current = {
+      optionId: safeOptionId,
+      startX: event.clientX,
+      startY: event.clientY,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      originLeft: rect.left,
+      originTop: rect.top,
+      width: rect.width,
+      dragging: false,
+      node,
+      handleMove,
+      handleUp,
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+  }
+
   function handleClozeOption(optionId) {
     if (type !== "cloze" || isResolved) return;
+    if (suppressClozeClickRef.current) return;
     clearIncorrectFeedback();
     const safeOptionId = String(optionId || "").trim().toLowerCase();
     if (!safeOptionId) return;
-
-    setClozeSelections((current) => {
-      const selectedEntries = Object.entries(current);
-      const selectedBlank = selectedEntries.find(([, value]) => String(value || "").toLowerCase() === safeOptionId);
-      if (selectedBlank) {
-        const next = { ...current };
-        delete next[selectedBlank[0]];
-        return next;
-      }
-
-      const blanks = normalizeArray(data.blanks).map((blank, idx) =>
-        String(blank?.key || `blank_${idx + 1}`).toLowerCase()
-      );
-      const activeKey = String(resolvedActiveClozeBlank || "").toLowerCase();
-      let targetKey = blanks.find((key) => key === activeKey) || "";
-      if (!targetKey) {
-        targetKey = blanks.find((key) => !current[key]) || blanks[0] || "";
-      }
-      if (!targetKey) return current;
-      return { ...current, [targetKey]: safeOptionId };
-    });
-  }
-
-  function handleClozeDrop(event, blankKey) {
-    event.preventDefault();
-    const draggedOptionId =
-      String(event.dataTransfer?.getData("application/x-option-id") || "").trim().toLowerCase() ||
-      String(event.dataTransfer?.getData("text/plain") || "").trim().toLowerCase();
-    if (!draggedOptionId) return;
-    clearIncorrectFeedback();
-    const safeKey = String(blankKey || "").trim().toLowerCase();
-    const sameSelection = String(clozeSelections[safeKey] || "").toLowerCase() === draggedOptionId;
-    if (sameSelection) {
-      setClozeSelections((current) => {
-        const next = { ...current };
-        delete next[safeKey];
-        return next;
-      });
+    const selectedEntries = Object.entries(clozeSelections);
+    const selectedBlank = selectedEntries.find(([, value]) => String(value || "").toLowerCase() === safeOptionId);
+    if (selectedBlank) {
+      clearClozeSelection(selectedBlank[0]);
       return;
     }
-    assignClozeOption(safeKey, draggedOptionId);
+
+    const blankKeys = getOrderedClozeBlankKeys();
+    const activeKey = String(resolvedActiveClozeBlank || "").toLowerCase();
+    let targetKey = "";
+    if (activeKey && !clozeSelections[activeKey]) {
+      targetKey = activeKey;
+    }
+    if (!targetKey) {
+      targetKey = blankKeys.find((key) => !clozeSelections[key]) || "";
+    }
+    if (!targetKey) {
+      targetKey = blankKeys.find((key) => key === activeKey) || blankKeys[0] || "";
+    }
+    if (!targetKey) return;
+    assignClozeOption(targetKey, safeOptionId);
   }
 
   function handleScrambleToggle(chipId) {
@@ -907,21 +903,73 @@ export default function LessonQuizPlayer({
     window.setTimeout(() => setErrorFlash(false), 240);
   }
 
-  function evaluateCurrentAnswer() {
-    if (isResolved) return;
+  function buildAutoFailedSubmission(snapshotValue = null) {
+    const safeSnapshot =
+      snapshotValue && typeof snapshotValue === "object" && !Array.isArray(snapshotValue)
+        ? snapshotValue
+        : null;
+    if (!isResolved) {
+      setFinalStatus("failed");
+      setScoreAwarded(0);
+      if (safeSnapshot) {
+        setResultSnapshot(safeSnapshot);
+      }
+      setFeedback(null);
+      setErrorFlash(false);
+    }
+    return buildSubmissionPayload("failed", 0, safeSnapshot);
+  }
+
+  useImperativeHandle(ref, () => ({
+    evaluateAndGetSubmission() {
+      const evaluated = evaluateCurrentAnswer({ allowIncomplete: true });
+      if (evaluated) return evaluated;
+      return (
+        buildSubmissionPayload(finalStatus, scoreAwarded, resultSnapshot) ||
+        buildAutoFailedSubmission(resultSnapshot)
+      );
+    },
+  }));
+
+  function blockClipboardEvent(event) {
+    event.preventDefault();
+  }
+
+  function handleExerciseSelectStart(event) {
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement &&
+      String(target.type || "").toLowerCase() === "hidden"
+    ) {
+      return;
+    }
+    event.preventDefault();
+  }
+
+  function evaluateCurrentAnswer(options = {}) {
+    const allowIncomplete = Boolean(options?.allowIncomplete);
+    if (isResolved) {
+      return buildSubmissionPayload(finalStatus, scoreAwarded, resultSnapshot);
+    }
 
     if (type === "cloze") {
       const blanks = normalizeArray(data.blanks);
       if (!blanks.length) {
+        if (allowIncomplete) {
+          return buildAutoFailedSubmission(buildClozeAnswerSnapshot(data, clozeSelections));
+        }
         showIncompleteResponse();
-        return;
+        return null;
       }
       const unresolved = blanks.some(
         (blank) => !String(clozeSelections[String(blank.key || "").toLowerCase()] || "").trim()
       );
       if (unresolved) {
+        if (allowIncomplete) {
+          return buildAutoFailedSubmission(buildClozeAnswerSnapshot(data, clozeSelections));
+        }
         showIncompleteResponse();
-        return;
+        return null;
       }
       const allCorrect = blanks.every((blank) => {
         const key = String(blank.key || "").toLowerCase();
@@ -942,47 +990,38 @@ export default function LessonQuizPlayer({
       const clozeSnapshot = buildClozeAnswerSnapshot(data, clozeSelections);
       setResultSnapshot(clozeSnapshot);
       if (allCorrect) {
-        markPassed(itemStats);
-        return;
+        return markPassed(itemStats, clozeSnapshot);
       }
-      markFailed(() => {
-        const solved = {};
-        blanks.forEach((blank) => {
-          const key = String(blank.key || "").toLowerCase();
-          solved[key] = String(blank.correctOptionId || "").toLowerCase();
-        });
-        setClozeSelections(solved);
-      }, {
+      return markFailed({
         itemStats,
-      });
-      return;
+      }, clozeSnapshot);
     }
 
     if (type === "scramble") {
       const answerWords = normalizeArray(data.answerWords);
       if (!answerWords.length || selectedScrambleIds.length !== answerWords.length) {
+        if (allowIncomplete) {
+          return buildAutoFailedSubmission();
+        }
         showIncompleteResponse();
-        return;
+        return null;
       }
       const candidate = selectedScrambleIds.map((id) => scrambleChipMap.get(id)).filter(Boolean);
       if (isArrayEqual(candidate, answerWords)) {
-        markPassed();
-        return;
+        return markPassed();
       }
-      registerIncorrect({
-        onReveal: () => {
-          setSelectedScrambleIds(buildScrambleSolutionIds(answerWords, scrambleChips));
-        },
-      });
-      return;
+      return markFailed();
     }
 
     if (type === "pairs") {
       const requiredIds = pairRows.map((pair) => pair.id);
       const hasAllPairs = requiredIds.every((pairId) => pairAssignments[pairId]);
       if (!requiredIds.length || !hasAllPairs) {
+        if (allowIncomplete) {
+          return buildAutoFailedSubmission();
+        }
         showIncompleteResponse();
-        return;
+        return null;
       }
       const correctCount = requiredIds.filter((pairId) => pairAssignments[pairId] === pairId).length;
       const itemStats = {
@@ -990,67 +1029,58 @@ export default function LessonQuizPlayer({
         totalItems: requiredIds.length,
       };
       if (correctCount === requiredIds.length) {
-        markPassed(itemStats);
-        return;
+        return markPassed(itemStats);
       }
-      markFailed(() => {
-        const solved = {};
-        requiredIds.forEach((pairId) => {
-          solved[pairId] = pairId;
-        });
-        setPairAssignments(solved);
-        setSelectedLeftPair(null);
-        setSelectedRightPair(null);
-      }, {
+      return markFailed({
         itemStats,
       });
-      return;
     }
 
     if (type === "image_match") {
       if (selectedImageIndex == null) {
+        if (allowIncomplete) {
+          return buildAutoFailedSubmission();
+        }
         showIncompleteResponse();
-        return;
+        return null;
       }
       if (selectedImageIndex === data.correctIndex) {
-        markPassed();
-        return;
+        return markPassed();
       }
-      registerIncorrect({
-        onReveal: () => {
-          setSelectedImageIndex(data.correctIndex);
-        },
-      });
-      return;
+      return markFailed();
     }
 
     const summary = summarizeListeningQuestionResults(normalizeArray(data.questions), listeningAnswers);
     if (!summary.total || !summary.complete) {
+      if (allowIncomplete) {
+        return buildAutoFailedSubmission();
+      }
       showIncompleteResponse();
-      return;
+      return null;
     }
     const itemStats = {
       correctItems: summary.correctCount,
       totalItems: summary.total,
     };
     if (summary.correctCount === summary.total) {
-      markPassed(itemStats);
-      return;
+      return markPassed(itemStats);
     }
-    markFailed(null, {
+    return markFailed({
       itemStats,
     });
   }
 
   function handleContinueSubmit(event) {
+    if (!showSubmitButton) {
+      event.preventDefault();
+      return;
+    }
     if (isSubmitting) {
       event.preventDefault();
       return;
     }
     if (!isResolved) {
-      event.preventDefault();
-      evaluateCurrentAnswer();
-      return;
+      evaluateCurrentAnswer({ allowIncomplete: true });
     }
     setIsSubmitting(true);
   }
@@ -1059,12 +1089,6 @@ export default function LessonQuizPlayer({
     () => (type === "cloze" ? normalizeArray(data.segments) : []),
     [type, data.segments]
   );
-  const clozeBlankWeight = useMemo(() => {
-    if (type !== "cloze") return null;
-    const blanksCount = Math.max(0, normalizeArray(data.blanks).length);
-    if (!blanksCount) return null;
-    return round2(exerciseWeight / blanksCount);
-  }, [type, data.blanks, exerciseWeight]);
 
   const listeningQuestions = useMemo(
     () => ((type === "audio_match" || type === "reading_exercise") ? normalizeArray(data.questions) : []),
@@ -1078,21 +1102,22 @@ export default function LessonQuizPlayer({
     ),
     [type, listeningQuestions, listeningAnswers]
   );
-  const remainingErrors = Math.max(0, MAX_WRONG_ATTEMPTS - wrongAttempts);
-
   function renderCloze() {
     const blanks = normalizeArray(data.blanks);
     const optionsPool = normalizeArray(data.optionsPool);
+    const blankWidthClass = "w-24 sm:w-[6rem]";
+    const snapshotByKey = new Map(
+      resultSnapshot?.type === "cloze"
+        ? normalizeArray(resultSnapshot.blanks).map((blank) => [
+            String(blank?.key || "").trim().toLowerCase(),
+            blank,
+          ])
+        : []
+    );
     const optionById = new Map(
       optionsPool.map((option) => [
         String(option?.id || "").trim().toLowerCase(),
         String(option?.text || "").trim(),
-      ])
-    );
-    const blankByKey = new Map(
-      blanks.map((blank, idx) => [
-        String(blank?.key || `blank_${idx + 1}`).toLowerCase(),
-        blank,
       ])
     );
     const activeKey = String(resolvedActiveClozeBlank || "").toLowerCase();
@@ -1101,92 +1126,108 @@ export default function LessonQuizPlayer({
         .map((value) => String(value || "").toLowerCase())
         .filter(Boolean)
     );
+    const visibleOptions = optionsPool.filter((option, optionIdx) => {
+      const optionId = String(option?.id || `opt_${optionIdx + 1}`).trim().toLowerCase();
+      const optionText = String(option?.text || "").trim();
+      return Boolean(optionText) && !selectedOptionIds.has(optionId);
+    });
 
     return (
-      <div className="space-y-5">
-        <p className="text-sm text-muted">Completa todos los espacios. Puedes resolver cualquier blank en cualquier orden.</p>
+      <div className="space-y-2.5">
         <div
-          className={`rounded-2xl border bg-surface-2 px-4 py-5 text-lg font-semibold transition ${
-            errorFlash ? "border-danger/70" : "border-border"
+          className={`rounded-lg px-1.5 py-1.5 text-base font-semibold text-foreground sm:text-lg transition ${
+            errorFlash ? "bg-danger/5" : ""
           }`}
         >
-          {clozeSegments.map((segment, idx) => {
+          <div className="whitespace-pre-wrap leading-10">
+            {clozeSegments.map((segment, idx) => {
             if (segment.kind !== "blank") {
               return <span key={`segment-text-${idx}`}>{segment.value}</span>;
             }
             const key = String(segment.key || "").toLowerCase();
-            const blank = blankByKey.get(key) || null;
             const selectedOptionId = String(clozeSelections[key] || "").toLowerCase();
             const selectedValue = optionById.get(selectedOptionId) || "";
-            const resolvedCorrectOptionId = String(blank?.correctOptionId || "").toLowerCase();
             const isActive = !isResolved && activeKey === key;
+            const blankResult = snapshotByKey.get(key);
+            const isCorrectBlank = isResolved && Boolean(blankResult?.isCorrect);
+            const isWrongBlank = isResolved && !blankResult?.isCorrect;
 
             return (
               <span
                 key={`segment-blank-${key}-${idx}`}
                 role="button"
                 tabIndex={0}
-                onClick={() => setActiveClozeBlank(key)}
+                data-cloze-blank-key={key}
+                onClick={() => {
+                  if (suppressClozeClickRef.current) return;
+                  if (isResolved) return;
+                  if (selectedOptionId && !isResolved) {
+                    clearClozeSelection(key);
+                    return;
+                  }
+                  setActiveClozeBlank(key);
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
+                    if (isResolved) return;
+                    if (selectedOptionId && !isResolved) {
+                      clearClozeSelection(key);
+                      return;
+                    }
                     setActiveClozeBlank(key);
                   }
                 }}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => handleClozeDrop(event, key)}
-                className={`mx-2 my-1 inline-flex min-h-12 min-w-28 items-center justify-center rounded-xl border-2 px-3 py-2 align-middle text-base font-bold transition ${
-                  isResolved && !isFailed
+                className={`mx-0.5 inline-flex h-8 ${blankWidthClass} items-center justify-center overflow-hidden rounded-lg border-2 px-2 py-1 align-middle text-sm font-bold leading-none transition-all duration-200 ease-out sm:h-8 sm:text-base ${
+                  isCorrectBlank
                     ? "border-success bg-success/15 text-success"
-                    : isFailed
+                    : isWrongBlank
                     ? "border-danger/70 bg-danger/12 text-danger"
                     : selectedOptionId
                     ? "border-primary/70 bg-primary/12 text-foreground"
                     : "border-dashed border-primary/55 bg-primary/10 text-foreground"
                 } ${isActive ? "ring-2 ring-primary/40" : ""}`}
               >
-                {selectedValue || "____"}
+                {selectedValue ? (
+                  <span
+                    onPointerDown={(event) => handleClozePointerDown(event, selectedOptionId)}
+                    className={`flex h-full w-full items-center justify-center rounded-md px-2 text-center ${
+                      isResolved ? "cursor-default" : "cursor-grab active:cursor-grabbing"
+                    }`}
+                  >
+                    <span className="block w-full truncate text-center">{selectedValue}</span>
+                  </span>
+                ) : null}
               </span>
             );
-          })}
+            })}
+          </div>
         </div>
 
-        {clozeBlankWeight != null ? (
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-            Cada blank vale aproximadamente {clozeBlankWeight} puntos.
-          </p>
-        ) : null}
-
-        <div className="rounded-xl border border-border bg-surface-2 p-3">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Pool global de opciones</p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {optionsPool.map((option, optionIdx) => {
+        <div className="pt-1">
+          <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:gap-2">
+            {visibleOptions.length ? visibleOptions.map((option, optionIdx) => {
               const optionId = String(option?.id || `opt_${optionIdx + 1}`).trim().toLowerCase();
-              const selectedInActiveBlank = String(clozeSelections[activeKey] || "").toLowerCase() === optionId;
-              const selectedElsewhere = selectedOptionIds.has(optionId) && !selectedInActiveBlank;
+              const optionText = String(option?.text || "").trim();
+              const isDraggingThisOption =
+                String(clozeDraggingOptionId || "").trim().toLowerCase() === optionId;
               return (
                 <button
                   key={`cloze-pool-option-${optionId}-${optionIdx}`}
                   type="button"
-                  draggable={!isResolved}
-                  onDragStart={(event) => {
-                    event.dataTransfer?.setData("application/x-option-id", optionId);
-                    event.dataTransfer?.setData("text/plain", optionId);
-                  }}
+                  onPointerDown={(event) => handleClozePointerDown(event, optionId)}
                   onClick={() => handleClozeOption(optionId)}
                   disabled={isResolved}
-                  className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
-                    selectedInActiveBlank
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : selectedElsewhere
-                      ? "border-primary/60 bg-primary/10 text-foreground"
-                      : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
-                  } disabled:cursor-not-allowed disabled:opacity-85`}
+                  className={`${blankWidthClass} inline-flex min-h-9 items-center justify-center rounded-lg border border-border bg-surface px-2 py-1.5 text-center text-sm font-semibold transition-all duration-200 ease-out hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-85 sm:min-h-10 sm:text-base ${
+                    isDraggingThisOption ? "pointer-events-none z-50 shadow-2xl ring-2 ring-primary/35" : "cursor-grab active:cursor-grabbing"
+                  }`}
                 >
-                  {String(option?.text || "").trim() || "(sin texto)"}
+                  <span className="block w-full truncate text-center">{optionText}</span>
                 </button>
               );
-            })}
+            }) : (
+              <span className="text-base text-muted">Todas las opciones ya fueron usadas.</span>
+            )}
           </div>
         </div>
       </div>
@@ -1196,12 +1237,12 @@ export default function LessonQuizPlayer({
   function renderScramble() {
     return (
       <div className="space-y-5">
-        <p className="text-xl font-bold leading-snug text-foreground sm:text-2xl">
+        <p className="text-2xl font-bold leading-snug text-foreground sm:text-3xl">
           {data.prompt || "Ordena la oracion."}
         </p>
 
         <div className={`rounded-2xl border bg-surface-2 px-4 py-4 transition ${errorFlash ? "border-danger/70" : "border-border"}`}>
-          <p className="mb-2 text-xs uppercase tracking-wide text-muted">Tu respuesta</p>
+          <p className="mb-2 text-sm uppercase tracking-wide text-muted">Tu respuesta</p>
           <div className="flex min-h-12 flex-wrap gap-2">
             {selectedScrambleWords.length ? (
               selectedScrambleWords.map((word, idx) => (
@@ -1213,13 +1254,13 @@ export default function LessonQuizPlayer({
                     handleScrambleToggle(chipId);
                   }}
                   disabled={isResolved}
-                  className="rounded-full border border-primary bg-primary px-3 py-1 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed"
+                  className="rounded-full border border-primary bg-primary px-3 py-1.5 text-base font-semibold text-primary-foreground disabled:cursor-not-allowed"
                 >
                   {word}
                 </button>
               ))
             ) : (
-              <span className="text-sm text-muted">Selecciona palabras para formar la frase.</span>
+              <span className="text-base text-muted">Selecciona palabras para formar la frase.</span>
             )}
           </div>
         </div>
@@ -1233,7 +1274,7 @@ export default function LessonQuizPlayer({
                 type="button"
                 onClick={() => handleScrambleToggle(chip.id)}
                 disabled={isResolved}
-                className={`rounded-full border px-3 py-1 text-sm font-semibold transition ${
+                className={`rounded-full border px-3 py-1.5 text-base font-semibold transition ${
                   selected
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
@@ -1252,7 +1293,7 @@ export default function LessonQuizPlayer({
     const assignedRightIds = new Set(Object.values(pairAssignments).filter(Boolean));
     return (
       <div className="space-y-5">
-        <p className="text-sm text-muted">Selecciona un termino de cada columna para emparejarlos.</p>
+        <p className="text-base text-muted">Selecciona un termino de cada columna para emparejarlos.</p>
 
         <div
           ref={pairBoardRef}
@@ -1274,7 +1315,7 @@ export default function LessonQuizPlayer({
                     type="button"
                     disabled={isResolved}
                     onClick={() => handlePairCard("left", card.pairId)}
-                    className={`w-full rounded-xl border px-3 py-3 text-left text-sm font-semibold transition ${
+                    className={`w-full rounded-xl border px-3 py-3 text-left text-base font-semibold transition ${
                       selected
                         ? "border-primary bg-primary text-primary-foreground"
                         : paired
@@ -1303,7 +1344,7 @@ export default function LessonQuizPlayer({
                     type="button"
                     disabled={isResolved}
                     onClick={() => handlePairCard("right", card.pairId)}
-                    className={`w-full rounded-xl border px-3 py-3 text-left text-sm font-semibold transition ${
+                    className={`w-full rounded-xl border px-3 py-3 text-left text-base font-semibold transition ${
                       selected
                         ? "border-primary bg-primary text-primary-foreground"
                         : paired
@@ -1342,7 +1383,7 @@ export default function LessonQuizPlayer({
   function renderImageMatch() {
     return (
       <div className="space-y-4">
-        <p className="text-sm text-muted">{data.question || "Que palabra corresponde a la imagen?"}</p>
+        <p className="text-base text-muted">{data.question || "Que palabra corresponde a la imagen?"}</p>
         <div className="overflow-hidden rounded-2xl border border-border bg-surface-2">
           {data.imageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -1356,7 +1397,7 @@ export default function LessonQuizPlayer({
         <div className={`grid gap-3 sm:grid-cols-2 ${errorFlash ? "shake-soft" : ""}`}>
           {normalizeArray(data.options).map((option, idx) => {
             const selected = selectedImageIndex === idx;
-            const resolvedCorrect = isResolved && idx === data.correctIndex;
+            const resolvedCorrect = isResolved && !isFailed && idx === data.correctIndex;
             const selectedWrong =
               feedback?.kind === "incorrect" &&
               selected &&
@@ -1377,7 +1418,7 @@ export default function LessonQuizPlayer({
                     : "border-border bg-surface hover:border-primary hover:bg-surface-2"
                 } disabled:cursor-not-allowed`}
               >
-                <div className="px-3 py-3 text-sm font-semibold text-foreground">{option.label || `Opcion ${idx + 1}`}</div>
+                <div className="px-3 py-3 text-base font-semibold text-foreground">{option.label || `Opcion ${idx + 1}`}</div>
               </button>
             );
           })}
@@ -1387,6 +1428,7 @@ export default function LessonQuizPlayer({
   }
 
   function renderQuestionExerciseQuestions(canAnswerQuestions = true) {
+    const flatListeningLayout = type === "audio_match";
     const resultByQuestionId = new Map(
       normalizeArray(listeningSummary.results).map((entry) => [
         String(entry?.id || "").trim(),
@@ -1403,35 +1445,45 @@ export default function LessonQuizPlayer({
           </p>
         ) : null}
 
-        <div className="space-y-3">
+        <div className={flatListeningLayout ? "space-y-4" : "space-y-3"}>
           {listeningQuestions.map((question, questionIndex) => {
             const questionId = String(question?.id || `q_${questionIndex + 1}`).trim();
             const answerState = listeningAnswers[questionId] || {};
             const result = resultByQuestionId.get(questionId) || null;
-            const questionIsCorrect = Boolean(result?.isCorrect);
-            const questionWasAnswered = Boolean(result?.answered);
+            const questionStatusClasses = isResolved
+              ? Boolean(result?.isCorrect)
+                ? "text-success"
+                : "text-danger"
+              : "text-muted";
 
             return (
               <div
                 key={`listening-question-${questionId}-${questionIndex}`}
-                className={`rounded-2xl border p-4 transition ${
-                  isResolved
-                    ? questionIsCorrect
-                      ? "border-success/55 bg-success/10"
-                      : "border-danger/45 bg-danger/10"
-                    : "border-border bg-surface-2"
-                }`}
+                className={
+                  flatListeningLayout
+                    ? "space-y-3 py-1"
+                    : `rounded-2xl border p-4 transition ${
+                        isResolved
+                          ? Boolean(result?.isCorrect)
+                            ? "border-success/55 bg-success/10"
+                            : "border-danger/45 bg-danger/10"
+                          : "border-border bg-surface-2"
+                      }`
+                }
               >
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                  Question {questionIndex + 1}
-                </p>
-                <p className="mt-1 text-sm font-semibold text-foreground">{question.prompt}</p>
+                <div className="flex items-start gap-2">
+                  <span className={`w-6 shrink-0 text-sm font-semibold ${questionStatusClasses}`}>
+                    {questionIndex + 1}.
+                  </span>
+                  <p className="min-w-0 flex-1 text-base font-semibold text-foreground">{question.prompt}</p>
+                </div>
 
                 {question.type === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
                   <div className="mt-3 grid gap-2 sm:grid-cols-2">
                     {normalizeArray(question.options).map((option, optionIndex) => {
                       const selected = Number(answerState.selected_index) === optionIndex;
                       const correctOption = Number(question.correct_index) === optionIndex;
+                      const resolvedCorrect = isResolved && !isFailed && correctOption;
                       const showWrong = isFailed && selected && !correctOption;
                       return (
                         <button
@@ -1439,8 +1491,8 @@ export default function LessonQuizPlayer({
                           type="button"
                           onClick={() => handleListeningAnswer(questionId, { selected_index: optionIndex })}
                           disabled={isResolved || !canAnswerQuestions}
-                          className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
-                            isResolved && correctOption
+                      className={`rounded-xl border px-3 py-2 text-left text-base font-semibold transition ${
+                            resolvedCorrect
                               ? "border-success bg-success/15 text-success"
                               : showWrong
                               ? "border-danger/70 bg-danger/12 text-danger"
@@ -1465,8 +1517,11 @@ export default function LessonQuizPlayer({
                       onKeyDown={(event) => {
                         if (event.key === "Enter") event.preventDefault();
                       }}
+                      onCopy={blockClipboardEvent}
+                      onCut={blockClipboardEvent}
+                      onPaste={blockClipboardEvent}
                       disabled={isResolved || !canAnswerQuestions}
-                      className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary disabled:cursor-not-allowed disabled:opacity-90"
+                      className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-base text-foreground outline-none transition focus:border-primary disabled:cursor-not-allowed disabled:opacity-90 select-none"
                       placeholder="Write your answer"
                     />
                   </div>
@@ -1478,6 +1533,7 @@ export default function LessonQuizPlayer({
                       const boolValue = optionIndex === 0;
                       const selected = answerState.value === boolValue;
                       const correctOption = Boolean(question.correct_boolean) === boolValue;
+                      const resolvedCorrect = isResolved && !isFailed && correctOption;
                       const showWrong = isFailed && selected && !correctOption;
                       return (
                         <button
@@ -1485,8 +1541,8 @@ export default function LessonQuizPlayer({
                           type="button"
                           onClick={() => handleListeningAnswer(questionId, { value: boolValue })}
                           disabled={isResolved || !canAnswerQuestions}
-                          className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
-                            isResolved && correctOption
+                          className={`rounded-xl border px-3 py-2 text-left text-base font-semibold transition ${
+                            resolvedCorrect
                               ? "border-success bg-success/15 text-success"
                               : showWrong
                               ? "border-danger/70 bg-danger/12 text-danger"
@@ -1502,11 +1558,6 @@ export default function LessonQuizPlayer({
                   </div>
                 ) : null}
 
-                {isFailed && revealCorrectAnswers && (!questionWasAnswered || !questionIsCorrect) ? (
-                  <p className="mt-3 text-xs font-semibold text-danger">
-                    Correct answer: {getListeningQuestionCorrectAnswerText(question)}
-                  </p>
-                ) : null}
               </div>
             );
           })}
@@ -1516,12 +1567,9 @@ export default function LessonQuizPlayer({
   }
 
   function renderAudioMatch() {
-    const hasPlaybackSource = Boolean(data.youtubeUrl || data.audioUrl);
-    const canAnswerQuestions = !hasPlaybackSource || listeningPlaybackState.playsUsed > 0;
-
     return (
       <div className="space-y-5">
-        <p className="text-sm text-muted">{data.prompt || "Escucha y responde."}</p>
+        <p className="text-base text-muted">{data.prompt || "Escucha y responde."}</p>
 
         <ListeningPlaybackControl
           key={`listening-playback-${exercise?.id || currentIndex}-${data.youtubeUrl || data.audioUrl || "none"}-${data.maxPlays}-${data.startTime ?? 0}-${data.endTime ?? "end"}`}
@@ -1533,17 +1581,7 @@ export default function LessonQuizPlayer({
           onStatusChange={setListeningPlaybackState}
         />
 
-        {!canAnswerQuestions ? (
-          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
-            Reproduce el audio al menos una vez antes de responder.
-          </div>
-        ) : listeningPlaybackState.isPlaying ? (
-          <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
-            Puedes responder mientras el audio sigue sonando.
-          </div>
-        ) : null}
-
-        {renderQuestionExerciseQuestions(canAnswerQuestions)}
+        {renderQuestionExerciseQuestions(true)}
       </div>
     );
   }
@@ -1564,7 +1602,7 @@ export default function LessonQuizPlayer({
               className="mt-4 h-52 w-full rounded-2xl object-cover sm:h-64"
             />
           ) : null}
-          <div className="mt-4 whitespace-pre-wrap text-sm leading-7 text-foreground">
+          <div className="mt-4 whitespace-pre-wrap text-base leading-8 text-foreground">
             {data.readingText || "Reading text not available."}
           </div>
         </div>
@@ -1584,78 +1622,64 @@ export default function LessonQuizPlayer({
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <ExerciseTypeHeading type={type} />
-        <p className="text-sm font-semibold text-muted">
-          Errores disponibles: {remainingErrors}
-        </p>
-      </div>
+    <div
+      ref={exerciseRootRef}
+      className="space-y-4 select-none text-base sm:space-y-5"
+      onCopy={blockClipboardEvent}
+      onCut={blockClipboardEvent}
+      onPaste={blockClipboardEvent}
+    >
+      {showTypeHeading ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <ExerciseTypeHeading type={type} />
+        </div>
+      ) : null}
 
       {renderBodyByType()}
 
       {feedback?.kind === "correct" ? (
-        <div className="rounded-2xl border border-success/45 bg-success/12 px-4 py-3 text-sm font-semibold text-success">
+        <div className="rounded-2xl border border-success/45 bg-success/12 px-4 py-3 text-base font-semibold text-success">
           Correcto!
         </div>
       ) : null}
 
       {feedback?.kind === "incorrect" ? (
-        <div className="rounded-2xl border border-danger/45 bg-danger/12 px-4 py-3 text-sm font-semibold text-danger">
-          Incorrecto, intenta de nuevo.
+        <div className="rounded-2xl border border-danger/45 bg-danger/12 px-4 py-3 text-base font-semibold text-danger">
+          {feedback.text}
         </div>
       ) : null}
 
       {feedback?.kind === "incomplete" ? (
-        <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm font-semibold text-muted">
+        <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-base font-semibold text-muted">
           {feedback.text}
         </div>
       ) : null}
 
-      {feedback?.kind === "reveal" ? (
-        <div className="rounded-2xl border border-accent/45 bg-accent/12 px-4 py-3 text-sm font-semibold text-foreground">
-          {feedback.text}
-        </div>
-      ) : null}
-
-      {isFailed && revealCorrectAnswers ? (
-        <div className="space-y-2 rounded-2xl border border-accent/45 bg-accent/12 px-4 py-3 text-sm text-foreground">
-          <p className="text-xs uppercase tracking-wide text-muted">Respuesta correcta</p>
-          <p className="font-semibold">{correctAnswerText}</p>
-          <p className="text-muted">{explanationText}</p>
-        </div>
-      ) : null}
-
-      <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-xs text-muted">
-        Valor del ejercicio: {exerciseWeight}/100
-        {isResolved ? (
-          <span className="ml-2 inline-flex rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-foreground">
-            Puntaje actual: {scoreAwarded}
-          </span>
-        ) : null}
-      </div>
-
-      <form
-        action={submitLessonQuizStep}
-        onSubmit={handleContinueSubmit}
-        className="pt-1"
-      >
-        <input type="hidden" name="lessonId" value={lessonId} />
-        <input type="hidden" name="exerciseId" value={exercise?.id || ""} />
-        <input type="hidden" name="currentIndex" value={currentIndex} />
-        <input type="hidden" name="totalExercises" value={totalExercises} />
-        <input type="hidden" name="wrongAttempts" value={wrongAttempts} />
-        <input type="hidden" name="finalStatus" value={finalStatus || ""} />
-        <input type="hidden" name="scoreAwarded" value={scoreAwarded} />
-        <input type="hidden" name="answerSnapshot" value={answerSnapshotValue} />
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="inline-flex w-full items-center justify-center rounded-2xl bg-primary px-5 py-3 text-base font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"
+      {showSubmitButton ? (
+        <form
+          action={submitLessonQuizStep}
+          onSubmit={handleContinueSubmit}
+          className="pt-1"
         >
-          {isSubmitting ? "Guardando..." : "Continuar"}
-        </button>
-      </form>
+          <input type="hidden" name="lessonId" value={lessonId} />
+          <input type="hidden" name="exerciseId" value={exercise?.id || ""} />
+          <input type="hidden" name="currentIndex" value={currentIndex} />
+          <input type="hidden" name="totalExercises" value={totalExercises} />
+          <input type="hidden" name="wrongAttempts" value="0" />
+          <input type="hidden" name="finalStatus" value={finalStatus || ""} />
+          <input type="hidden" name="scoreAwarded" value={scoreAwarded} />
+          <input type="hidden" name="answerSnapshot" value={answerSnapshotValue} />
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="inline-flex w-full items-center justify-center rounded-2xl bg-primary px-5 py-3.5 text-lg font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {isSubmitting ? "Guardando..." : "Continuar"}
+          </button>
+        </form>
+      ) : null}
     </div>
   );
-}
+});
+
+export default LessonQuizPlayer;
