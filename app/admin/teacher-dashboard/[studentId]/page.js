@@ -7,19 +7,20 @@ import {
   closeStudentLevel,
   loadTeacherStudentProfile,
   setStudentAdminGrade,
-  setStudentListeningOverride,
+  setStudentSpeakingOverride,
 } from "@/lib/student-skills";
 
 export const metadata = {
   title: "Perfil alumno | Teacher Dashboard",
 };
 
-const SKILL_KEYS = ["speaking", "reading", "grammar", "listening"];
+const SKILL_KEYS = ["speaking", "reading", "grammar", "listening", "vocabulary"];
 const SKILL_LABELS = {
   speaking: "Speaking",
   reading: "Reading",
   grammar: "Grammar",
   listening: "Listening",
+  vocabulary: "Vocabulary",
 };
 
 function cleanText(value) {
@@ -73,8 +74,8 @@ function getFlashMessage(searchParams) {
   if (saved === "grade") {
     return { type: "success", text: "Nota guardada" };
   }
-  if (saved === "listening") {
-    return { type: "success", text: "Listening actualizado correctamente." };
+  if (saved === "speaking") {
+    return { type: "success", text: "Speaking actualizado correctamente." };
   }
   if (saved === "close-level") {
     return { type: "success", text: "Nivel cerrado y snapshot guardado." };
@@ -185,25 +186,25 @@ export default async function TeacherStudentProfilePage({
     redirect(`/admin/teacher-dashboard/${studentId}?saved=grade`);
   }
 
-  async function updateListeningAction(formData) {
+  async function updateSpeakingAction(formData) {
     "use server";
     try {
       const { db: actionDb, user: actionUser } = await requireAdminDb();
-      await setStudentListeningOverride({
+      await setStudentSpeakingOverride({
         db: actionDb,
         actorId: actionUser?.id || null,
         userId: studentId,
         level: cleanText(formData.get("level")),
-        listeningValue: formData.get("listeningValue"),
+        speakingValue: formData.get("speakingValue"),
       });
       revalidatePath("/admin/teacher-dashboard");
       revalidatePath(`/admin/teacher-dashboard/${studentId}`);
       revalidatePath("/app");
     } catch (error) {
-      const message = encodeURIComponent(error?.message || "No se pudo actualizar listening.");
+      const message = encodeURIComponent(error?.message || "No se pudo actualizar speaking.");
       redirect(`/admin/teacher-dashboard/${studentId}?error=${message}`);
     }
-    redirect(`/admin/teacher-dashboard/${studentId}?saved=listening`);
+    redirect(`/admin/teacher-dashboard/${studentId}?saved=speaking`);
   }
 
   async function closeLevelAction(formData) {
@@ -269,7 +270,7 @@ export default async function TeacherStudentProfilePage({
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <article className="rounded-3xl border border-border bg-surface p-5">
           <p className="text-xs uppercase tracking-[0.24em] text-muted">Habilidades</p>
-          <h2 className="mt-1 text-xl font-semibold">Speaking / Reading / Grammar / Listening</h2>
+          <h2 className="mt-1 text-xl font-semibold">Speaking / Reading / Grammar / Listening / Vocabulary</h2>
           <div className="mt-4 space-y-4">
             {SKILL_KEYS.map((key) => (
               <SkillBar key={key} label={SKILL_LABELS[key]} value={skills?.combined?.[key]} />
@@ -281,23 +282,23 @@ export default async function TeacherStudentProfilePage({
         </article>
 
         <article className="space-y-4">
-          <form action={updateListeningAction} className="rounded-3xl border border-border bg-surface p-5">
-            <p className="text-xs uppercase tracking-[0.24em] text-muted">Listening manual</p>
-            <h3 className="mt-1 text-lg font-semibold">Actualizar listening del nivel actual</h3>
+          <form action={updateSpeakingAction} className="rounded-3xl border border-border bg-surface p-5">
+            <p className="text-xs uppercase tracking-[0.24em] text-muted">Speaking manual</p>
+            <h3 className="mt-1 text-lg font-semibold">Actualizar speaking del nivel actual</h3>
             <input type="hidden" name="level" value={student.current_level || ""} />
             <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
               <input
-                name="listeningValue"
+                name="speakingValue"
                 type="number"
                 min={0}
                 max={100}
                 step="0.01"
-                defaultValue={skills?.current?.listening ?? ""}
+                defaultValue={skills?.current?.speaking ?? ""}
                 required
                 className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
               />
               <button type="submit" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
-                Guardar listening
+                Guardar speaking
               </button>
             </div>
           </form>
@@ -401,6 +402,7 @@ export default async function TeacherStudentProfilePage({
                 <th className="px-2 py-2">Reading</th>
                 <th className="px-2 py-2">Grammar</th>
                 <th className="px-2 py-2">Listening</th>
+                <th className="px-2 py-2">Vocabulary</th>
               </tr>
             </thead>
             <tbody>
@@ -414,11 +416,12 @@ export default async function TeacherStudentProfilePage({
                   <td className="px-2 py-2">{formatScore(row.final_reading_0_100)}</td>
                   <td className="px-2 py-2">{formatScore(row.final_grammar_0_100)}</td>
                   <td className="px-2 py-2">{formatScore(row.final_listening_0_100)}</td>
+                  <td className="px-2 py-2">{formatScore(row.final_vocabulary_0_100)}</td>
                 </tr>
               ))}
               {!history.length ? (
                 <tr>
-                  <td colSpan={8} className="px-2 py-6 text-center text-muted">
+                  <td colSpan={9} className="px-2 py-6 text-center text-muted">
                     Aún no hay snapshots de niveles cerrados.
                   </td>
                 </tr>

@@ -12,7 +12,7 @@ export async function PUT(request, { params: paramsPromise }) {
     const body = await request.json().catch(() => ({}));
 
     if (!studentId) {
-      return NextResponse.json({ error: "Alumno inválido." }, { status: 400 });
+      return NextResponse.json({ error: "Alumno invÃ¡lido." }, { status: 400 });
     }
 
     const result = await setStudentSpeakingOverride({
@@ -20,16 +20,12 @@ export async function PUT(request, { params: paramsPromise }) {
       actorId: auth.user?.id || null,
       userId: studentId,
       level: body?.level,
-      speakingValue:
-        body?.speaking_value ??
-        body?.speakingValue ??
-        body?.listening_value ??
-        body?.listeningValue,
+      speakingValue: body?.speaking_value ?? body?.speakingValue,
     });
 
-    return NextResponse.json({ speaking: result, deprecated: true });
+    return NextResponse.json({ speaking: result });
   } catch (error) {
-    console.error("PUT /api/admin/students/:id/listening failed", error);
+    console.error("PUT /api/admin/students/:id/speaking failed", error);
     return NextResponse.json(
       { error: error?.message || "No se pudo actualizar speaking." },
       { status: 400 }

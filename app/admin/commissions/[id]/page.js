@@ -282,36 +282,11 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-2xl border border-border bg-surface p-5">
-            <div className="flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.35em] text-muted">Resumen</p>
-              <span
-                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  status === "active" ? "bg-success/20 text-success" : "bg-white/10 text-white/70"
-                }`}
-              >
-                {status === "active" ? "Activa" : "Desactivada"}
-              </span>
-            </div>
-            <div className="mt-4 grid gap-3 text-sm text-foreground sm:grid-cols-2">
-              <div>
-                <p className="text-xs uppercase tracking-wide text-muted">Inicio</p>
-                <p>{formatSessionDateLabel(commission.start_date)}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide text-muted">Fin</p>
-                <p>{formatSessionDateLabel(commission.end_date)}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide text-muted">Mes de inicio</p>
-                <p>{commission.start_month || "-"}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide text-muted">Duracion</p>
-                <p>{commission.duration_months || frequencyRef?.months || "-"} meses</p>
-              </div>
-            </div>
-          </div>
+          <StudentsManager
+            commissionId={commission.id}
+            enrolledStudents={enrolledStudents || []}
+            eligibleStudents={eligibleStudents}
+          />
 
           <div className="rounded-2xl border border-border bg-surface p-5">
             <p className="text-xs uppercase tracking-[0.35em] text-muted">Editar comision</p>
@@ -328,11 +303,36 @@ export default async function CommissionDetailPage({ params: paramsPromise }) {
           </div>
         </div>
 
-        <StudentsManager
-          commissionId={commission.id}
-          enrolledStudents={enrolledStudents || []}
-          eligibleStudents={eligibleStudents}
-        />
+        <div className="rounded-2xl border border-border bg-surface p-5">
+          <div className="flex items-center justify-between">
+            <p className="text-xs uppercase tracking-[0.35em] text-muted">Resumen</p>
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                status === "active" ? "bg-success/20 text-success" : "bg-white/10 text-white/70"
+              }`}
+            >
+              {status === "active" ? "Activa" : "Desactivada"}
+            </span>
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="text-xs uppercase tracking-widest text-muted">Inicio</p>
+              <p className="text-base font-medium">{formatSessionDateLabel(commission.start_date)}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-widest text-muted">Fin</p>
+              <p className="text-base font-medium">{formatSessionDateLabel(commission.end_date)}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-widest text-muted">Mes de inicio</p>
+              <p className="text-base font-medium">{commission.start_month || "-"}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-widest text-muted">Duracion</p>
+              <p className="text-base font-medium">{commission.duration_months || frequencyRef?.months || "-"} meses</p>
+            </div>
+          </div>
+        </div>
 
         {!sessionTableAvailable ? (
           <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">

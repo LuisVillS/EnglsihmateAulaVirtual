@@ -50,7 +50,7 @@ export default function StudentsManager({ commissionId, enrolledStudents = [], e
   };
 
   return (
-    <div className="rounded-2xl border border-border bg-surface p-5">
+    <div className="flex h-full min-h-0 flex-col rounded-2xl border border-border bg-surface p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-[0.35em] text-muted">Alumnos matriculados</p>
@@ -65,7 +65,7 @@ export default function StudentsManager({ commissionId, enrolledStudents = [], e
         </button>
       </div>
 
-      <div className="mt-4 overflow-x-auto">
+      <div className="mt-4 min-h-0 flex-1 overflow-auto">
         <table className="min-w-full text-sm">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wide text-muted">
