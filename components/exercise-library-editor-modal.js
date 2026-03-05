@@ -16,6 +16,7 @@ import {
   EXERCISE_TYPE_OPTIONS,
   GuidedEditor,
   getDefaultContent,
+  InlineRichTextarea,
   normalizeContent,
   safeParseJson,
   toPrettyJson,
@@ -75,6 +76,9 @@ export default function ExerciseLibraryEditorModal({
 }) {
   const [state, formAction, pending] = useActionState(upsertExerciseLibraryEntry, INITIAL_STATE);
   const [formValues, setFormValues] = useState(() => toFormValues(exercise, defaultSkill, defaultLevel));
+  const explanationTextareaRef = useRef(null);
+  const submitRequestedRef = useRef(false);
+  const submitPendingStartedRef = useRef(false);
   const onSavedRef = useRef(onSaved);
   const onCloseRef = useRef(onClose);
   const handledSaveKeyRef = useRef("");
@@ -86,17 +90,33 @@ export default function ExerciseLibraryEditorModal({
 
   useEffect(() => {
     if (!open) return;
+    submitRequestedRef.current = false;
+    submitPendingStartedRef.current = false;
     setFormValues(toFormValues(exercise, defaultSkill, defaultLevel));
   }, [open, exercise, defaultSkill, defaultLevel]);
 
   useEffect(() => {
     if (!open) {
-      handledSaveKeyRef.current = "";
+      submitRequestedRef.current = false;
+      submitPendingStartedRef.current = false;
+      return;
+    }
+
+    if (submitRequestedRef.current && pending) {
+      submitPendingStartedRef.current = true;
       return;
     }
 
     const savedExerciseId = String(state?.exercise?.id || "").trim();
-    if (!state?.success || !savedExerciseId) return;
+    if (
+      pending
+      || !submitRequestedRef.current
+      || !submitPendingStartedRef.current
+      || !state?.success
+      || !savedExerciseId
+    ) {
+      return;
+    }
 
     const saveKey = [
       savedExerciseId,
@@ -106,12 +126,21 @@ export default function ExerciseLibraryEditorModal({
 
     if (handledSaveKeyRef.current === saveKey) return;
     handledSaveKeyRef.current = saveKey;
+    submitRequestedRef.current = false;
+    submitPendingStartedRef.current = false;
 
     startTransition(() => {
       onSavedRef.current?.(state.exercise, state.message || "");
       onCloseRef.current?.();
     });
-  }, [open, state]);
+  }, [open, pending, state]);
+
+  useEffect(() => {
+    if (state?.error && submitPendingStartedRef.current) {
+      submitRequestedRef.current = false;
+      submitPendingStartedRef.current = false;
+    }
+  }, [state?.error]);
 
   const filteredCategories = useMemo(
     () =>
@@ -142,6 +171,10 @@ export default function ExerciseLibraryEditorModal({
       ),
     [formValues.title, formValues.type, guidedContent, parsedContent]
   );
+  const explanationText = useMemo(() => {
+    if (hasInvalidJson) return "";
+    return String(guidedContent?.explanation || "");
+  }, [guidedContent, hasInvalidJson]);
 
   function updateGuidedContent(patchObject) {
     setFormValues((previous) => {
@@ -169,6 +202,10 @@ export default function ExerciseLibraryEditorModal({
     });
   }
 
+  function setExplanationValue(nextValue) {
+    updateGuidedContent({ explanation: nextValue });
+  }
+
   return (
     <AppModal
       open={open}
@@ -183,7 +220,14 @@ export default function ExerciseLibraryEditorModal({
           </p>
         ) : null}
 
-        <form action={formAction} className="space-y-4">
+        <form
+          action={formAction}
+          className="space-y-4"
+          onSubmit={() => {
+            submitRequestedRef.current = true;
+            submitPendingStartedRef.current = false;
+          }}
+        >
           <input type="hidden" name="exerciseId" value={formValues.exerciseId} readOnly />
           <input type="hidden" name="categoryName" value={selectedCategoryName} readOnly />
           <input type="hidden" name="title" value={displayTitle} readOnly />
@@ -290,6 +334,23 @@ export default function ExerciseLibraryEditorModal({
               className="w-full rounded-2xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
               placeholder="Past Simple"
             />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Explicacion para correcciones
+            </label>
+            <InlineRichTextarea
+              rows={5}
+              value={explanationText}
+              disabled={hasInvalidJson}
+              onChange={setExplanationValue}
+              textareaRef={explanationTextareaRef}
+              placeholder="Ejemplo: **I** usa **am** en presente."
+            />
+            <p className="text-xs text-muted">
+              Soporta multilinea y formato simple. Atajos: <code>Ctrl+B</code>, <code>Ctrl+I</code>, <code>Ctrl+U</code>.
+            </p>
           </div>
 
           <div className="rounded-2xl border border-border bg-surface p-4">

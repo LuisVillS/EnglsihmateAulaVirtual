@@ -124,6 +124,115 @@ function createPairId() {
   return createStableEditorId("pair");
 }
 
+export function InlineRichTextarea({
+  value,
+  onChange,
+  rows = 4,
+  placeholder = "",
+  textareaRef = null,
+  onKeyDownCapture = null,
+  className = "",
+  disabled = false,
+}) {
+  const localRef = useRef(null);
+  const editorRef = textareaRef || localRef;
+
+  function updateValue(nextValue) {
+    onChange?.(nextValue);
+  }
+
+  function wrapSelection(prefix, suffix = prefix) {
+    const node = editorRef.current;
+    if (!node || disabled) return;
+    const text = String(node.value || "");
+    const start = Number(node.selectionStart || 0);
+    const end = Number(node.selectionEnd || 0);
+    const selected = text.slice(start, end);
+    const wrapped = `${prefix}${selected}${suffix}`;
+    const nextText = `${text.slice(0, start)}${wrapped}${text.slice(end)}`;
+    updateValue(nextText);
+    window.requestAnimationFrame(() => {
+      node.focus();
+      const cursorStart = start + prefix.length;
+      const cursorEnd = cursorStart + selected.length;
+      node.setSelectionRange(cursorStart, cursorEnd);
+    });
+  }
+
+  return (
+    <div className={`overflow-hidden rounded-lg border border-border/90 bg-surface ${disabled ? "opacity-70" : ""} ${className}`}>
+      <div className="flex flex-wrap items-center gap-1 border-b border-border/80 bg-[#f3f4f6] px-2 py-1 dark:bg-surface-2">
+        <span className="px-1 text-xs text-muted" aria-hidden="true">↶</span>
+        <span className="px-1 text-xs text-muted" aria-hidden="true">↷</span>
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+        <button
+          type="button"
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => wrapSelection("**")}
+          className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-transparent px-1 text-xs font-bold text-foreground transition hover:border-border hover:bg-surface disabled:cursor-not-allowed"
+          title="Negrita (Ctrl+B)"
+        >
+          B
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => wrapSelection("*")}
+          className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-transparent px-1 text-xs italic text-foreground transition hover:border-border hover:bg-surface disabled:cursor-not-allowed"
+          title="Cursiva (Ctrl+I)"
+        >
+          I
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => wrapSelection("__")}
+          className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-transparent px-1 text-xs underline text-foreground transition hover:border-border hover:bg-surface disabled:cursor-not-allowed"
+          title="Subrayado (Ctrl+U)"
+        >
+          U
+        </button>
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+        <span className="px-1 text-xs text-muted" aria-hidden="true">≡</span>
+        <span className="px-1 text-xs text-muted" aria-hidden="true">☰</span>
+        <span className="px-1 text-xs text-muted" aria-hidden="true">☷</span>
+      </div>
+      <textarea
+        ref={editorRef}
+        rows={rows}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={(event) => updateValue(event.target.value)}
+        onKeyDownCapture={onKeyDownCapture || undefined}
+        onKeyDown={(event) => {
+          if (event.ctrlKey || event.metaKey) {
+            const key = String(event.key || "").toLowerCase();
+            if (key === "b") {
+              event.preventDefault();
+              wrapSelection("**");
+              return;
+            }
+            if (key === "i") {
+              event.preventDefault();
+              wrapSelection("*");
+              return;
+            }
+            if (key === "u") {
+              event.preventDefault();
+              wrapSelection("__");
+            }
+          }
+        }}
+        className="w-full resize-y border-0 bg-surface px-3 py-2 text-sm leading-relaxed text-foreground outline-none"
+      />
+    </div>
+  );
+}
+
 export function getDefaultContent(type) {
   switch (type) {
     case "scramble":
@@ -131,6 +240,7 @@ export function getDefaultContent(type) {
         prompt_native: "Yo soy estudiante",
         target_words: ["I", "am", "a", "student"],
         answer_order: [0, 1, 2, 3],
+        explanation: "",
         point_value: 10,
       };
     case "audio_match":
@@ -147,6 +257,7 @@ export function getDefaultContent(type) {
         questions: [
           createDefaultListeningQuestion(LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE, 0),
         ],
+        explanation: "",
         point_value: 10,
       };
     case "reading_exercise":
@@ -158,6 +269,7 @@ export function getDefaultContent(type) {
         questions: [
           createDefaultListeningQuestion(LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE, 0),
         ],
+        explanation: "",
         point_value: 10,
       };
     case "image_match":
@@ -172,6 +284,7 @@ export function getDefaultContent(type) {
         ],
         correct_index: 0,
         correct_vocab_id: "",
+        explanation: "",
         point_value: 10,
       };
     case "pairs":
@@ -181,6 +294,7 @@ export function getDefaultContent(type) {
           { id: createPairId(), native: "Manzana", target: "Apple" },
           { id: createPairId(), native: "Pan", target: "Bread" },
         ],
+        explanation: "",
         point_value: 10,
       };
     case "cloze":
@@ -191,6 +305,7 @@ export function getDefaultContent(type) {
           { id: createOptionId(), text: "" },
         ],
         blanks: [],
+        explanation: "",
         point_value: 10,
       };
   }
@@ -225,6 +340,7 @@ export function normalizeContent(type, rawObject) {
   const estimatedTimeMinutes = normalizeEstimatedTimeMinutes(
     raw.estimated_time_minutes ?? raw.estimatedTimeMinutes ?? base.estimated_time_minutes
   );
+  const explanation = resolveEditableText(raw.explanation, base.explanation ?? "");
 
   if (type === "cloze") {
     const fallbackContent = getDefaultContent("cloze");
@@ -340,6 +456,7 @@ export function normalizeContent(type, rawObject) {
       sentence: tokenized.sentence,
       blanks: orderedBlanks,
       options_pool: optionsPool,
+      explanation,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
     };
@@ -357,6 +474,7 @@ export function normalizeContent(type, rawObject) {
       prompt_native: resolveEditableText(raw.prompt_native, base.prompt_native),
       target_words: targetWords.length ? targetWords : base.target_words,
       answer_order: answerOrder.length ? answerOrder : defaultOrder,
+      explanation,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
     };
@@ -381,6 +499,7 @@ export function normalizeContent(type, rawObject) {
         preserveDraftText: true,
         allowBlankPrompt: true,
       }),
+      explanation,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
     };
@@ -400,6 +519,7 @@ export function normalizeContent(type, rawObject) {
         preserveDraftText: true,
         allowBlankPrompt: true,
       }),
+      explanation,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
     };
@@ -452,6 +572,7 @@ export function normalizeContent(type, rawObject) {
       options,
       correct_index: Number.isFinite(correctIndex) ? correctIndex : 0,
       correct_vocab_id: options[correctIndex]?.vocab_id || "",
+      explanation,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
     };
@@ -475,6 +596,7 @@ export function normalizeContent(type, rawObject) {
     return {
       pairs_title: resolveEditableText(raw.pairs_title ?? raw.pairsTitle ?? raw.title, base.pairs_title ?? ""),
       pairs,
+      explanation,
       point_value: pointValue,
       estimated_time_minutes: estimatedTimeMinutes,
     };
@@ -637,15 +759,14 @@ export function GuidedEditor({ item, content, onPatch }) {
     return (
       <div className="grid gap-3">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">Frase</label>
-        <textarea
-          ref={clozeSentenceRef}
+        <InlineRichTextarea
+          textareaRef={clozeSentenceRef}
           rows={3}
           value={sentenceEditorValue}
-          onChange={(event) => patchSentenceFromEditor(event.target.value, blanks)}
+          onChange={(nextValue) => patchSentenceFromEditor(nextValue, blanks)}
           onKeyDownCapture={(event) => {
             event.stopPropagation();
           }}
-          className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
           placeholder="Ej: I [Blank] to school and [Blank] English."
         />
         <div className="flex flex-wrap items-center gap-2">
@@ -1019,11 +1140,10 @@ export function GuidedEditor({ item, content, onPatch }) {
 
             <div className="space-y-1">
               <label className="text-xs font-semibold uppercase tracking-wide text-muted">Texto del reading</label>
-              <textarea
+              <InlineRichTextarea
                 rows={8}
                 value={content.text || ""}
-                onChange={(event) => onPatch({ text: event.target.value })}
-                className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                onChange={(nextValue) => onPatch({ text: nextValue })}
                 placeholder="Write the reading passage here."
               />
             </div>
@@ -1165,17 +1285,17 @@ export function GuidedEditor({ item, content, onPatch }) {
                         <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
                           Respuestas validas (una por linea)
                         </label>
-                        <textarea
+                        <InlineRichTextarea
                           rows={3}
                           value={(normalizedQuestion.accepted_answers || []).join("\n")}
-                          onChange={(event) =>
+                          onChange={(nextValue) =>
                             updateQuestion(questionIndex, {
-                              accepted_answers: event.target.value
+                              accepted_answers: nextValue
                                 .split(/\r?\n/)
                                 .map((value) => String(value ?? "")),
                             })
                           }
-                          className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                          className="rounded-lg"
                           placeholder={"example answer\nalternate answer"}
                         />
                       </div>

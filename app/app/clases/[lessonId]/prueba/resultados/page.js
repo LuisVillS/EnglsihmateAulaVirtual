@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import RestartLessonQuizButton from "@/components/restart-lesson-quiz-button";
-import { splitClozeSentenceSegments, tokenizeClozeSentence, toClozeDisplayText } from "@/lib/cloze-blanks";
+import { splitClozeSentenceSegments, tokenizeClozeSentence } from "@/lib/cloze-blanks";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
   LESSON_QUIZ_MAX_RESTARTS,
@@ -69,7 +69,30 @@ function normalizeExerciseTypeLabel(type) {
   return EXERCISE_TYPE_LABELS[normalized] || "Ejercicio";
 }
 
-function buildClozeReviewLayout(exercise, answerSnapshot, revealAll = false) {
+function renderRichMarkdownFragments(text, keyPrefix = "md") {
+  const raw = String(text || "");
+  const parts = raw.split(/(\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*)/g).filter(Boolean);
+  return parts.map((part, index) => {
+    const isBold = part.startsWith("**") && part.endsWith("**") && part.length > 4;
+    if (isBold) {
+      const content = part.slice(2, -2);
+      return <strong key={`${keyPrefix}-strong-${index}`}>{content}</strong>;
+    }
+    const isUnderline = part.startsWith("__") && part.endsWith("__") && part.length > 4;
+    if (isUnderline) {
+      const content = part.slice(2, -2);
+      return <u key={`${keyPrefix}-underline-${index}`}>{content}</u>;
+    }
+    const isItalic = part.startsWith("*") && part.endsWith("*") && part.length > 2;
+    if (isItalic) {
+      const content = part.slice(1, -1);
+      return <em key={`${keyPrefix}-italic-${index}`}>{content}</em>;
+    }
+    return <span key={`${keyPrefix}-span-${index}`}>{part}</span>;
+  });
+}
+
+function buildClozeBreakdownData(exercise, answerSnapshot) {
   const content = normalizeObject(exercise?.content_json);
   const rawBlanks = normalizeArray(content.blanks);
   const optionTextById = new Map(
@@ -119,26 +142,44 @@ function buildClozeReviewLayout(exercise, answerSnapshot, revealAll = false) {
       return [key, normalizeObject(blank)];
     })
   );
-  const displayByKey = new Map(
-    blanks.map((blank) => {
-      const saved = snapshotByKey.get(blank.key) || null;
-      const text = revealAll
-        ? blank.correctText
-        : saved?.isCorrect
-        ? String(saved.correctText || blank.correctText || "").trim()
-        : "";
-      return [blank.key, text];
+  const orderedKeys = tokenized.orderedKeys.map((key, index) => String(key || `blank_${index + 1}`).trim().toLowerCase());
+  const reviewByKey = new Map(
+    orderedKeys.map((key, index) => {
+      const blank = blanks.find((entry) => entry.key === key) || blanks[index] || { key, correctText: "" };
+      const saved = snapshotByKey.get(key) || null;
+      const selectedText = String(saved?.selectedText || "").trim();
+      const correctText = String(saved?.correctText || blank.correctText || "").trim();
+      const isCorrect = Boolean(saved?.isCorrect);
+      return [
+        key,
+        {
+          key,
+          selectedText,
+          selectedOrFallback: selectedText || "[no answer]",
+          correctText,
+          isCorrect,
+        },
+      ];
     })
   );
 
+  const explanations = normalizeObject(content.explanations);
+  const explanationLines = orderedKeys
+    .map((key, index) => String(explanations[key] || explanations[`blank_${index + 1}`] || "").trim())
+    .filter(Boolean);
+
   return {
     segments: splitClozeSentenceSegments(sentence).segments,
-    hasPerBlankReview: snapshotByKey.size > 0,
-    displayByKey,
+    orderedKeys,
+    reviewByKey,
+    correctAnswers: orderedKeys
+      .map((key) => String(reviewByKey.get(key)?.correctText || "").trim())
+      .filter(Boolean),
+    explanationLines,
   };
 }
 
-function buildExerciseAnswerLines(exercise) {
+function buildCorrectAnswerLines(exercise) {
   const type = String(exercise?.type || "").trim().toLowerCase();
   const content = normalizeObject(exercise?.content_json);
 
@@ -235,6 +276,71 @@ function buildExerciseAnswerLines(exercise) {
   }
 
   return [];
+}
+
+function buildExerciseExplanationLines(exercise, clozeBreakdown = null) {
+  const content = normalizeObject(exercise?.content_json);
+  const baseText = String(content.explanation || "").trim();
+  const baseLines = baseText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*]\s+/, ""));
+  if (baseLines.length) {
+    return baseLines;
+  }
+  const clozeLines = normalizeArray(clozeBreakdown?.explanationLines)
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+  return clozeLines;
+}
+
+function buildUserResponseRows(exercise, answerSnapshot, fallbackIsCorrect = false) {
+  const snapshot = normalizeObject(answerSnapshot);
+  const type = String(exercise?.type || "").trim().toLowerCase();
+
+  if (type === "scramble" && snapshot.type === "scramble") {
+    const selectedWords = normalizeArray(snapshot.selectedWords).map((word) => String(word || "").trim()).filter(Boolean);
+    return [{
+      label: "Respuesta",
+      value: selectedWords.length ? selectedWords.join(" ") : "[no answer]",
+      isCorrect: Boolean(snapshot.isCorrect),
+    }];
+  }
+
+  if (type === "pairs" && snapshot.type === "pairs") {
+    const pairRows = normalizeArray(snapshot.pairs);
+    if (!pairRows.length) {
+      return [{ label: "Respuesta", value: "[no answer]", isCorrect: false }];
+    }
+    return pairRows.map((row, index) => ({
+      label: `Par ${index + 1}`,
+      value: row?.selectedRight ? `${row.left} = ${row.selectedRight}` : `${row.left} = [no answer]`,
+      isCorrect: Boolean(row?.isCorrect),
+    }));
+  }
+
+  if (type === "image_match" && snapshot.type === "image_match") {
+    return [{
+      label: "Respuesta",
+      value: String(snapshot.selectedText || "").trim() || "[no answer]",
+      isCorrect: Boolean(snapshot.isCorrect),
+    }];
+  }
+
+  if ((type === "audio_match" || type === "reading_exercise") && snapshot.type === "question_set") {
+    const questions = normalizeArray(snapshot.questions);
+    if (!questions.length) {
+      return [{ label: "Respuesta", value: "[no answer]", isCorrect: false }];
+    }
+    return questions.map((question, index) => ({
+      label: `${index + 1}. ${String(question?.prompt || "").trim()}`,
+      value: String(question?.selectedText || "").trim() || "[no answer]",
+      isCorrect: Boolean(question?.isCorrect),
+    }));
+  }
+
+  return [{ label: "Respuesta", value: "[no answer]", isCorrect: Boolean(fallbackIsCorrect) }];
 }
 
 function computeExerciseWeight(totalExercises, exerciseIndex) {
@@ -438,7 +544,6 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
   const remainingAttempts = Math.max(0, LESSON_QUIZ_MAX_TOTAL_ATTEMPTS - attemptsUsed);
   const remainingRestarts = Math.max(0, LESSON_QUIZ_MAX_RESTARTS - repeatCount);
   const canRepeat = remainingRestarts > 0;
-  const revealCorrectAnswers = !canRepeat;
   const repeatLimitWarning = searchParams?.repeat_limit === "1";
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-4 py-8 text-foreground sm:px-6 sm:py-10">
@@ -532,16 +637,13 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
         <section className="rounded-3xl border border-border bg-surface p-4 sm:p-5">
           <h3 className="text-sm font-semibold uppercase tracking-[0.22em] text-muted">Detalle de ejercicios</h3>
           <p className="mt-1 text-sm text-muted">
-            {revealCorrectAnswers
-              ? "Revisa cada ejercicio con su resultado y la respuesta correcta para detectar rapido en que fallaste."
-              : "Si acertaste un ejercicio, su respuesta ya se muestra. En Fill in the blanks se ven solo los blanks correctos y los incorrectos quedan vacios hasta agotar intentos."}
+            Revisa lo que respondiste, identifica en que fallaste y compara con las respuestas correctas.
           </p>
           <div className="mt-4 space-y-3">
             {published.map((exercise, idx) => {
               const progress = progressByExercise.get(String(exercise.id || "").trim()) || null;
               const hasResult = progress != null;
               const weight = computeExerciseWeightFromPoints(totalExercises, idx, exercisePointValues);
-              const wrongAttempts = hasResult ? Math.max(0, toInt(progress.wrong_attempts, toInt(progress.attempts, 1) - 1)) : null;
               const finalStatus = hasResult
                 ? String(progress.final_status || (progress.is_correct ? "passed" : "failed")).toLowerCase()
                 : null;
@@ -557,14 +659,16 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
               const isPassed = finalStatus === "passed";
               const exerciseType = String(exercise?.type || "").trim().toLowerCase();
               const clozeReview = exerciseType === "cloze"
-                ? buildClozeReviewLayout(exercise, progress?.answer_snapshot, revealCorrectAnswers || isPassed)
+                ? buildClozeBreakdownData(exercise, progress?.answer_snapshot)
                 : null;
-              const showStandardAnswer = hasResult && (isPassed || revealCorrectAnswers);
-              const showClozePartial = hasResult && !showStandardAnswer && Boolean(clozeReview?.hasPerBlankReview);
-              const answerLines = buildExerciseAnswerLines(exercise);
+              const answerLines = exerciseType === "cloze"
+                ? normalizeArray(clozeReview?.correctAnswers)
+                : buildCorrectAnswerLines(exercise);
+              const explanationLines = buildExerciseExplanationLines(exercise, clozeReview);
+              const userResponseRows = exerciseType === "cloze"
+                ? []
+                : buildUserResponseRows(exercise, progress?.answer_snapshot, isPassed);
               const typeLabel = normalizeExerciseTypeLabel(exercise.type);
-              const rawTitle = String(exercise.prompt || "").trim() || typeLabel;
-              const title = exerciseType === "cloze" ? toClozeDisplayText(rawTitle) : rawTitle;
 
               return (
                 <article
@@ -587,131 +691,104 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                           {typeLabel}
                         </span>
                       </div>
-                      <div>
-                        <p className="text-base font-semibold text-foreground sm:text-lg">{title}</p>
-                        {!hasResult ? (
-                          <p className="mt-1 text-sm text-muted">No se encontro data de este ejercicio.</p>
-                        ) : isPassed ? (
-                          <p className="mt-1 text-sm text-success">Lo resolviste correctamente.</p>
-                        ) : showClozePartial ? (
-                          <p className="mt-1 text-sm text-muted">
-                            Se muestran los blanks que resolviste bien. Los incorrectos quedan vacios por ahora.
-                          </p>
-                        ) : revealCorrectAnswers ? (
-                          <p className="mt-1 text-sm text-danger">Aqui estuvo tu error. Revisa la respuesta correcta abajo.</p>
-                        ) : (
-                          <p className="mt-1 text-sm text-muted">Aun tienes intentos disponibles. La respuesta correcta seguira oculta por ahora.</p>
-                        )}
-                      </div>
+                      <p className="text-sm text-muted">
+                        {hasResult ? "Tu respuesta se muestra tal cual la enviaste." : "No se encontro respuesta guardada para este ejercicio."}
+                      </p>
                     </div>
 
-                    {hasResult ? (
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                          isPassed
-                            ? "bg-success/20 text-success"
-                            : "bg-danger/20 text-danger"
-                        }`}
-                      >
-                        {isPassed ? "Correcto" : "Necesita repaso"}
+                    <div className="flex flex-col items-end gap-2">
+                      <span className="rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold text-muted">
+                        {awarded != null ? `${awarded}/${weight}` : `0/${weight}`}
                       </span>
-                    ) : (
-                      <span className="rounded-full bg-surface px-3 py-1 text-xs font-semibold text-muted">
-                        Sin data
-                      </span>
-                    )}
+                      {hasResult ? (
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            isPassed
+                              ? "bg-success/20 text-success"
+                              : "bg-danger/20 text-danger"
+                          }`}
+                        >
+                          {isPassed ? "Correcto" : "Incorrecto"}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-surface px-3 py-1 text-xs font-semibold text-muted">
+                          Sin data
+                        </span>
+                      )}
+                    </div>
                   </div>
 
-                  {hasResult ? (
-                    <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                      <div className="rounded-xl border border-border bg-surface px-3 py-2">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Puntaje</p>
-                        <p className="mt-1 text-sm font-semibold text-foreground">
-                          {awarded != null ? `${awarded}/${weight}` : `0/${weight}`}
-                        </p>
-                      </div>
-                      <div className="rounded-xl border border-border bg-surface px-3 py-2">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Intentos</p>
-                        <p className="mt-1 text-sm font-semibold text-foreground">
-                          {Math.max(1, toInt(progress.attempts, 1))}
-                        </p>
-                      </div>
-                      <div className="rounded-xl border border-border bg-surface px-3 py-2">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Errores</p>
-                        <p className="mt-1 text-sm font-semibold text-foreground">
-                          {wrongAttempts != null ? wrongAttempts : 0}
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="mt-4 rounded-2xl border border-border bg-surface px-3 py-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      {showStandardAnswer
-                        ? "Respuesta correcta"
-                        : showClozePartial
-                        ? "Detalle de blanks"
-                        : "Respuesta bloqueada"}
-                    </p>
-                    {showStandardAnswer ? (
-                      clozeReview ? (
-                        <div className="mt-2 rounded-2xl border border-border bg-surface-2 px-3 py-3 text-sm font-semibold text-foreground whitespace-pre-wrap leading-8">
-                          {clozeReview.segments.map((segment, segmentIndex) => {
-                            if (segment.kind !== "blank") {
-                              return <span key={`${exercise.id}-segment-text-${segmentIndex}`}>{segment.value}</span>;
-                            }
-                            const value = clozeReview.displayByKey.get(String(segment.key || "").toLowerCase()) || "";
-                            return (
-                              <span
-                                key={`${exercise.id}-segment-blank-${segmentIndex}`}
-                                className={`mx-1 my-1 inline-flex min-h-10 min-w-24 items-center justify-center rounded-xl border px-3 py-2 align-middle ${
-                                  value
-                                    ? "border-success/35 bg-success/10"
-                                    : "border-dashed border-border bg-surface"
-                                }`}
-                              >
-                                {value ? value : <span className="inline-flex h-4 w-10 rounded border border-border bg-white/90" aria-hidden="true" />}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      ) : answerLines.length ? (
-                        <div className="mt-2 space-y-1.5">
-                          {answerLines.map((line, lineIndex) => (
-                            <p key={`${exercise.id}-answer-${lineIndex}`} className="text-sm text-foreground">
-                              {line}
-                            </p>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="mt-2 text-sm text-muted">No hay respuesta visible para este ejercicio.</p>
-                      )
-                    ) : showClozePartial ? (
-                      <div className="mt-2 rounded-2xl border border-border bg-surface-2 px-3 py-3 text-sm font-semibold text-foreground whitespace-pre-wrap leading-8">
+                  <div className="mt-4 space-y-2">
+                    {exerciseType === "cloze" && clozeReview ? (
+                      <div className="text-base font-semibold text-foreground whitespace-pre-wrap leading-8 sm:text-lg">
                         {clozeReview.segments.map((segment, segmentIndex) => {
                           if (segment.kind !== "blank") {
                             return <span key={`${exercise.id}-segment-text-${segmentIndex}`}>{segment.value}</span>;
                           }
-                          const value = clozeReview.displayByKey.get(String(segment.key || "").toLowerCase()) || "";
+                          const key = String(segment.key || "").toLowerCase();
+                          const row = clozeReview.reviewByKey.get(key) || {
+                            selectedOrFallback: "[no answer]",
+                            isCorrect: false,
+                          };
                           return (
-                            <span
-                              key={`${exercise.id}-segment-blank-${segmentIndex}`}
-                              className={`mx-1 my-1 inline-flex min-h-10 min-w-24 items-center justify-center rounded-xl border px-3 py-2 align-middle ${
-                                value
-                                  ? "border-success/35 bg-success/10"
-                                  : "border-dashed border-border bg-surface"
-                              }`}
-                            >
-                              {value ? value : <span className="inline-flex h-4 w-10 rounded border border-border bg-white/90" aria-hidden="true" />}
+                            <span key={`${exercise.id}-segment-blank-${segmentIndex}`} className="mx-1 my-1 inline-flex items-center gap-1 align-middle">
+                              <span
+                                className={`inline-flex min-h-9 min-w-24 items-center justify-center border px-2 py-1 text-xs font-semibold ${
+                                  row.isCorrect
+                                    ? "border-success/45 bg-success/10 text-success"
+                                    : "border-danger/45 bg-danger/10 text-danger"
+                                }`}
+                              >
+                                {row.selectedOrFallback}
+                              </span>
+                              <span
+                                className={`inline-flex h-5 w-5 items-center justify-center text-sm font-bold ${
+                                  row.isCorrect ? "text-success" : "text-danger"
+                                }`}
+                                aria-label={row.isCorrect ? "Correcto" : "Incorrecto"}
+                                title={row.isCorrect ? "Correcto" : "Incorrecto"}
+                              >
+                                {row.isCorrect ? "✓" : "✕"}
+                              </span>
                             </span>
                           );
                         })}
                       </div>
                     ) : (
-                      <p className="mt-2 text-sm text-muted">
-                        Completa todos tus intentos del test para desbloquear las respuestas correctas.
-                      </p>
+                      <div className="space-y-1.5">
+                        {userResponseRows.map((row, rowIndex) => (
+                          <p key={`${exercise.id}-user-row-${rowIndex}`} className="flex flex-wrap items-center gap-2 text-base text-foreground sm:text-lg">
+                            <span className="font-semibold text-muted">{row.label}:</span>
+                            <span>{row.value || "[no answer]"}</span>
+                            <span
+                              className={`inline-flex h-5 w-5 items-center justify-center text-sm font-bold ${
+                                row.isCorrect ? "text-success" : "text-danger"
+                              }`}
+                              aria-label={row.isCorrect ? "Correcto" : "Incorrecto"}
+                              title={row.isCorrect ? "Correcto" : "Incorrecto"}
+                            >
+                              {row.isCorrect ? "✓" : "✕"}
+                            </span>
+                          </p>
+                        ))}
+                      </div>
                     )}
+                  </div>
+
+                  <div className="mt-4 rounded-none border border-border bg-surface px-3 py-3">
+                    <p className="text-xs font-semibold text-muted">
+                      <span className="uppercase tracking-wide">Correct answer(s): </span>
+                      <span className="text-foreground">{answerLines.length ? answerLines.join(" / ") : "-"}</span>
+                    </p>
+                    {explanationLines.length ? (
+                      <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground">
+                        {explanationLines.map((line, lineIndex) => (
+                          <li key={`${exercise.id}-explanation-${lineIndex}`}>
+                            {renderRichMarkdownFragments(line, `${exercise.id}-explanation-${lineIndex}`)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 </article>
               );

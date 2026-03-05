@@ -8,6 +8,32 @@ import LessonQuizPlayer from "./lesson-quiz-player";
 const MAX_BACKGROUND_SAVE_RETRIES = 3;
 const BACKGROUND_SAVE_RETRY_DELAYS_MS = [1000, 2200, 4500];
 
+function round2(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.round((parsed + Number.EPSILON) * 100) / 100;
+}
+
+function computeDisplayExerciseScore(totalExercises, globalIndex, pointValues = []) {
+  const total = Math.max(1, Number(totalExercises) || 1);
+  const index = Math.max(0, Number(globalIndex) || 0);
+  const points = Array.isArray(pointValues)
+    ? pointValues.slice(0, total).map((value) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    })
+    : [];
+  const hasCustom = points.length === total && points.some((value) => value > 0);
+  if (!hasCustom) {
+    const base = round2(100 / total);
+    if (index < total - 1) return base;
+    return round2(100 - (base * (total - 1)));
+  }
+  const sum = points.reduce((acc, value) => acc + value, 0);
+  if (!Number.isFinite(sum) || sum <= 0) return 0;
+  return round2((points[index] / sum) * 100);
+}
+
 function getQueueStorageKey(lessonId) {
   return `lesson-quiz-save-queue:${String(lessonId || "").trim()}`;
 }
@@ -62,6 +88,8 @@ export default function LessonQuizPagePlayer({
 }) {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isReviewMode, setIsReviewMode] = useState(false);
+  const [reviewedResults, setReviewedResults] = useState([]);
   const playerRefs = useRef([]);
   const isFlushingQueueRef = useRef(false);
   const flushTimeoutRef = useRef(0);
@@ -151,21 +179,42 @@ export default function LessonQuizPagePlayer({
     };
   }, [flushQueuedSaves]);
 
+  useEffect(() => {
+    setIsSubmitting(false);
+    setIsReviewMode(false);
+    setReviewedResults([]);
+  }, [lessonId, pageStartIndex, pageEntries.length]);
+
   function handlePageSubmit(event) {
     event.preventDefault();
     if (isSubmitting) {
       return;
     }
 
-    const results = [];
-    for (let index = 0; index < pageEntries.length; index += 1) {
-      const api = playerRefs.current[index];
-      const result = api?.evaluateAndGetSubmission?.() || null;
-      if (!result?.exerciseId) {
+    const gatherPageResults = () => {
+      const results = [];
+      for (let index = 0; index < pageEntries.length; index += 1) {
+        const api = playerRefs.current[index];
+        const result = api?.evaluateAndGetSubmission?.() || null;
+        if (!result?.exerciseId) {
+          return [];
+        }
+        results.push(result);
+      }
+      return results;
+    };
+
+    if (!isReviewMode) {
+      const previewResults = gatherPageResults();
+      if (!previewResults.length) {
         return;
       }
-      results.push(result);
+      setReviewedResults(previewResults);
+      setIsReviewMode(true);
+      return;
     }
+
+    const results = reviewedResults.length ? reviewedResults : gatherPageResults();
 
     if (!results.length) {
       return;
@@ -208,19 +257,26 @@ export default function LessonQuizPagePlayer({
           className={entryIndex < pageEntries.length - 1 ? "border-b border-border/70 pb-4 sm:pb-5" : "pb-1"}
         >
           <div className="space-y-1.5">
-            {entry.showSkillHeader ? (
-              <h2 className="text-3xl font-semibold tracking-tight text-foreground">
-                {entry.skillLabel}
-              </h2>
-            ) : null}
-            {entry.showTypeHeader ? (
-              <p className="text-lg font-bold uppercase tracking-[0.16em] text-foreground pb-4">
-                {entry.typeLabel}
-              </p>
-            ) : null}
-            <p className="text-base font-semibold text-muted sm:text-lg">
-              {entry.skillNumber}.
-            </p>
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1.5">
+                {entry.showSkillHeader ? (
+                  <h2 className="text-3xl font-semibold tracking-tight text-foreground">
+                    {entry.skillLabel}
+                  </h2>
+                ) : null}
+                {entry.showTypeHeader ? (
+                  <p className="pb-4 text-lg font-bold uppercase tracking-[0.16em] text-foreground">
+                    {entry.typeLabel}
+                  </p>
+                ) : null}
+                <p className="text-base font-semibold text-muted sm:text-lg">
+                  {entry.skillNumber}.
+                </p>
+              </div>
+              <span className="mt-1 rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold text-muted">
+                {computeDisplayExerciseScore(totalExercises, entry.globalIndex, exercisePointValues)}/100
+              </span>
+            </div>
           </div>
 
           <div className="mt-2">
@@ -244,9 +300,8 @@ export default function LessonQuizPagePlayer({
           disabled={isSubmitting}
           className="inline-flex w-full items-center justify-center rounded-2xl bg-primary px-5 py-3.5 text-lg font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"
         >
-          {isSubmitting ? "Continuando..." : "Continuar"}
+          {isSubmitting ? "Continuando..." : isReviewMode ? "Continuar" : "Revisar respuestas"}
         </button>
-        <p className="mt-2 text-center text-xs font-medium text-muted">Guardado automatico en segundo plano.</p>
       </form>
     </div>
   );

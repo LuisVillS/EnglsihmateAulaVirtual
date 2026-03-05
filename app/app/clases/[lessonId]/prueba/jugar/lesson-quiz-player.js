@@ -146,6 +146,102 @@ function buildClozeAnswerSnapshot(data = {}, selections = {}) {
   };
 }
 
+function buildScrambleAnswerSnapshot(data = {}, selectedWords = []) {
+  const correctWords = normalizeArray(data.answerWords).map((word) => String(word || "").trim()).filter(Boolean);
+  const candidateWords = normalizeArray(selectedWords).map((word) => String(word || "").trim()).filter(Boolean);
+  return {
+    type: "scramble",
+    prompt: String(data.prompt || "").trim(),
+    selectedWords: candidateWords,
+    correctWords,
+    isCorrect: correctWords.length > 0 && candidateWords.length === correctWords.length && isArrayEqual(candidateWords, correctWords),
+  };
+}
+
+function buildPairsAnswerSnapshot(pairRows = [], pairAssignments = {}) {
+  const rows = normalizeArray(pairRows);
+  return {
+    type: "pairs",
+    pairs: rows.map((pair) => {
+      const pairId = String(pair?.id || "").trim();
+      const selectedId = String(pairAssignments?.[pairId] || "").trim();
+      const selected = rows.find((current) => String(current?.id || "").trim() === selectedId) || null;
+      return {
+        id: pairId,
+        left: String(pair?.left || "").trim(),
+        selectedRight: String(selected?.right || "").trim(),
+        correctRight: String(pair?.right || "").trim(),
+        isCorrect: Boolean(pairId && selectedId && pairId === selectedId),
+      };
+    }),
+  };
+}
+
+function buildImageMatchAnswerSnapshot(data = {}, selectedIndex = null) {
+  const options = normalizeArray(data.options);
+  const safeSelectedIndex = Number.isFinite(selectedIndex) ? Number(selectedIndex) : -1;
+  const selectedOption = safeSelectedIndex >= 0 ? options[safeSelectedIndex] : null;
+  const correctIndex = Number.isFinite(Number(data.correctIndex)) ? Number(data.correctIndex) : -1;
+  const correctOption = correctIndex >= 0 ? options[correctIndex] : null;
+  return {
+    type: "image_match",
+    selectedIndex: safeSelectedIndex >= 0 ? safeSelectedIndex : null,
+    selectedText: String(selectedOption?.label || "").trim(),
+    correctIndex: correctIndex >= 0 ? correctIndex : null,
+    correctText: String(correctOption?.label || "").trim(),
+    isCorrect: safeSelectedIndex >= 0 && safeSelectedIndex === correctIndex,
+  };
+}
+
+function buildQuestionSetAnswerSnapshot(questions = [], answersById = {}, summary = null) {
+  const safeQuestions = normalizeArray(questions);
+  const safeAnswers = answersById && typeof answersById === "object" ? answersById : {};
+  const summaryById = new Map(
+    normalizeArray(summary?.results).map((entry) => [
+      String(entry?.id || "").trim(),
+      entry,
+    ])
+  );
+
+  return {
+    type: "question_set",
+    questions: safeQuestions.map((question, index) => {
+      const questionId = String(question?.id || `q_${index + 1}`).trim();
+      const answerState = safeAnswers[questionId] || {};
+      const questionType = String(question?.type || "").trim().toLowerCase();
+      let selectedText = "";
+      let correctText = "";
+
+      if (questionType === LISTENING_QUESTION_TYPES.WRITTEN) {
+        selectedText = String(answerState?.text || "").trim();
+        correctText = normalizeArray(question?.accepted_answers)
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
+          .join(" / ");
+      } else if (questionType === LISTENING_QUESTION_TYPES.TRUE_FALSE) {
+        selectedText = answerState?.value == null ? "" : (answerState.value ? "True" : "False");
+        correctText = question?.correct_boolean ? "True" : "False";
+      } else {
+        const options = normalizeArray(question?.options).map((item) => String(item || "").trim());
+        const selectedIndex = Number(answerState?.selected_index);
+        const correctIndex = Number(question?.correct_index);
+        selectedText = Number.isFinite(selectedIndex) && selectedIndex >= 0 ? (options[selectedIndex] || "") : "";
+        correctText = Number.isFinite(correctIndex) && correctIndex >= 0 ? (options[correctIndex] || "") : "";
+      }
+
+      const summaryItem = summaryById.get(questionId) || null;
+      return {
+        id: questionId,
+        prompt: String(question?.prompt || `Pregunta ${index + 1}`).trim(),
+        selectedText,
+        correctText,
+        answered: Boolean(summaryItem?.answered),
+        isCorrect: Boolean(summaryItem?.isCorrect),
+      };
+    }),
+  };
+}
+
 function resolveExerciseData(exercise) {
   const content = exercise?.content_json || {};
   const type = String(exercise?.type || "").trim();
@@ -999,26 +1095,30 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
 
     if (type === "scramble") {
       const answerWords = normalizeArray(data.answerWords);
+      const candidate = selectedScrambleIds.map((id) => scrambleChipMap.get(id)).filter(Boolean);
+      const scrambleSnapshot = buildScrambleAnswerSnapshot(data, candidate);
+      setResultSnapshot(scrambleSnapshot);
       if (!answerWords.length || selectedScrambleIds.length !== answerWords.length) {
         if (allowIncomplete) {
-          return buildAutoFailedSubmission();
+          return buildAutoFailedSubmission(scrambleSnapshot);
         }
         showIncompleteResponse();
         return null;
       }
-      const candidate = selectedScrambleIds.map((id) => scrambleChipMap.get(id)).filter(Boolean);
       if (isArrayEqual(candidate, answerWords)) {
-        return markPassed();
+        return markPassed(null, scrambleSnapshot);
       }
-      return markFailed();
+      return markFailed({}, scrambleSnapshot);
     }
 
     if (type === "pairs") {
       const requiredIds = pairRows.map((pair) => pair.id);
       const hasAllPairs = requiredIds.every((pairId) => pairAssignments[pairId]);
+      const pairsSnapshot = buildPairsAnswerSnapshot(pairRows, pairAssignments);
+      setResultSnapshot(pairsSnapshot);
       if (!requiredIds.length || !hasAllPairs) {
         if (allowIncomplete) {
-          return buildAutoFailedSubmission();
+          return buildAutoFailedSubmission(pairsSnapshot);
         }
         showIncompleteResponse();
         return null;
@@ -1029,31 +1129,35 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
         totalItems: requiredIds.length,
       };
       if (correctCount === requiredIds.length) {
-        return markPassed(itemStats);
+        return markPassed(itemStats, pairsSnapshot);
       }
       return markFailed({
         itemStats,
-      });
+      }, pairsSnapshot);
     }
 
     if (type === "image_match") {
+      const imageSnapshot = buildImageMatchAnswerSnapshot(data, selectedImageIndex);
+      setResultSnapshot(imageSnapshot);
       if (selectedImageIndex == null) {
         if (allowIncomplete) {
-          return buildAutoFailedSubmission();
+          return buildAutoFailedSubmission(imageSnapshot);
         }
         showIncompleteResponse();
         return null;
       }
       if (selectedImageIndex === data.correctIndex) {
-        return markPassed();
+        return markPassed(null, imageSnapshot);
       }
-      return markFailed();
+      return markFailed({}, imageSnapshot);
     }
 
     const summary = summarizeListeningQuestionResults(normalizeArray(data.questions), listeningAnswers);
+    const questionSetSnapshot = buildQuestionSetAnswerSnapshot(normalizeArray(data.questions), listeningAnswers, summary);
+    setResultSnapshot(questionSetSnapshot);
     if (!summary.total || !summary.complete) {
       if (allowIncomplete) {
-        return buildAutoFailedSubmission();
+        return buildAutoFailedSubmission(questionSetSnapshot);
       }
       showIncompleteResponse();
       return null;
@@ -1063,11 +1167,11 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
       totalItems: summary.total,
     };
     if (summary.correctCount === summary.total) {
-      return markPassed(itemStats);
+      return markPassed(itemStats, questionSetSnapshot);
     }
     return markFailed({
       itemStats,
-    });
+    }, questionSetSnapshot);
   }
 
   function handleContinueSubmit(event) {
