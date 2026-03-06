@@ -3,14 +3,17 @@
 import { useActionState, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveCourseSessionExerciseBatch, saveTemplateSessionExerciseBatch } from "@/app/admin/actions";
+import SimpleWysiwygEditor from "@/components/simple-wysiwyg-editor";
 import {
   buildListeningQuestionsFromContent,
   createDefaultListeningQuestion,
   getListeningMaxPlays,
   isYouTubeUrl,
   LISTENING_QUESTION_TYPES,
+  LISTENING_WRITTEN_ANSWER_MODES,
   normalizeListeningQuestion,
   normalizeListeningQuestionType,
+  normalizeListeningWrittenAnswerMode,
 } from "@/lib/listening-exercise";
 import {
   normalizeBlankKey as normalizeClozeBlankKey,
@@ -141,65 +144,8 @@ export function InlineRichTextarea({
     onChange?.(nextValue);
   }
 
-  function wrapSelection(prefix, suffix = prefix) {
-    const node = editorRef.current;
-    if (!node || disabled) return;
-    const text = String(node.value || "");
-    const start = Number(node.selectionStart || 0);
-    const end = Number(node.selectionEnd || 0);
-    const selected = text.slice(start, end);
-    const wrapped = `${prefix}${selected}${suffix}`;
-    const nextText = `${text.slice(0, start)}${wrapped}${text.slice(end)}`;
-    updateValue(nextText);
-    window.requestAnimationFrame(() => {
-      node.focus();
-      const cursorStart = start + prefix.length;
-      const cursorEnd = cursorStart + selected.length;
-      node.setSelectionRange(cursorStart, cursorEnd);
-    });
-  }
-
   return (
     <div className={`overflow-hidden rounded-lg border border-border/90 bg-surface ${disabled ? "opacity-70" : ""} ${className}`}>
-      <div className="flex flex-wrap items-center gap-1 border-b border-border/80 bg-[#f3f4f6] px-2 py-1 dark:bg-surface-2">
-        <span className="px-1 text-xs text-muted" aria-hidden="true">↶</span>
-        <span className="px-1 text-xs text-muted" aria-hidden="true">↷</span>
-        <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
-        <button
-          type="button"
-          disabled={disabled}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => wrapSelection("**")}
-          className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-transparent px-1 text-xs font-bold text-foreground transition hover:border-border hover:bg-surface disabled:cursor-not-allowed"
-          title="Negrita (Ctrl+B)"
-        >
-          B
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => wrapSelection("*")}
-          className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-transparent px-1 text-xs italic text-foreground transition hover:border-border hover:bg-surface disabled:cursor-not-allowed"
-          title="Cursiva (Ctrl+I)"
-        >
-          I
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => wrapSelection("__")}
-          className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-transparent px-1 text-xs underline text-foreground transition hover:border-border hover:bg-surface disabled:cursor-not-allowed"
-          title="Subrayado (Ctrl+U)"
-        >
-          U
-        </button>
-        <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
-        <span className="px-1 text-xs text-muted" aria-hidden="true">≡</span>
-        <span className="px-1 text-xs text-muted" aria-hidden="true">☰</span>
-        <span className="px-1 text-xs text-muted" aria-hidden="true">☷</span>
-      </div>
       <textarea
         ref={editorRef}
         rows={rows}
@@ -208,25 +154,6 @@ export function InlineRichTextarea({
         placeholder={placeholder}
         onChange={(event) => updateValue(event.target.value)}
         onKeyDownCapture={onKeyDownCapture || undefined}
-        onKeyDown={(event) => {
-          if (event.ctrlKey || event.metaKey) {
-            const key = String(event.key || "").toLowerCase();
-            if (key === "b") {
-              event.preventDefault();
-              wrapSelection("**");
-              return;
-            }
-            if (key === "i") {
-              event.preventDefault();
-              wrapSelection("*");
-              return;
-            }
-            if (key === "u") {
-              event.preventDefault();
-              wrapSelection("__");
-            }
-          }
-        }}
         className="w-full resize-y border-0 bg-surface px-3 py-2 text-sm leading-relaxed text-foreground outline-none"
       />
     </div>
@@ -1017,6 +944,50 @@ export function GuidedEditor({ item, content, onPatch }) {
     const isAudioExercise = item.type === "audio_match";
     const questions = Array.isArray(content.questions) ? content.questions : [];
 
+    const buildWrittenAnswersPatch = (question, patchObject = {}) => {
+      const source = question && typeof question === "object" ? question : {};
+      const patch = patchObject && typeof patchObject === "object" ? patchObject : {};
+
+      const mode = normalizeListeningWrittenAnswerMode(
+        patch.written_answer_mode ?? patch.writtenAnswerMode ?? source.written_answer_mode ?? source.writtenAnswerMode
+      );
+      const exampleAnswer = String(
+        patch.example_answer ??
+        patch.exampleAnswer ??
+        source.example_answer ??
+        source.exampleAnswer ??
+        (Array.isArray(source.accepted_answers) ? source.accepted_answers[0] : "") ??
+        ""
+      );
+
+      const alternateRaw = Array.isArray(patch.alternate_answers)
+        ? patch.alternate_answers
+        : Array.isArray(patch.alternateAnswers)
+          ? patch.alternateAnswers
+          : Array.isArray(source.alternate_answers)
+            ? source.alternate_answers
+            : Array.isArray(source.alternateAnswers)
+              ? source.alternateAnswers
+              : (Array.isArray(source.accepted_answers) ? source.accepted_answers.slice(exampleAnswer ? 1 : 0) : []);
+
+      const alternateAnswers = alternateRaw.map((value) => String(value ?? ""));
+      const dedupe = new Set();
+      const acceptedAnswers = [exampleAnswer, ...alternateAnswers].filter((value) => {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) return false;
+        if (dedupe.has(trimmed)) return false;
+        dedupe.add(trimmed);
+        return true;
+      });
+
+      return {
+        written_answer_mode: mode,
+        example_answer: exampleAnswer,
+        alternate_answers: alternateAnswers,
+        accepted_answers: acceptedAnswers.length ? acceptedAnswers : [""],
+      };
+    };
+
     const updateQuestion = (questionIndex, patchObject) => {
       const next = questions.map((question, idx) => (
         idx === questionIndex
@@ -1058,11 +1029,11 @@ export function GuidedEditor({ item, content, onPatch }) {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-semibold uppercase tracking-wide text-muted">Instrucciones</label>
-                <input
+                <SimpleWysiwygEditor
                   value={content.prompt_native || ""}
-                  onChange={(event) => onPatch({ prompt_native: event.target.value })}
-                  className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                  onChange={(nextValue) => onPatch({ prompt_native: nextValue })}
                   placeholder="Listen to the audio and answer the questions."
+                  minHeightClass="min-h-[92px]"
                 />
               </div>
             </div>
@@ -1140,11 +1111,11 @@ export function GuidedEditor({ item, content, onPatch }) {
 
             <div className="space-y-1">
               <label className="text-xs font-semibold uppercase tracking-wide text-muted">Texto del reading</label>
-              <InlineRichTextarea
-                rows={8}
+              <SimpleWysiwygEditor
                 value={content.text || ""}
                 onChange={(nextValue) => onPatch({ text: nextValue })}
                 placeholder="Write the reading passage here."
+                minHeightClass="min-h-[200px]"
               />
             </div>
           </>
@@ -1187,6 +1158,10 @@ export function GuidedEditor({ item, content, onPatch }) {
                 allowBlankPrompt: true,
               });
               const questionType = normalizedQuestion.type;
+              const showPromptBlankInsert =
+                questionType === LISTENING_QUESTION_TYPES.WRITTEN &&
+                normalizeListeningWrittenAnswerMode(normalizedQuestion.written_answer_mode) ===
+                  LISTENING_WRITTEN_ANSWER_MODES.BLANK_INPUT;
               return (
                 <div
                   key={`${item.localId}-question-${normalizedQuestion.id}-${questionIndex}`}
@@ -1228,12 +1203,19 @@ export function GuidedEditor({ item, content, onPatch }) {
                       </div>
                       <div className="space-y-1">
                         <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">Prompt</label>
-                        <input
+                        <SimpleWysiwygEditor
                           value={normalizedQuestion.prompt || ""}
-                          onChange={(event) => updateQuestion(questionIndex, { prompt: event.target.value })}
-                          className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                          onChange={(nextValue) => updateQuestion(questionIndex, { prompt: nextValue })}
                           placeholder={isAudioExercise ? "What did the speaker say?" : "What does the text say?"}
+                          minHeightClass="min-h-[84px]"
+                          className="rounded-lg"
+                          quickInsertTokens={showPromptBlankInsert ? ["[Blank]"] : []}
                         />
+                        {showPromptBlankInsert ? (
+                          <p className="text-[11px] text-muted">
+                            Usa <code>[Blank]</code> para insertar el espacio en la frase (boton + [Blank] en la barra).
+                          </p>
+                        ) : null}
                       </div>
                     </div>
 
@@ -1281,23 +1263,80 @@ export function GuidedEditor({ item, content, onPatch }) {
                     ) : null}
 
                     {questionType === LISTENING_QUESTION_TYPES.WRITTEN ? (
-                      <div className="space-y-1">
-                        <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                          Respuestas validas (una por linea)
-                        </label>
-                        <InlineRichTextarea
-                          rows={3}
-                          value={(normalizedQuestion.accepted_answers || []).join("\n")}
-                          onChange={(nextValue) =>
-                            updateQuestion(questionIndex, {
-                              accepted_answers: nextValue
-                                .split(/\r?\n/)
-                                .map((value) => String(value ?? "")),
-                            })
-                          }
-                          className="rounded-lg"
-                          placeholder={"example answer\nalternate answer"}
-                        />
+                      <div className="space-y-3">
+                        <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                              Modo respuesta
+                            </label>
+                            <select
+                              value={normalizeListeningWrittenAnswerMode(normalizedQuestion.written_answer_mode)}
+                              onChange={(event) =>
+                                updateQuestion(
+                                  questionIndex,
+                                  buildWrittenAnswersPatch(normalizedQuestion, {
+                                    written_answer_mode: event.target.value,
+                                  })
+                                )
+                              }
+                              className="w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm text-foreground"
+                            >
+                              <option value={LISTENING_WRITTEN_ANSWER_MODES.PLAIN_INPUT}>Input normal</option>
+                              <option value={LISTENING_WRITTEN_ANSWER_MODES.BLANK_INPUT}>Input en blank</option>
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                              Example answer
+                            </label>
+                            <input
+                              value={String(
+                                normalizedQuestion.example_answer ??
+                                (Array.isArray(normalizedQuestion.accepted_answers)
+                                  ? normalizedQuestion.accepted_answers[0]
+                                  : "") ??
+                                ""
+                              )}
+                              onChange={(event) =>
+                                updateQuestion(
+                                  questionIndex,
+                                  buildWrittenAnswersPatch(normalizedQuestion, {
+                                    example_answer: event.target.value,
+                                  })
+                                )
+                              }
+                              className="w-full rounded-lg border border-border bg-surface-2 px-2 py-2 text-sm text-foreground"
+                              placeholder="is"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                            Alternate answers (una por linea)
+                          </label>
+                          <InlineRichTextarea
+                            rows={3}
+                            value={(
+                              Array.isArray(normalizedQuestion.alternate_answers)
+                                ? normalizedQuestion.alternate_answers
+                                : []
+                            ).join("\n")}
+                            onChange={(nextValue) =>
+                              updateQuestion(
+                                questionIndex,
+                                buildWrittenAnswersPatch(normalizedQuestion, {
+                                  alternate_answers: nextValue
+                                    .split(/\r?\n/)
+                                    .map((value) => String(value ?? "")),
+                                })
+                              )
+                            }
+                            className="rounded-lg"
+                            placeholder={"'s\nare"}
+                          />
+                        </div>
                       </div>
                     ) : null}
 
@@ -1314,6 +1353,19 @@ export function GuidedEditor({ item, content, onPatch }) {
                         </select>
                       </div>
                     ) : null}
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                        Explicacion de correccion (por pregunta)
+                      </label>
+                      <SimpleWysiwygEditor
+                        value={normalizedQuestion.explanation || ""}
+                        onChange={(nextValue) => updateQuestion(questionIndex, { explanation: nextValue })}
+                        placeholder="Explica por que esta respuesta es correcta."
+                        minHeightClass="min-h-[100px]"
+                        className="rounded-lg"
+                      />
+                    </div>
                   </div>
                 </div>
               );

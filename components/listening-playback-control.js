@@ -89,6 +89,7 @@ const LISTENING_RING_TRACK = "rgba(59,130,246,0.22)";
 export default function ListeningPlaybackControl({
   youtubeUrl = "",
   audioUrl = "",
+  isActive = true,
   maxPlays = 1,
   startTime = 0,
   endTime = null,
@@ -269,6 +270,32 @@ export default function ListeningPlaybackControl({
       canPlay: hasSource && !isPlaying && playsUsed < normalizedMaxPlays,
     });
   }, [hasSource, isPlaying, normalizedMaxPlays, onStatusChange, playsUsed]);
+
+  useEffect(() => {
+    if (isActive) return;
+
+    if (progressTimerRef.current) {
+      window.clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+    if (stopTimerRef.current) {
+      window.clearInterval(stopTimerRef.current);
+      stopTimerRef.current = null;
+    }
+
+    const audioNode = audioRef.current;
+    if (audioNode) {
+      audioNode.pause();
+    }
+
+    const youtubePlayer = youtubePlayerRef.current;
+    if (youtubePlayer) {
+      youtubePlayer.pauseVideo?.();
+      youtubePlayer.stopVideo?.();
+    }
+
+    setIsPlaying(false);
+  }, [isActive]);
 
   async function handlePlay() {
     if (!hasSource || isPlaying || playsUsed >= normalizedMaxPlays) return;

@@ -269,6 +269,12 @@ export async function submitLessonQuizStep(formData) {
   if (!lessonId) return;
   const responseMode = getText(formData, "responseMode").toLowerCase();
   const isBackgroundMode = responseMode === "background" || responseMode === "json";
+  const finalizeAttemptRaw = getText(formData, "finalizeAttempt").toLowerCase();
+  const shouldFinalizeAttempt =
+    finalizeAttemptRaw === "1" ||
+    finalizeAttemptRaw === "true" ||
+    finalizeAttemptRaw === "yes" ||
+    finalizeAttemptRaw === "on";
   const requestKey = getText(formData, "requestKey");
 
   const submittedPageIndex = Math.max(0, toInt(getText(formData, "currentIndex"), 0));
@@ -399,6 +405,40 @@ export async function submitLessonQuizStep(formData) {
   const current = normalizeAttemptRow(existingAttempt, totalExercises);
   const nowIso = new Date().toISOString();
   const startedAtIso = current.started_at || nowIso;
+
+  async function upsertLessonQuizAttempt(payload) {
+    let { error: upsertError } = await supabase
+      .from("lesson_quiz_attempts")
+      .upsert(payload, { onConflict: "user_id,lesson_id" });
+
+    if (
+      upsertError &&
+      (isMissingLessonQuizRestartColumnError(upsertError) || isMissingLessonQuizAttemptScoreColumnError(upsertError))
+    ) {
+      const fallbackPayload = { ...payload };
+      if (isMissingLessonQuizRestartColumnError(upsertError)) {
+        delete fallbackPayload.restart_count;
+      }
+      if (isMissingLessonQuizAttemptScoreColumnError(upsertError)) {
+        delete fallbackPayload.attempt_score_percent;
+      }
+      const { error: fallbackUpsertError } = await supabase
+        .from("lesson_quiz_attempts")
+        .upsert(fallbackPayload, { onConflict: "user_id,lesson_id" });
+      upsertError = fallbackUpsertError;
+    }
+
+    if (upsertError) {
+      if (isMissingLessonQuizTableError(upsertError)) {
+        if (isBackgroundMode) {
+          throw new Error(upsertError.message || "No se encontro la tabla de intentos.");
+        }
+        redirect(`/app/clases/${lessonId}/prueba?tracking=missing`);
+      }
+      throw new Error(upsertError.message || "No se pudo actualizar la prueba.");
+    }
+  }
+
   const safeSubmissionResults = submissions
     .map((entry, index) => ({
       ...entry,
@@ -417,9 +457,58 @@ export async function submitLessonQuizStep(formData) {
     : Math.max(0, Math.min(totalExercises - 1, Number.isFinite(submittedPageIndex) ? submittedPageIndex : current.current_index));
   const alreadyProcessed = current.completed_count > highestSubmittedIndex;
   if (alreadyProcessed) {
-    const alreadyCompleted =
-      current.attempt_status === LESSON_QUIZ_STATUS.COMPLETED ||
-      current.completed_count >= totalExercises;
+    const alreadyCompleted = current.attempt_status === LESSON_QUIZ_STATUS.COMPLETED;
+    const shouldFinalizeNow = !alreadyCompleted && shouldFinalizeAttempt && current.completed_count >= totalExercises;
+
+    if (shouldFinalizeNow) {
+      const finishedAttemptScore = clamp(round2(toNumber(current.attempt_score_percent, current.score_percent)), 0, 100);
+      const historicalBestScore = clamp(round2(toNumber(current.score_percent, 0)), 0, 100);
+      const finishedBestScore = legacyScoreMode
+        ? finishedAttemptScore
+        : Math.max(historicalBestScore, finishedAttemptScore);
+      const storedDurationSeconds = Math.max(0, toInt(current.duration_seconds, 0));
+      const finishedDurationSeconds = storedDurationSeconds > 0
+        ? storedDurationSeconds
+        : Math.max(
+            0,
+            Math.round(
+              (new Date(nowIso).getTime() - new Date(startedAtIso).getTime()) / 1000
+            )
+          );
+      const finalizePayload = {
+        user_id: userId,
+        lesson_id: lessonId,
+        attempt_status: LESSON_QUIZ_STATUS.COMPLETED,
+        current_index: Math.max(0, totalExercises - 1),
+        completed_count: totalExercises,
+        total_exercises: totalExercises,
+        correct_count: current.correct_count,
+        score_percent: finishedBestScore,
+        restart_count: toInt(current.restart_count, 0),
+        duration_seconds: finishedDurationSeconds,
+        started_at: startedAtIso,
+        completed_at: nowIso,
+        updated_at: nowIso,
+      };
+      if (!legacyScoreMode) {
+        finalizePayload.attempt_score_percent = finishedAttemptScore;
+      }
+      await upsertLessonQuizAttempt(finalizePayload);
+
+      revalidateLessonQuizPaths(lessonId);
+      if (isBackgroundMode) {
+        return {
+          ok: true,
+          deduped: true,
+          finalized: true,
+          requestKey: requestKey || null,
+          isCompleted: true,
+          nextIndex: Math.max(0, totalExercises - 1),
+        };
+      }
+      redirect(`/app/clases/${lessonId}/prueba/resultados`);
+    }
+
     revalidateLessonQuizPaths(lessonId);
     if (isBackgroundMode) {
       return {
@@ -441,9 +530,10 @@ export async function submitLessonQuizStep(formData) {
     0
   );
   const nextCorrect = current.correct_count + pageCorrectCount;
-  const isCompleted = nextCompleted >= totalExercises;
+  const reachedEndOfTest = nextCompleted >= totalExercises;
+  const isCompleted = shouldFinalizeAttempt && nextCompleted >= totalExercises;
   const nextStatus = isCompleted ? LESSON_QUIZ_STATUS.COMPLETED : LESSON_QUIZ_STATUS.IN_PROGRESS;
-  const nextIndex = isCompleted ? totalExercises - 1 : nextCompleted;
+  const nextIndex = nextCompleted >= totalExercises ? totalExercises - 1 : nextCompleted;
   const currentAttemptScore = clamp(round2(toNumber(current.attempt_score_percent, 0)), 0, 100);
   const pageScoreAwarded = safeSubmissionResults.reduce((sum, entry) => sum + entry.scoreAwarded, 0);
   const nextAttemptScore = clamp(round2(currentAttemptScore + pageScoreAwarded), 0, 100);
@@ -454,14 +544,16 @@ export async function submitLessonQuizStep(formData) {
     ? Math.max(historicalBestScore, nextAttemptScore)
     : historicalBestScore;
 
-  const durationSeconds = isCompleted
-    ? Math.max(
-        0,
-        Math.round(
-          (new Date(nowIso).getTime() - new Date(startedAtIso).getTime()) / 1000
-        )
-      )
-    : null;
+  const storedDurationSeconds = Math.max(0, toInt(current.duration_seconds, 0));
+  const computedDurationSeconds = Math.max(
+    0,
+    Math.round(
+      (new Date(nowIso).getTime() - new Date(startedAtIso).getTime()) / 1000
+    )
+  );
+  const durationSeconds = reachedEndOfTest
+    ? (storedDurationSeconds > 0 ? storedDurationSeconds : computedDurationSeconds)
+    : (storedDurationSeconds > 0 ? storedDurationSeconds : null);
 
   for (const entry of safeSubmissionResults) {
     const exerciseId = entry.exerciseId;
@@ -643,36 +735,7 @@ export async function submitLessonQuizStep(formData) {
     payload.attempt_score_percent = nextAttemptScore;
   }
 
-  let { error: upsertError } = await supabase
-    .from("lesson_quiz_attempts")
-    .upsert(payload, { onConflict: "user_id,lesson_id" });
-
-  if (
-    upsertError &&
-    (isMissingLessonQuizRestartColumnError(upsertError) || isMissingLessonQuizAttemptScoreColumnError(upsertError))
-  ) {
-    const fallbackPayload = { ...payload };
-    if (isMissingLessonQuizRestartColumnError(upsertError)) {
-      delete fallbackPayload.restart_count;
-    }
-    if (isMissingLessonQuizAttemptScoreColumnError(upsertError)) {
-      delete fallbackPayload.attempt_score_percent;
-    }
-    const { error: fallbackUpsertError } = await supabase
-      .from("lesson_quiz_attempts")
-      .upsert(fallbackPayload, { onConflict: "user_id,lesson_id" });
-    upsertError = fallbackUpsertError;
-  }
-
-  if (upsertError) {
-    if (isMissingLessonQuizTableError(upsertError)) {
-      if (isBackgroundMode) {
-        throw new Error(upsertError.message || "No se encontro la tabla de intentos.");
-      }
-      redirect(`/app/clases/${lessonId}/prueba?tracking=missing`);
-    }
-    throw new Error(upsertError.message || "No se pudo actualizar la prueba.");
-  }
+  await upsertLessonQuizAttempt(payload);
 
   revalidateLessonQuizPaths(lessonId);
   if (isBackgroundMode) {

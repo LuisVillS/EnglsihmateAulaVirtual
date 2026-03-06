@@ -251,22 +251,30 @@ export default async function LessonQuizPlayPage({ params: paramsPromise, search
   const requestedIndex = Number.isFinite(queryIndex) ? queryIndex : toInt(attempt.current_index, 0);
   const currentIndex = Math.max(0, Math.min(totalExercises - 1, requestedIndex));
   const quizPages = buildQuizPages(quizEntries);
+  const pageGroups = quizPages.map((entries, pageIndex) => {
+    const first = entries[0] || null;
+    const last = entries[entries.length - 1] || first || null;
+    return {
+      id: `page-group-${pageIndex}-${String(first?.skill || "skill")}-${String(first?.type || "type")}-${Number(first?.globalIndex || 0)}`,
+      pageIndex,
+      type: String(first?.type || "").trim().toLowerCase(),
+      skill: String(first?.skill || "").trim().toLowerCase(),
+      skillLabel: String(first?.skillLabel || "Skill"),
+      typeLabel: String(first?.typeLabel || "Exercise"),
+      startIndex: Math.max(0, Number(first?.globalIndex || 0)),
+      endIndex: Math.max(0, Number(last?.globalIndex || Number(first?.globalIndex || 0))),
+      entries: entries.map((entry, index) => (
+        index === 0 ? { ...entry, showTypeHeader: true } : entry
+      )),
+    };
+  });
   const currentPageIndex = Math.max(
     0,
     quizPages.findIndex((page) => page.some((entry) => entry.globalIndex === currentIndex))
   );
-  const pageEntriesRaw = quizPages[currentPageIndex] || [];
-  const currentPageEntries = pageEntriesRaw
-    .filter((entry) => entry.globalIndex >= currentIndex)
-    .map((entry, index) => (
-      index === 0
-        ? { ...entry, showTypeHeader: true }
-        : entry
-    ));
-  if (!currentPageEntries.length) {
+  if (!pageGroups.length) {
     redirect(`/app/clases/${lesson.id}/prueba`);
   }
-  const pageStartIndex = Number(currentPageEntries[0]?.globalIndex || 0);
   const progressPercent = getLessonQuizProgressPercent({
     status: LESSON_QUIZ_STATUS.IN_PROGRESS,
     completedCount: attempt.completed_count,
@@ -292,9 +300,7 @@ export default async function LessonQuizPlayPage({ params: paramsPromise, search
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1">
                 <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{testTitle}</h1>
-                <p className="text-base text-muted sm:text-lg">
-                  Pagina {currentPageIndex + 1} de {Math.max(1, quizPages.length)}
-                </p>
+                <p className="text-base text-muted sm:text-lg">Resuelve cada bloque y revisa antes de avanzar.</p>
               </div>
               {lesson.level ? (
                 <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-sm font-semibold text-muted sm:text-base">
@@ -320,8 +326,8 @@ export default async function LessonQuizPlayPage({ params: paramsPromise, search
           <LessonQuizPagePlayer
             lessonId={lesson.id}
             totalExercises={totalExercises}
-            pageStartIndex={pageStartIndex}
-            pageEntries={currentPageEntries}
+            pageGroups={pageGroups}
+            initialPageGroupIndex={currentPageIndex}
             exercisePointValues={exercisePointValues}
           />
           </div>

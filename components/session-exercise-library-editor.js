@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { startTransition, useActionState, useEffect, useMemo, useState } from "react";
+import { startTransition, useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppModal from "@/components/app-modal";
 import {
@@ -119,11 +119,29 @@ export default function SessionExerciseLibraryEditor({
   const [pickerSelection, setPickerSelection] = useState([]);
   const [pickerPreviewId, setPickerPreviewId] = useState("");
   const [busyKey, setBusyKey] = useState("");
+  const hydratedStateKeyRef = useRef("");
 
   useEffect(() => {
     setQuizTitle(String(initialQuizTitle || "Prueba de clase").trim() || "Prueba de clase");
     setAssignments(Array.isArray(initialAssignments) ? initialAssignments.map((row) => createAssignmentDraft(row)) : []);
   }, [initialAssignments, initialQuizTitle]);
+
+  useEffect(() => {
+    if (!state?.success) return;
+    const hydrationKey = `${String(state?.message || "").trim()}|${Number(state?.created || 0)}|${Number(state?.updated || 0)}|${
+      Array.isArray(state?.assignments) ? state.assignments.length : -1
+    }`;
+    if (hydratedStateKeyRef.current === hydrationKey) return;
+    hydratedStateKeyRef.current = hydrationKey;
+
+    if (Array.isArray(state.assignments)) {
+      setAssignments(state.assignments.map((row) => createAssignmentDraft(row)));
+    }
+    if (state.quizTitle) {
+      setQuizTitle(String(state.quizTitle || "").trim() || "Prueba de clase");
+    }
+    router.refresh();
+  }, [router, state]);
 
   const selectedExerciseIds = useMemo(
     () => new Set(assignments.map((assignment) => String(assignment.exerciseId || "").trim()).filter(Boolean)),
@@ -322,28 +340,33 @@ export default function SessionExerciseLibraryEditor({
     const selectedRows = (libraryExercises || []).filter((exercise) =>
       pickerSelection.includes(String(exercise.id || "").trim())
     );
-    const freshRows = selectedRows.filter(
-      (exercise) => !selectedExerciseIds.has(String(exercise.id || "").trim())
-    );
-
-    if (!freshRows.length) {
-      setClientNotice("Los ejercicios seleccionados ya estaban agregados.");
-      setPickerOpen(false);
-      return;
-    }
-
-    setAssignments((previous) => [
-      ...previous,
-      ...freshRows.map((exercise) =>
-        createAssignmentDraft({
-          ...exercise,
-          exerciseId: exercise.id,
-          points: 10,
+    let appendedCount = 0;
+    setAssignments((previous) => {
+      const previousIds = new Set(previous.map((assignment) => String(assignment.exerciseId || "").trim()).filter(Boolean));
+      const appendedRows = selectedRows
+        .filter((exercise) => {
+          const exerciseId = String(exercise?.id || "").trim();
+          if (!exerciseId || previousIds.has(exerciseId)) return false;
+          previousIds.add(exerciseId);
+          return true;
         })
-      ),
-    ]);
+        .map((exercise) =>
+          createAssignmentDraft({
+            ...exercise,
+            exerciseId: exercise.id,
+            points: 10,
+          })
+        );
+      appendedCount = appendedRows.length;
+      return [...previous, ...appendedRows];
+    });
+
     setClientError("");
-    setClientNotice(`${freshRows.length} ejercicio(s) agregados desde la biblioteca.`);
+    setClientNotice(
+      appendedCount > 0
+        ? `${appendedCount} ejercicio(s) agregados desde la biblioteca.`
+        : "Los ejercicios seleccionados ya estaban agregados."
+    );
     setPickerOpen(false);
   }
 
@@ -444,10 +467,7 @@ export default function SessionExerciseLibraryEditor({
       ) : null}
 
       <form
-        action={async (formData) => {
-          await formAction(formData);
-          router.refresh();
-        }}
+        action={formAction}
         className="space-y-6"
       >
         <input type="hidden" name="templateId" value={templateId} />
@@ -528,7 +548,7 @@ export default function SessionExerciseLibraryEditor({
 
             return (
               <section
-                key={assignment.localId}
+                key={`${assignment.exerciseId || "exercise"}-${assignment.localId}`}
                 className="rounded-3xl border border-border bg-surface p-5 shadow-sm"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">

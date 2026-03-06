@@ -824,9 +824,6 @@ export default function CourseSessionList({
                                         >
                                           <div>
                                             <p className="text-sm font-semibold text-foreground">{group.title || "Test de clase"}</p>
-                                            <p className="text-xs text-muted">
-                                              {group.count} ejercicio{group.count === 1 ? "" : "s"}
-                                            </p>
                                             {group.note ? <p className="text-xs text-muted">{group.note}</p> : null}
                                           </div>
 

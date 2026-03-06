@@ -171,7 +171,7 @@ async function loadAttemptRow(supabase, userId, lessonId) {
 
 function deriveState({ totalExercises, attemptStatus, completedCount }) {
   if (!totalExercises) return LESSON_QUIZ_STATUS.READY;
-  if (attemptStatus === LESSON_QUIZ_STATUS.COMPLETED || completedCount >= totalExercises) {
+  if (attemptStatus === LESSON_QUIZ_STATUS.COMPLETED) {
     return LESSON_QUIZ_STATUS.COMPLETED;
   }
   if (attemptStatus === LESSON_QUIZ_STATUS.IN_PROGRESS || completedCount > 0) {

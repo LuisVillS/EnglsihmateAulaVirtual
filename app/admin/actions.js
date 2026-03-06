@@ -659,6 +659,84 @@ function parseExerciseBatchRows(rawBatch) {
     .filter(Boolean);
 }
 
+function sortSavedExerciseAssignmentRows(rows = []) {
+  return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
+    const leftOrder = Number(left?.exercise_order || 0);
+    const rightOrder = Number(right?.exercise_order || 0);
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return String(left?.created_at || "").localeCompare(String(right?.created_at || ""));
+  });
+}
+
+async function loadSavedExerciseAssignments({
+  supabase,
+  tableName,
+  containerColumn,
+  containerId,
+}) {
+  try {
+    const { data: itemRows, error: itemsError } = await supabase
+      .from(tableName)
+      .select("id, exercise_id, exercise_points, exercise_order, created_at")
+      .eq(containerColumn, containerId)
+      .eq("type", "exercise");
+
+    if (itemsError) return [];
+
+    const orderedItems = sortSavedExerciseAssignmentRows(itemRows || []);
+    const exerciseIds = Array.from(
+      new Set(orderedItems.map((item) => String(item?.exercise_id || "").trim()).filter(Boolean))
+    );
+    if (!exerciseIds.length) return [];
+
+    const { data: exerciseRows, error: exercisesError } = await supabase
+      .from("exercises")
+      .select(`
+        id,
+        title,
+        prompt,
+        type,
+        status,
+        skill_tag,
+        cefr_level,
+        category_id,
+        content_json,
+        category:exercise_categories (
+          id,
+          name,
+          skill,
+          cefr_level
+        )
+      `)
+      .in("id", exerciseIds);
+
+    if (exercisesError) return [];
+
+    const exerciseById = new Map(
+      (exerciseRows || []).map((row) => {
+        const mapped = mapExerciseLibraryRow(row);
+        return [String(mapped.id || "").trim(), mapped];
+      })
+    );
+
+    return orderedItems
+      .map((item) => {
+        const exerciseId = String(item?.exercise_id || "").trim();
+        const exercise = exerciseById.get(exerciseId) || null;
+        if (!exercise?.id) return null;
+        return {
+          itemId: String(item?.id || "").trim(),
+          exerciseId: exercise.id,
+          points: normalizeExerciseItemPoints(item?.exercise_points, 10),
+          ...exercise,
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function archiveReleasedExercises({ supabase, actorId, exerciseIds = [] }) {
   const releasedIds = Array.from(
     new Set((exerciseIds || []).map((value) => String(value || "").trim()).filter(Boolean))
@@ -3824,6 +3902,12 @@ export async function saveTemplateSessionExerciseBatch(prevState, maybeFormData)
       containerId: templateSessionId,
       existingItems: existingItemsResult.data || [],
     });
+    const assignments = await loadSavedExerciseAssignments({
+      supabase,
+      tableName: "template_session_items",
+      containerColumn: "template_session_id",
+      containerId: templateSessionId,
+    });
 
     revalidateTemplateAdminPaths(templateId);
     revalidatePath(`/admin/courses/templates/${templateId}/sessions/${templateSessionId}/exercises`);
@@ -3831,6 +3915,8 @@ export async function saveTemplateSessionExerciseBatch(prevState, maybeFormData)
     return {
       success: true,
       created: result.created,
+      assignments,
+      quizTitle,
       message:
         result.created > 0 && result.updated > 0
           ? `Prueba guardada. ${result.created} referencia(s) nuevas y ${result.updated} actualizadas.`
@@ -3908,6 +3994,12 @@ export async function saveCourseSessionExerciseBatch(prevState, maybeFormData) {
       containerId: courseSessionId,
       existingItems: existingItems || [],
     });
+    const assignments = await loadSavedExerciseAssignments({
+      supabase,
+      tableName: "session_items",
+      containerColumn: "session_id",
+      containerId: courseSessionId,
+    });
 
     revalidateCommissionAdminPaths();
     revalidatePath(`/admin/commissions/${commissionId}`);
@@ -3917,6 +4009,8 @@ export async function saveCourseSessionExerciseBatch(prevState, maybeFormData) {
     return {
       success: true,
       created: result.created,
+      assignments,
+      quizTitle,
       message:
         result.created > 0 && result.updated > 0
           ? `Prueba guardada. ${result.created} referencia(s) nuevas y ${result.updated} actualizadas.`

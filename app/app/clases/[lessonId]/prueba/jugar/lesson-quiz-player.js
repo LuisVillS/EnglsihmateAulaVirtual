@@ -7,11 +7,15 @@ import {
   getListeningEndTime,
   getListeningMaxPlays,
   getListeningPrompt,
+  getListeningQuestionCorrectAnswerText,
   getListeningStartTime,
   LISTENING_QUESTION_TYPES,
+  LISTENING_WRITTEN_ANSWER_MODES,
+  normalizeListeningWrittenAnswerMode,
   summarizeListeningQuestionResults,
 } from "@/lib/listening-exercise";
 import { splitClozeSentenceSegments, tokenizeClozeSentence } from "@/lib/cloze-blanks";
+import { toRichTextHtml } from "@/lib/rich-text";
 import { submitLessonQuizStep } from "../actions";
 
 const TYPE_LABELS = {
@@ -35,10 +39,22 @@ function normalizeText(value) {
     .replace(/\s+/g, " ");
 }
 
+function stripHtmlTags(value) {
+  return String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function round2(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.round((parsed + Number.EPSILON) * 100) / 100;
+}
+
+function RichTextValue({ value, className = "" }) {
+  const html = toRichTextHtml(value);
+  if (!html) {
+    return <span className={className} />;
+  }
+  return <span className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function shuffleList(items) {
@@ -209,15 +225,15 @@ function buildQuestionSetAnswerSnapshot(questions = [], answersById = {}, summar
       const questionId = String(question?.id || `q_${index + 1}`).trim();
       const answerState = safeAnswers[questionId] || {};
       const questionType = String(question?.type || "").trim().toLowerCase();
+      const writtenAnswerMode = normalizeListeningWrittenAnswerMode(
+        question?.written_answer_mode ?? question?.writtenAnswerMode
+      );
       let selectedText = "";
       let correctText = "";
 
       if (questionType === LISTENING_QUESTION_TYPES.WRITTEN) {
         selectedText = String(answerState?.text || "").trim();
-        correctText = normalizeArray(question?.accepted_answers)
-          .map((item) => String(item || "").trim())
-          .filter(Boolean)
-          .join(" / ");
+        correctText = getListeningQuestionCorrectAnswerText(question);
       } else if (questionType === LISTENING_QUESTION_TYPES.TRUE_FALSE) {
         selectedText = answerState?.value == null ? "" : (answerState.value ? "True" : "False");
         correctText = question?.correct_boolean ? "True" : "False";
@@ -235,6 +251,7 @@ function buildQuestionSetAnswerSnapshot(questions = [], answersById = {}, summar
         prompt: String(question?.prompt || `Pregunta ${index + 1}`).trim(),
         selectedText,
         correctText,
+        writtenAnswerMode,
         answered: Boolean(summaryItem?.answered),
         isCorrect: Boolean(summaryItem?.isCorrect),
       };
@@ -403,7 +420,7 @@ function resolveExerciseData(exercise) {
     return {
       type,
       explanation,
-      prompt: String(content.prompt_native || exercise?.prompt || "Ordena la oracion."),
+      prompt: String(content.prompt_native || exercise?.prompt || "").trim(),
       answerWords,
       scrambledWords,
     };
@@ -513,13 +530,16 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
   currentIndex,
   totalExercises,
   exercise,
+  isActive = true,
   exercisePointValues = [],
   showSubmitButton = true,
   showTypeHeading = true,
+  onResolvedSubmissionChange = null,
 }, ref) {
   const data = useMemo(() => resolveExerciseData(exercise), [exercise]);
   const type = data.type;
   const listeningExerciseKey = String(exercise?.id || `${lessonId}-${currentIndex}`);
+  const exerciseInstanceKey = String(exercise?.id || `${lessonId}-${currentIndex}`);
   const exerciseWeight = useMemo(
     () => computeExerciseWeightFromPoints(totalExercises, currentIndex, exercisePointValues),
     [totalExercises, currentIndex, exercisePointValues]
@@ -563,28 +583,57 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
   const suppressClozeClickRef = useRef(false);
   const clozeDragRef = useRef(null);
   const clozeDragRafRef = useRef(0);
+  const resolvedSubmissionHashRef = useRef("");
   const [pairLinesTick, setPairLinesTick] = useState(0);
   const [pairLines, setPairLines] = useState([]);
 
-  const scrambleChips = useMemo(
-    () => normalizeArray(data.scrambledWords).map((word, idx) => ({ id: `word-${idx}`, word })),
-    [data.scrambledWords]
+  const [scrambleChips, setScrambleChips] = useState(() =>
+    type === "scramble"
+      ? normalizeArray(data.scrambledWords).map((word, idx) => ({
+          id: `word-${idx + 1}`,
+          word: String(word || "").trim(),
+        }))
+      : []
   );
+
+  useEffect(() => {
+    if (type !== "scramble") return;
+    const nextChips = normalizeArray(data.scrambledWords).map((word, idx) => ({
+      id: `word-${idx + 1}`,
+      word: String(word || "").trim(),
+    }));
+    setScrambleChips(nextChips);
+    setSelectedScrambleIds([]);
+  }, [exerciseInstanceKey, type]);
+
   const scrambleChipMap = useMemo(() => new Map(scrambleChips.map((chip) => [chip.id, chip.word])), [scrambleChips]);
-  const selectedScrambleWords = useMemo(
-    () => selectedScrambleIds.map((id) => scrambleChipMap.get(id)).filter(Boolean),
+  const selectedScrambleEntries = useMemo(
+    () =>
+      selectedScrambleIds
+        .map((id) => ({ id, word: scrambleChipMap.get(id) }))
+        .filter((entry) => Boolean(entry.word)),
     [selectedScrambleIds, scrambleChipMap]
   );
 
   const pairRows = useMemo(() => normalizeArray(data.pairs), [data.pairs]);
-  const leftPairCards = useMemo(() => {
-    const items = pairRows.map((pair) => ({ pairId: pair.id, label: pair.left }));
-    return data.shuffle ? shuffleList(items) : items;
-  }, [pairRows, data.shuffle]);
-  const rightPairCards = useMemo(() => {
-    const items = pairRows.map((pair) => ({ pairId: pair.id, label: pair.right }));
-    return data.shuffle ? shuffleList(items) : items;
-  }, [pairRows, data.shuffle]);
+  const [leftPairCards, setLeftPairCards] = useState([]);
+  const [rightPairCards, setRightPairCards] = useState([]);
+
+  useEffect(() => {
+    if (type !== "pairs") {
+      setLeftPairCards([]);
+      setRightPairCards([]);
+      return;
+    }
+    const leftItems = pairRows.map((pair) => ({ pairId: pair.id, label: pair.left }));
+    const rightItems = pairRows.map((pair) => ({ pairId: pair.id, label: pair.right }));
+    setLeftPairCards(data.shuffle ? shuffleList(leftItems) : leftItems);
+    setRightPairCards(data.shuffle ? shuffleList(rightItems) : rightItems);
+    setSelectedLeftPair(null);
+    setSelectedRightPair(null);
+    setPairAssignments({});
+    setPairLines([]);
+  }, [exerciseInstanceKey, type]);
 
   const answerSnapshotValue = useMemo(() => {
     if (!resultSnapshot) return "";
@@ -612,6 +661,10 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [type]);
+
+  useEffect(() => {
+    resolvedSubmissionHashRef.current = "";
+  }, [listeningExerciseKey, type]);
 
   useEffect(() => {
     if (type !== "pairs") return undefined;
@@ -644,7 +697,10 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
       const nextLines = [];
       Object.entries(pairAssignments).forEach(([leftPairId, rightPairId]) => {
         if (!leftPairId || !rightPairId) return;
-        const color = isResolved ? "#16a34a" : "#2563eb";
+        const isCorrectPair = String(leftPairId || "").trim() === String(rightPairId || "").trim();
+        const color = isResolved
+          ? (isCorrectPair ? "#16a34a" : "#dc2626")
+          : "#3b82f6";
         const line = buildLine(leftPairId, rightPairId, color, false);
         if (line) nextLines.push(line);
       });
@@ -1016,6 +1072,30 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
     return buildSubmissionPayload("failed", 0, safeSnapshot);
   }
 
+  useEffect(() => {
+    if (!isResolved) return;
+    if (typeof onResolvedSubmissionChange !== "function") return;
+    const submission = buildSubmissionPayload(finalStatus, scoreAwarded, resultSnapshot);
+    if (!submission?.exerciseId) return;
+
+    const signature = JSON.stringify({
+      exerciseId: submission.exerciseId,
+      exerciseIndex: submission.exerciseIndex,
+      finalStatus: submission.finalStatus,
+      scoreAwarded: submission.scoreAwarded,
+      answerSnapshot: submission.answerSnapshot,
+    });
+    if (resolvedSubmissionHashRef.current === signature) return;
+    resolvedSubmissionHashRef.current = signature;
+    onResolvedSubmissionChange(submission);
+  }, [
+    finalStatus,
+    isResolved,
+    onResolvedSubmissionChange,
+    resultSnapshot,
+    scoreAwarded,
+  ]);
+
   useImperativeHandle(ref, () => ({
     evaluateAndGetSubmission() {
       const evaluated = evaluateCurrentAnswer({ allowIncomplete: true });
@@ -1152,8 +1232,8 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
       return markFailed({}, imageSnapshot);
     }
 
-    const summary = summarizeListeningQuestionResults(normalizeArray(data.questions), listeningAnswers);
-    const questionSetSnapshot = buildQuestionSetAnswerSnapshot(normalizeArray(data.questions), listeningAnswers, summary);
+    const summary = summarizeListeningQuestionResults(listeningQuestions, listeningAnswers);
+    const questionSetSnapshot = buildQuestionSetAnswerSnapshot(listeningQuestions, listeningAnswers, summary);
     setResultSnapshot(questionSetSnapshot);
     if (!summary.total || !summary.complete) {
       if (allowIncomplete) {
@@ -1194,10 +1274,23 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
     [type, data.segments]
   );
 
-  const listeningQuestions = useMemo(
-    () => ((type === "audio_match" || type === "reading_exercise") ? normalizeArray(data.questions) : []),
-    [type, data.questions]
-  );
+  const listeningQuestions = useMemo(() => {
+    if (type !== "audio_match" && type !== "reading_exercise") return [];
+    const source = normalizeArray(data.questions);
+    const seen = new Set();
+    return source.map((question, index) => {
+      const rawId = String(question?.id || `q_${index + 1}`).trim() || `q_${index + 1}`;
+      let uniqueId = rawId;
+      if (seen.has(uniqueId)) {
+        uniqueId = `${rawId}_${index + 1}`;
+      }
+      seen.add(uniqueId);
+      return {
+        ...(question && typeof question === "object" ? question : {}),
+        id: uniqueId,
+      };
+    });
+  }, [type, data.questions]);
   const listeningSummary = useMemo(
     () => (
       type === "audio_match" || type === "reading_exercise"
@@ -1206,6 +1299,8 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
     ),
     [type, listeningQuestions, listeningAnswers]
   );
+  const shouldShowMainSubmit = showSubmitButton;
+
   function renderCloze() {
     const blanks = normalizeArray(data.blanks);
     const optionsPool = normalizeArray(data.optionsPool);
@@ -1339,56 +1434,62 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
   }
 
   function renderScramble() {
+    const availableChips = scrambleChips.filter((chip) => !selectedScrambleIds.includes(chip.id));
+
     return (
       <div className="space-y-5">
-        <p className="text-2xl font-bold leading-snug text-foreground sm:text-3xl">
-          {data.prompt || "Ordena la oracion."}
-        </p>
-
-        <div className={`rounded-2xl border bg-surface-2 px-4 py-4 transition ${errorFlash ? "border-danger/70" : "border-border"}`}>
-          <p className="mb-2 text-sm uppercase tracking-wide text-muted">Tu respuesta</p>
-          <div className="flex min-h-12 flex-wrap gap-2">
-            {selectedScrambleWords.length ? (
-              selectedScrambleWords.map((word, idx) => (
-                <button
-                  key={`selected-word-${idx}`}
-                  type="button"
-                  onClick={() => {
-                    const chipId = selectedScrambleIds[idx];
-                    handleScrambleToggle(chipId);
-                  }}
-                  disabled={isResolved}
-                  className="rounded-full border border-primary bg-primary px-3 py-1.5 text-base font-semibold text-primary-foreground disabled:cursor-not-allowed"
-                >
-                  {word}
-                </button>
-              ))
-            ) : (
-              <span className="text-base text-muted">Selecciona palabras para formar la frase.</span>
-            )}
-          </div>
+        <div className={`flex min-h-11 flex-wrap items-center gap-2 border-b border-border/60 pb-3 ${errorFlash ? "shake-soft" : ""}`}>
+          {selectedScrambleEntries.length ? (
+            selectedScrambleEntries.map((entry, idx) => (
+              (() => {
+                const expectedWord = String(normalizeArray(data.answerWords)[idx] || "").trim();
+                const isCorrectPosition = normalizeText(entry.word) === normalizeText(expectedWord);
+                const resolvedClass = isCorrectPosition
+                  ? "border-success/65 bg-success/15 text-success"
+                  : "border-danger/65 bg-danger/15 text-danger";
+                return (
+              <button
+                key={`selected-word-${entry.id}`}
+                type="button"
+                onClick={() => {
+                  handleScrambleToggle(entry.id);
+                }}
+                disabled={isResolved}
+                className={`rounded-full border px-3 py-1.5 text-base font-semibold transition-all duration-200 disabled:cursor-not-allowed ${
+                  isResolved
+                    ? resolvedClass
+                    : "border-primary bg-primary text-primary-foreground"
+                }`}
+              >
+                {entry.word}
+              </button>
+                );
+              })()
+            ))
+          ) : (
+            <span className="text-base text-muted">Select words to build the sentence.</span>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {scrambleChips.map((chip) => {
-            const selected = selectedScrambleIds.includes(chip.id);
-            return (
-              <button
-                key={chip.id}
-                type="button"
-                onClick={() => handleScrambleToggle(chip.id)}
-                disabled={isResolved}
-                className={`rounded-full border px-3 py-1.5 text-base font-semibold transition ${
-                  selected
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
-                } disabled:cursor-not-allowed disabled:opacity-85`}
-              >
-                {chip.word}
-              </button>
-            );
-          })}
+          {availableChips.map((chip) => (
+            <button
+              key={chip.id}
+              type="button"
+              onClick={() => handleScrambleToggle(chip.id)}
+              disabled={isResolved}
+              className="rounded-full border border-border bg-surface px-3 py-1.5 text-base font-semibold text-foreground transition-all duration-200 hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-85"
+            >
+              {chip.word}
+            </button>
+          ))}
+          {!availableChips.length ? (
+            <span className="text-sm text-muted">All words are in your answer.</span>
+          ) : null}
         </div>
+        {data.prompt ? (
+          <p className="text-sm text-muted">{data.prompt}</p>
+        ) : null}
       </div>
     );
   }
@@ -1401,14 +1502,16 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
 
         <div
           ref={pairBoardRef}
-          className={`relative rounded-2xl border bg-surface-2 p-4 transition sm:p-5 ${errorFlash ? "border-danger/70" : "border-border"}`}
+          className={`relative py-1 transition ${errorFlash ? "shake-soft" : ""}`}
         >
-          <div className="grid grid-cols-2 gap-5 sm:gap-6">
+          <div className="mx-auto grid grid-cols-2 gap-3 md:gap-4 lg:max-w-2xl lg:gap-5">
             <div className="space-y-3">
-              <p className="px-1 text-xs uppercase tracking-wide text-muted">Idioma A</p>
               {leftPairCards.map((card) => {
                 const paired = Boolean(pairAssignments[card.pairId]);
                 const selected = selectedLeftPair === card.pairId;
+                const assignedRightId = String(pairAssignments[card.pairId] || "").trim();
+                const resolvedPairCorrect = Boolean(assignedRightId) && assignedRightId === String(card.pairId || "").trim();
+                const resolvedPairWrong = Boolean(assignedRightId) && !resolvedPairCorrect;
                 return (
                   <button
                     key={`left-${card.pairId}`}
@@ -1420,11 +1523,17 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
                     disabled={isResolved}
                     onClick={() => handlePairCard("left", card.pairId)}
                     className={`w-full rounded-xl border px-3 py-3 text-left text-base font-semibold transition ${
-                      selected
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : paired
-                        ? "border-success/55 bg-success/15 text-success"
-                        : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
+                      isResolved
+                        ? resolvedPairCorrect
+                          ? "border-success/65 bg-success/15 text-success"
+                          : resolvedPairWrong
+                            ? "border-danger/65 bg-danger/15 text-danger"
+                            : "border-border bg-surface text-foreground"
+                        : selected
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : paired
+                            ? "border-primary/55 bg-primary/10 text-foreground"
+                            : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
                     } disabled:cursor-not-allowed disabled:opacity-90`}
                   >
                     {card.label}
@@ -1434,10 +1543,14 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
             </div>
 
             <div className="space-y-3">
-              <p className="px-1 text-xs uppercase tracking-wide text-muted">Idioma B</p>
               {rightPairCards.map((card) => {
                 const paired = assignedRightIds.has(card.pairId);
                 const selected = selectedRightPair === card.pairId;
+                const matchedLeftId = Object.keys(pairAssignments).find(
+                  (leftId) => String(pairAssignments[leftId] || "").trim() === String(card.pairId || "").trim()
+                );
+                const resolvedPairCorrect = Boolean(matchedLeftId) && String(matchedLeftId || "").trim() === String(card.pairId || "").trim();
+                const resolvedPairWrong = Boolean(matchedLeftId) && !resolvedPairCorrect;
                 return (
                   <button
                     key={`right-${card.pairId}`}
@@ -1449,11 +1562,17 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
                     disabled={isResolved}
                     onClick={() => handlePairCard("right", card.pairId)}
                     className={`w-full rounded-xl border px-3 py-3 text-left text-base font-semibold transition ${
-                      selected
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : paired
-                        ? "border-success/55 bg-success/15 text-success"
-                        : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
+                      isResolved
+                        ? resolvedPairCorrect
+                          ? "border-success/65 bg-success/15 text-success"
+                          : resolvedPairWrong
+                            ? "border-danger/65 bg-danger/15 text-danger"
+                            : "border-border bg-surface text-foreground"
+                        : selected
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : paired
+                            ? "border-primary/55 bg-primary/10 text-foreground"
+                            : "border-border bg-surface text-foreground hover:border-primary hover:bg-surface-2"
                     } disabled:cursor-not-allowed disabled:opacity-90`}
                   >
                     {card.label}
@@ -1472,7 +1591,7 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
                 x2={line.x2}
                 y2={line.y2}
                 stroke={line.color}
-                strokeWidth="3"
+                strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeDasharray={line.dashed ? "6 5" : undefined}
                 opacity={line.dashed ? 0.9 : 1}
@@ -1531,8 +1650,14 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
     );
   }
 
-  function renderQuestionExerciseQuestions(canAnswerQuestions = true) {
-    const flatListeningLayout = type === "audio_match";
+  function renderQuestionExerciseQuestions(canAnswerQuestions = true, options = {}) {
+    const requestedIndexes = Array.isArray(options.questionIndexes) ? options.questionIndexes : [];
+    const visibleIndexes = requestedIndexes.length
+      ? requestedIndexes.filter((index) => Number.isInteger(index) && index >= 0 && index < listeningQuestions.length)
+      : listeningQuestions.map((_, index) => index);
+    const flatListeningLayout = options.flatLayout ?? (type === "audio_match" || type === "reading_exercise");
+    const trueFalseVertical = Boolean(options.trueFalseVertical);
+    const showProgressSummary = options.showSummary ?? true;
     const resultByQuestionId = new Map(
       normalizeArray(listeningSummary.results).map((entry) => [
         String(entry?.id || "").trim(),
@@ -1542,7 +1667,7 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
 
     return (
       <>
-        {listeningSummary.total > 0 ? (
+        {showProgressSummary && listeningSummary.total > 0 ? (
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
             Preguntas respondidas: {listeningSummary.answeredCount}/{listeningSummary.total}
             {isResolved ? ` | Aciertos: ${listeningSummary.correctCount}/${listeningSummary.total}` : ""}
@@ -1550,12 +1675,26 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
         ) : null}
 
         <div className={flatListeningLayout ? "space-y-4" : "space-y-3"}>
-          {listeningQuestions.map((question, questionIndex) => {
+          {visibleIndexes.map((questionIndex) => {
+            const question = listeningQuestions[questionIndex];
+            if (!question) return null;
             const questionId = String(question?.id || `q_${questionIndex + 1}`).trim();
             const answerState = listeningAnswers[questionId] || {};
             const result = resultByQuestionId.get(questionId) || null;
+            const isQuestionAnswered = Boolean(result?.answered);
+            const isQuestionCorrect = Boolean(result?.isCorrect);
+            const isQuestionWrongOrEmpty = isResolved && (!isQuestionAnswered || !isQuestionCorrect);
+            const writtenAnswerMode = normalizeListeningWrittenAnswerMode(
+              question?.written_answer_mode ?? question?.writtenAnswerMode
+            );
+            const isWrittenBlankMode =
+              question?.type === LISTENING_QUESTION_TYPES.WRITTEN &&
+              writtenAnswerMode === LISTENING_WRITTEN_ANSWER_MODES.BLANK_INPUT;
+            const blankPrompt = isWrittenBlankMode
+              ? splitClozeSentenceSegments(stripHtmlTags(question?.prompt || ""), ["blank_1"])
+              : { segments: [] };
             const questionStatusClasses = isResolved
-              ? Boolean(result?.isCorrect)
+              ? isQuestionCorrect
                 ? "text-success"
                 : "text-danger"
               : "text-muted";
@@ -1565,10 +1704,10 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
                 key={`listening-question-${questionId}-${questionIndex}`}
                 className={
                   flatListeningLayout
-                    ? "space-y-3 py-1"
+                    ? `space-y-3 py-1 ${isQuestionWrongOrEmpty ? "border-l-2 border-danger/60 pl-3" : ""}`
                     : `rounded-2xl border p-4 transition ${
-                        isResolved
-                          ? Boolean(result?.isCorrect)
+                      isResolved
+                          ? isQuestionCorrect
                             ? "border-success/55 bg-success/10"
                             : "border-danger/45 bg-danger/10"
                           : "border-border bg-surface-2"
@@ -1579,7 +1718,44 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
                   <span className={`w-6 shrink-0 text-sm font-semibold ${questionStatusClasses}`}>
                     {questionIndex + 1}.
                   </span>
-                  <p className="min-w-0 flex-1 text-base font-semibold text-foreground">{question.prompt}</p>
+                  {isWrittenBlankMode ? (
+                    <span className="min-w-0 flex-1 whitespace-pre-wrap leading-8">
+                      {blankPrompt.segments.map((segment, segmentIndex) => {
+                        if (segment.kind !== "blank") {
+                          return (
+                            <span key={`${questionId}-blank-title-text-${segmentIndex}`} className="text-base font-semibold text-foreground">
+                              {segment.value}
+                            </span>
+                          );
+                        }
+                        return (
+                          <input
+                            key={`${questionId}-blank-title-input-${segmentIndex}`}
+                            type="text"
+                            value={answerState.text || ""}
+                            onChange={(event) => handleListeningAnswer(questionId, { text: event.target.value })}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") event.preventDefault();
+                            }}
+                            onCopy={blockClipboardEvent}
+                            onCut={blockClipboardEvent}
+                            onPaste={blockClipboardEvent}
+                            disabled={isResolved || !canAnswerQuestions}
+                            className={`mx-1 inline-flex h-9 w-24 rounded-lg border px-2 py-1 align-middle text-center text-sm font-semibold outline-none transition focus:border-primary disabled:cursor-not-allowed disabled:opacity-90 select-none sm:w-28 sm:text-base ${
+                              isResolved
+                                ? isQuestionCorrect
+                                  ? "border-success/65 bg-success/10 text-success"
+                                  : "border-danger/65 bg-danger/10 text-danger"
+                                : "border-primary/55 bg-surface text-foreground"
+                            }`}
+                            placeholder="..."
+                          />
+                        );
+                      })}
+                    </span>
+                  ) : (
+                    <RichTextValue value={question.prompt} className="min-w-0 flex-1 text-base font-semibold text-foreground" />
+                  )}
                 </div>
 
                 {question.type === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
@@ -1587,8 +1763,8 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
                     {normalizeArray(question.options).map((option, optionIndex) => {
                       const selected = Number(answerState.selected_index) === optionIndex;
                       const correctOption = Number(question.correct_index) === optionIndex;
-                      const resolvedCorrect = isResolved && !isFailed && correctOption;
-                      const showWrong = isFailed && selected && !correctOption;
+                      const resolvedCorrect = isResolved && isQuestionCorrect && correctOption;
+                      const showWrong = isResolved && selected && !correctOption;
                       return (
                         <button
                           key={`${questionId}-option-${optionIndex}`}
@@ -1612,7 +1788,7 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
                   </div>
                 ) : null}
 
-                {question.type === LISTENING_QUESTION_TYPES.WRITTEN ? (
+                {question.type === LISTENING_QUESTION_TYPES.WRITTEN && !isWrittenBlankMode ? (
                   <div className="mt-3 space-y-2">
                     <input
                       type="text"
@@ -1625,27 +1801,33 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
                       onCut={blockClipboardEvent}
                       onPaste={blockClipboardEvent}
                       disabled={isResolved || !canAnswerQuestions}
-                      className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-base text-foreground outline-none transition focus:border-primary disabled:cursor-not-allowed disabled:opacity-90 select-none"
+                      className={`w-full rounded-xl border bg-surface px-3 py-2 text-base text-foreground outline-none transition focus:border-primary disabled:cursor-not-allowed disabled:opacity-90 select-none ${
+                        isResolved
+                          ? isQuestionCorrect
+                            ? "border-success/65 bg-success/10 text-success"
+                            : "border-danger/65 bg-danger/10 text-danger"
+                          : "border-border"
+                      }`}
                       placeholder="Write your answer"
                     />
                   </div>
                 ) : null}
 
                 {question.type === LISTENING_QUESTION_TYPES.TRUE_FALSE ? (
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className={trueFalseVertical ? "mt-3 space-y-2" : "mt-3 grid gap-2 sm:grid-cols-2"}>
                     {["True", "False"].map((label, optionIndex) => {
                       const boolValue = optionIndex === 0;
                       const selected = answerState.value === boolValue;
                       const correctOption = Boolean(question.correct_boolean) === boolValue;
-                      const resolvedCorrect = isResolved && !isFailed && correctOption;
-                      const showWrong = isFailed && selected && !correctOption;
+                      const resolvedCorrect = isResolved && isQuestionCorrect && correctOption;
+                      const showWrong = isResolved && selected && !correctOption;
                       return (
                         <button
                           key={`${questionId}-${label}`}
                           type="button"
                           onClick={() => handleListeningAnswer(questionId, { value: boolValue })}
                           disabled={isResolved || !canAnswerQuestions}
-                          className={`rounded-xl border px-3 py-2 text-left text-base font-semibold transition ${
+                          className={`w-full rounded-xl border px-3 py-2 text-left text-base font-semibold transition ${
                             resolvedCorrect
                               ? "border-success bg-success/15 text-success"
                               : showWrong
@@ -1673,12 +1855,15 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
   function renderAudioMatch() {
     return (
       <div className="space-y-5">
-        <p className="text-base text-muted">{data.prompt || "Escucha y responde."}</p>
+        <div className="text-base text-muted">
+          <RichTextValue value={data.prompt || "Escucha y responde."} />
+        </div>
 
         <ListeningPlaybackControl
           key={`listening-playback-${exercise?.id || currentIndex}-${data.youtubeUrl || data.audioUrl || "none"}-${data.maxPlays}-${data.startTime ?? 0}-${data.endTime ?? "end"}`}
           youtubeUrl={data.youtubeUrl}
           audioUrl={data.audioUrl}
+          isActive={isActive}
           maxPlays={data.maxPlays}
           startTime={data.startTime}
           endTime={data.endTime}
@@ -1693,9 +1878,9 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
   function renderReadingExercise() {
     return (
       <div className="space-y-5">
-        <div className="rounded-2xl border border-border bg-surface-2 p-4 sm:p-5">
+        <div className="space-y-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">Reading</p>
-          <h3 className="mt-1 text-xl font-semibold text-foreground sm:text-2xl">
+          <h3 className="text-xl font-semibold text-foreground sm:text-2xl">
             {data.title || "Reading Exercise"}
           </h3>
           {data.imageUrl ? (
@@ -1703,15 +1888,21 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
             <img
               src={data.imageUrl}
               alt={data.title || "Reading image"}
-              className="mt-4 h-52 w-full rounded-2xl object-cover sm:h-64"
+              className="h-52 w-full rounded-xl object-cover sm:h-64"
             />
           ) : null}
-          <div className="mt-4 whitespace-pre-wrap text-base leading-8 text-foreground">
-            {data.readingText || "Reading text not available."}
+          <div className="border-t border-border/60 pt-3 text-base leading-8 text-foreground">
+            <RichTextValue value={data.readingText || "Reading text not available."} />
           </div>
         </div>
 
-        {renderQuestionExerciseQuestions(true)}
+        <div className="border-t border-border/60 pt-4">
+          {renderQuestionExerciseQuestions(true, {
+            showSummary: false,
+            flatLayout: true,
+            trueFalseVertical: true,
+          })}
+        </div>
       </div>
     );
   }
@@ -1759,7 +1950,7 @@ const LessonQuizPlayer = forwardRef(function LessonQuizPlayer({
         </div>
       ) : null}
 
-      {showSubmitButton ? (
+      {shouldShowMainSubmit ? (
         <form
           action={submitLessonQuizStep}
           onSubmit={handleContinueSubmit}

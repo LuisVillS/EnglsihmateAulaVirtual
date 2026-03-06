@@ -1,12 +1,13 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { submitLessonQuizStep } from "../actions";
 import LessonQuizPlayer from "./lesson-quiz-player";
+import { submitLessonQuizStep } from "../actions";
 
 const MAX_BACKGROUND_SAVE_RETRIES = 3;
 const BACKGROUND_SAVE_RETRY_DELAYS_MS = [1000, 2200, 4500];
+const SELF_REVIEW_GROUP_TYPES = new Set();
 
 function round2(value) {
   const parsed = Number(value);
@@ -79,23 +80,104 @@ function buildBackgroundSaveFormData(entry) {
   return formData;
 }
 
+function buildFinalizeFormData(entry) {
+  const formData = new FormData();
+  formData.append("lessonId", String(entry.lessonId || "").trim());
+  formData.append("currentIndex", String(Number(entry.currentIndex) || 0));
+  formData.append("totalExercises", String(Number(entry.totalExercises) || 0));
+  formData.append("pageResults", JSON.stringify(Array.isArray(entry.pageResults) ? entry.pageResults : []));
+  formData.append("responseMode", "json");
+  formData.append("finalizeAttempt", "1");
+  formData.append("requestKey", String(entry.requestKey || ""));
+  return formData;
+}
+
+function createResultHash(results = []) {
+  return JSON.stringify(
+    (Array.isArray(results) ? results : []).map((result) => ({
+      exerciseId: String(result?.exerciseId || "").trim(),
+      exerciseIndex: Number(result?.exerciseIndex || 0),
+      finalStatus: String(result?.finalStatus || "").trim().toLowerCase(),
+      scoreAwarded: Number(result?.scoreAwarded || 0),
+      answerSnapshot: result?.answerSnapshot || null,
+    }))
+  );
+}
+
+function createDraftPageState() {
+  return {
+    status: "draft",
+    results: [],
+    isComplete: false,
+    checkedAt: null,
+  };
+}
+
+function normalizeGroupResults(group, results = []) {
+  const orderedEntries = Array.isArray(group?.entries) ? group.entries : [];
+  const resultByExerciseIndex = new Map(
+    (Array.isArray(results) ? results : [])
+      .filter(Boolean)
+      .map((result) => [Number(result?.exerciseIndex ?? -1), result])
+  );
+  return orderedEntries
+    .map((entry) => resultByExerciseIndex.get(Number(entry?.globalIndex ?? -1)) || null)
+    .filter(Boolean);
+}
+
 export default function LessonQuizPagePlayer({
   lessonId,
   totalExercises = 0,
-  pageStartIndex = 0,
-  pageEntries = [],
+  pageGroups = [],
+  initialPageGroupIndex = 0,
   exercisePointValues = [],
 }) {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isReviewMode, setIsReviewMode] = useState(false);
-  const [reviewedResults, setReviewedResults] = useState([]);
-  const playerRefs = useRef([]);
+  const [currentPageGroupIndex, setCurrentPageGroupIndex] = useState(() =>
+    Math.max(0, Math.min(Math.max(0, pageGroups.length - 1), Number(initialPageGroupIndex) || 0))
+  );
+  const [pageStates, setPageStates] = useState({});
+  const pageStatesRef = useRef(pageStates);
+  const playerRefs = useRef(new Map());
   const isFlushingQueueRef = useRef(false);
   const flushTimeoutRef = useRef(0);
+  const persistedHashesRef = useRef(new Map());
 
-  function setPlayerRef(index, node) {
-    playerRefs.current[index] = node;
+  useEffect(() => {
+    pageStatesRef.current = pageStates;
+  }, [pageStates]);
+
+  useEffect(() => {
+    setCurrentPageGroupIndex(
+      Math.max(0, Math.min(Math.max(0, pageGroups.length - 1), Number(initialPageGroupIndex) || 0))
+    );
+    setPageStates({});
+    pageStatesRef.current = {};
+    persistedHashesRef.current = new Map();
+    setIsSubmitting(false);
+    playerRefs.current = new Map();
+  }, [lessonId, initialPageGroupIndex, pageGroups.length]);
+
+  const groupById = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(pageGroups) ? pageGroups : []).forEach((group) => {
+      const key = String(group?.id || "").trim();
+      if (key) map.set(key, group);
+    });
+    return map;
+  }, [pageGroups]);
+
+  function setPlayerRef(groupId, entryIndex, node) {
+    const safeGroupId = String(groupId || "").trim();
+    if (!safeGroupId) return;
+    let groupMap = playerRefs.current.get(safeGroupId);
+    if (!groupMap) {
+      groupMap = new Map();
+      playerRefs.current.set(safeGroupId, groupMap);
+    }
+    if (node) groupMap.set(entryIndex, node);
+    else groupMap.delete(entryIndex);
   }
 
   const flushQueuedSaves = useCallback(async () => {
@@ -179,58 +261,12 @@ export default function LessonQuizPagePlayer({
     };
   }, [flushQueuedSaves]);
 
-  useEffect(() => {
-    setIsSubmitting(false);
-    setIsReviewMode(false);
-    setReviewedResults([]);
-  }, [lessonId, pageStartIndex, pageEntries.length]);
-
-  function handlePageSubmit(event) {
-    event.preventDefault();
-    if (isSubmitting) {
-      return;
-    }
-
-    const gatherPageResults = () => {
-      const results = [];
-      for (let index = 0; index < pageEntries.length; index += 1) {
-        const api = playerRefs.current[index];
-        const result = api?.evaluateAndGetSubmission?.() || null;
-        if (!result?.exerciseId) {
-          return [];
-        }
-        results.push(result);
-      }
-      return results;
-    };
-
-    if (!isReviewMode) {
-      const previewResults = gatherPageResults();
-      if (!previewResults.length) {
-        return;
-      }
-      setReviewedResults(previewResults);
-      setIsReviewMode(true);
-      return;
-    }
-
-    const results = reviewedResults.length ? reviewedResults : gatherPageResults();
-
-    if (!results.length) {
-      return;
-    }
-
-    const highestExerciseIndex = results.reduce(
-      (maxValue, result) => Math.max(maxValue, Number(result?.exerciseIndex) || 0),
-      Math.max(0, Number(pageStartIndex) || 0)
-    );
-    const nextIndex = highestExerciseIndex + 1;
-    const isCompleted = nextIndex >= totalExercises;
-    const safeNextIndex = Math.max(0, Math.min(totalExercises - 1, nextIndex));
-
+  function persistGroupResults(group, results = []) {
+    if (!group || !Array.isArray(results) || !results.length) return;
+    const startIndex = Math.max(0, Number(group?.startIndex || results[0]?.exerciseIndex || 0));
     enqueueBackgroundSave({
       lessonId,
-      currentIndex: pageStartIndex,
+      currentIndex: startIndex,
       totalExercises,
       pageResults: results,
       requestKey: buildRequestKey(),
@@ -239,70 +275,250 @@ export default function LessonQuizPagePlayer({
       queuedAt: Date.now(),
     });
     void flushQueuedSaves();
-    setIsSubmitting(true);
-    startTransition(() => {
-      router.push(
-        isCompleted
-          ? `/app/clases/${lessonId}/prueba/resultados`
-          : `/app/clases/${lessonId}/prueba/jugar?i=${safeNextIndex}`
-      );
-    });
+  }
+
+  function upsertReviewedGroup(group, nextResults = [], options = {}) {
+    if (!group) return;
+    const normalizedResults = normalizeGroupResults(group, nextResults);
+    if (!normalizedResults.length) return;
+
+    const groupId = String(group.id || "").trim();
+    if (!groupId) return;
+
+    setPageStates((previous) => ({
+      ...previous,
+      [groupId]: {
+        status: "reviewed",
+        results: normalizedResults,
+        isComplete: true,
+        checkedAt: Date.now(),
+      },
+    }));
+
+    if (options.persist !== false) {
+      const nextHash = createResultHash(normalizedResults);
+      const previousHash = persistedHashesRef.current.get(groupId);
+      if (nextHash !== previousHash) {
+        persistedHashesRef.current.set(groupId, nextHash);
+        persistGroupResults(group, normalizedResults);
+      }
+    }
+  }
+
+  function gatherGroupResults(group) {
+    const safeGroupId = String(group?.id || "").trim();
+    if (!safeGroupId) return [];
+    const groupMap = playerRefs.current.get(safeGroupId);
+    if (!groupMap) return [];
+
+    const entries = Array.isArray(group?.entries) ? group.entries : [];
+    const results = [];
+    for (let index = 0; index < entries.length; index += 1) {
+      const api = groupMap.get(index);
+      const result = api?.evaluateAndGetSubmission?.() || null;
+      if (!result?.exerciseId) {
+        return [];
+      }
+      results.push(result);
+    }
+    return normalizeGroupResults(group, results);
+  }
+
+  function handlePlayerResolvedSubmission(groupId, entryIndex, submission) {
+    const safeGroupId = String(groupId || "").trim();
+    if (!safeGroupId || !submission?.exerciseId) return;
+    const group = groupById.get(safeGroupId);
+    if (!group || !SELF_REVIEW_GROUP_TYPES.has(String(group.type || "").trim().toLowerCase())) return;
+
+    const expectedCount = Array.isArray(group?.entries) ? group.entries.length : 0;
+    if (expectedCount <= 0) return;
+
+    const currentState = pageStatesRef.current[safeGroupId] || createDraftPageState();
+    const mergedByExerciseIndex = new Map(
+      normalizeGroupResults(group, currentState.results).map((result) => [
+        Number(result?.exerciseIndex ?? -1),
+        result,
+      ])
+    );
+    mergedByExerciseIndex.set(Number(submission.exerciseIndex ?? -1), submission);
+
+    const orderedResults = normalizeGroupResults(group, Array.from(mergedByExerciseIndex.values()));
+    if (orderedResults.length < expectedCount) {
+      setPageStates((previous) => ({
+        ...previous,
+        [safeGroupId]: {
+          status: "draft",
+          results: orderedResults,
+          isComplete: false,
+          checkedAt: previous[safeGroupId]?.checkedAt || null,
+        },
+      }));
+      return;
+    }
+
+    upsertReviewedGroup(group, orderedResults, { persist: true });
+  }
+
+  const safePageGroups = Array.isArray(pageGroups) ? pageGroups : [];
+  const safeCurrentGroupIndex = Math.max(0, Math.min(Math.max(0, safePageGroups.length - 1), currentPageGroupIndex));
+  const currentGroup = safePageGroups[safeCurrentGroupIndex] || null;
+  const currentGroupId = String(currentGroup?.id || "").trim();
+  const currentGroupState = currentGroupId ? (pageStates[currentGroupId] || createDraftPageState()) : createDraftPageState();
+  const isCurrentReviewed = currentGroupState.status === "reviewed";
+  const hasPreviousGroup = safeCurrentGroupIndex > 0;
+  const isLastGroup = safeCurrentGroupIndex >= Math.max(0, safePageGroups.length - 1);
+
+  function goToPreviousGroup() {
+    if (isSubmitting) return;
+    setCurrentPageGroupIndex((current) => Math.max(0, current - 1));
+  }
+
+  async function goToNextGroupOrFinish() {
+    if (isSubmitting || !isCurrentReviewed) return;
+    if (isLastGroup) {
+      setIsSubmitting(true);
+      try {
+        const reviewedResults = normalizeGroupResults(currentGroup, currentGroupState.results);
+        const resultsToFinalize = reviewedResults.length ? reviewedResults : gatherGroupResults(currentGroup);
+        if (!Array.isArray(resultsToFinalize) || !resultsToFinalize.length) {
+          setIsSubmitting(false);
+          return;
+        }
+        await submitLessonQuizStep(
+          buildFinalizeFormData({
+            lessonId,
+            currentIndex: Math.max(0, Number(currentGroup?.startIndex || resultsToFinalize[0]?.exerciseIndex || 0)),
+            totalExercises,
+            pageResults: resultsToFinalize,
+            requestKey: buildRequestKey(),
+          })
+        );
+        startTransition(() => {
+          router.push(`/app/clases/${lessonId}/prueba/resultados`);
+        });
+      } catch {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+    setCurrentPageGroupIndex((current) => Math.min(safePageGroups.length - 1, current + 1));
+  }
+
+  function checkCurrentGroupAnswers() {
+    if (isSubmitting || !currentGroup || isCurrentReviewed) return;
+    const results = gatherGroupResults(currentGroup);
+    if (!results.length) return;
+    upsertReviewedGroup(currentGroup, results, { persist: true });
   }
 
   return (
     <div className="space-y-5">
-      {pageEntries.map((entry, entryIndex) => (
-        <section
-          key={`quiz-page-entry-${entry.globalIndex}`}
-          className={entryIndex < pageEntries.length - 1 ? "border-b border-border/70 pb-4 sm:pb-5" : "pb-1"}
-        >
-          <div className="space-y-1.5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="space-y-1.5">
-                {entry.showSkillHeader ? (
-                  <h2 className="text-3xl font-semibold tracking-tight text-foreground">
-                    {entry.skillLabel}
-                  </h2>
-                ) : null}
-                {entry.showTypeHeader ? (
-                  <p className="pb-4 text-lg font-bold uppercase tracking-[0.16em] text-foreground">
-                    {entry.typeLabel}
+      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted">
+        Pagina {safeCurrentGroupIndex + 1} de {Math.max(1, safePageGroups.length)}
+      </p>
+
+      {safePageGroups.map((group, groupIndex) => {
+        const isVisibleGroup = groupIndex === safeCurrentGroupIndex;
+        const groupId = String(group?.id || "").trim();
+        const entries = Array.isArray(group?.entries) ? group.entries : [];
+        return (
+          <div key={groupId || `group-${groupIndex}`} className={isVisibleGroup ? "" : "hidden"}>
+            {entries.map((entry, entryIndex) => (
+              <section
+                key={`quiz-page-entry-${groupId}-${entry.globalIndex}`}
+                className={entryIndex < entries.length - 1 ? "border-b border-border/70 pb-4 sm:pb-5" : "pb-1"}
+              >
+                <div className="flex items-start gap-3">
+                  <p className="w-8 shrink-0 pt-0.5 text-base font-semibold text-muted sm:text-lg">
+                    {entry.skillNumber}.
                   </p>
-                ) : null}
-                <p className="text-base font-semibold text-muted sm:text-lg">
-                  {entry.skillNumber}.
-                </p>
-              </div>
-              <span className="mt-1 rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold text-muted">
-                {computeDisplayExerciseScore(totalExercises, entry.globalIndex, exercisePointValues)}/100
-              </span>
-            </div>
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1.5">
+                        {entry.showSkillHeader ? (
+                          <h2 className="text-3xl font-semibold tracking-tight text-foreground">
+                            {entry.skillLabel}
+                          </h2>
+                        ) : null}
+                        {entry.showTypeHeader ? (
+                          <p className="pb-2 text-lg font-bold uppercase tracking-[0.16em] text-foreground">
+                            {entry.typeLabel}
+                          </p>
+                        ) : null}
+                      </div>
+                      <span className="mt-1 rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold text-muted">
+                        {computeDisplayExerciseScore(totalExercises, entry.globalIndex, exercisePointValues)}/100
+                      </span>
+                    </div>
+                    <div className="mt-1">
+                      <LessonQuizPlayer
+                        ref={(node) => setPlayerRef(groupId, entryIndex, node)}
+                        lessonId={lessonId}
+                        currentIndex={entry.globalIndex}
+                        totalExercises={totalExercises}
+                        exercise={entry.exercise}
+                        isActive={isVisibleGroup}
+                        exercisePointValues={exercisePointValues}
+                        showSubmitButton={false}
+                        showTypeHeading={false}
+                        onResolvedSubmissionChange={(submission) =>
+                          handlePlayerResolvedSubmission(groupId, entryIndex, submission)
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              </section>
+            ))}
           </div>
+        );
+      })}
 
-          <div className="mt-2">
-            <LessonQuizPlayer
-              ref={(node) => setPlayerRef(entryIndex, node)}
-              lessonId={lessonId}
-              currentIndex={entry.globalIndex}
-              totalExercises={totalExercises}
-              exercise={entry.exercise}
-              exercisePointValues={exercisePointValues}
-              showSubmitButton={false}
-              showTypeHeading={false}
-            />
+      <div className="pt-2">
+        {!isCurrentReviewed ? (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {hasPreviousGroup ? (
+              <button
+                type="button"
+                onClick={goToPreviousGroup}
+                disabled={isSubmitting}
+                className="rounded-xl border border-border bg-surface px-4 py-2 text-sm font-semibold text-foreground transition hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Previous page
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={checkCurrentGroupAnswers}
+              disabled={isSubmitting}
+              className="inline-flex items-center justify-center rounded-2xl bg-primary px-6 py-3 text-lg font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              Check answers
+            </button>
           </div>
-        </section>
-      ))}
-
-      <form onSubmit={handlePageSubmit} className="pt-2">
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="inline-flex w-full items-center justify-center rounded-2xl bg-primary px-5 py-3.5 text-lg font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"
-        >
-          {isSubmitting ? "Continuando..." : isReviewMode ? "Continuar" : "Revisar respuestas"}
-        </button>
-      </form>
+        ) : (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {hasPreviousGroup ? (
+              <button
+                type="button"
+                onClick={goToPreviousGroup}
+                disabled={isSubmitting}
+                className="rounded-xl border border-border bg-surface px-4 py-2 text-sm font-semibold text-foreground transition hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Previous page
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={goToNextGroupOrFinish}
+              disabled={isSubmitting}
+              className="inline-flex items-center justify-center rounded-2xl bg-primary px-6 py-3 text-lg font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isSubmitting ? "Continuando..." : isLastGroup ? "Finish test" : "Next page"}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

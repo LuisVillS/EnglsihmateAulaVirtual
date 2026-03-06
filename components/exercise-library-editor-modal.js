@@ -16,11 +16,11 @@ import {
   EXERCISE_TYPE_OPTIONS,
   GuidedEditor,
   getDefaultContent,
-  InlineRichTextarea,
   normalizeContent,
   safeParseJson,
   toPrettyJson,
 } from "@/components/template-session-exercise-builder";
+import SimpleWysiwygEditor from "@/components/simple-wysiwyg-editor";
 
 const INITIAL_STATE = {
   success: false,
@@ -76,7 +76,6 @@ export default function ExerciseLibraryEditorModal({
 }) {
   const [state, formAction, pending] = useActionState(upsertExerciseLibraryEntry, INITIAL_STATE);
   const [formValues, setFormValues] = useState(() => toFormValues(exercise, defaultSkill, defaultLevel));
-  const explanationTextareaRef = useRef(null);
   const submitRequestedRef = useRef(false);
   const submitPendingStartedRef = useRef(false);
   const onSavedRef = useRef(onSaved);
@@ -175,6 +174,7 @@ export default function ExerciseLibraryEditorModal({
     if (hasInvalidJson) return "";
     return String(guidedContent?.explanation || "");
   }, [guidedContent, hasInvalidJson]);
+  const hasPerQuestionExplanationsOnly = formValues.type === "audio_match" || formValues.type === "reading_exercise";
 
   function updateGuidedContent(patchObject) {
     setFormValues((previous) => {
@@ -336,22 +336,23 @@ export default function ExerciseLibraryEditorModal({
             />
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
-              Explicacion para correcciones
-            </label>
-            <InlineRichTextarea
-              rows={5}
-              value={explanationText}
-              disabled={hasInvalidJson}
-              onChange={setExplanationValue}
-              textareaRef={explanationTextareaRef}
-              placeholder="Ejemplo: **I** usa **am** en presente."
-            />
-            <p className="text-xs text-muted">
-              Soporta multilinea y formato simple. Atajos: <code>Ctrl+B</code>, <code>Ctrl+I</code>, <code>Ctrl+U</code>.
-            </p>
-          </div>
+          {!hasPerQuestionExplanationsOnly ? (
+            <div className="space-y-1">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Explicacion para correcciones
+              </label>
+              <SimpleWysiwygEditor
+                value={explanationText}
+                disabled={hasInvalidJson}
+                onChange={setExplanationValue}
+                placeholder="Ejemplo: **I** usa **am** en presente."
+                minHeightClass="min-h-[140px]"
+              />
+              <p className="text-xs text-muted">
+                Soporta multilinea y formato simple. Atajos: <code>Ctrl+B</code>, <code>Ctrl+I</code>, <code>Ctrl+U</code>.
+              </p>
+            </div>
+          ) : null}
 
           <div className="rounded-2xl border border-border bg-surface p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Contenido</p>

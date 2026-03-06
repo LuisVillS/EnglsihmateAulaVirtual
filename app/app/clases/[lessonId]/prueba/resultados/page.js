@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import RestartLessonQuizButton from "@/components/restart-lesson-quiz-button";
 import { splitClozeSentenceSegments, tokenizeClozeSentence } from "@/lib/cloze-blanks";
+import { toRichTextHtml } from "@/lib/rich-text";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
   LESSON_QUIZ_MAX_RESTARTS,
@@ -33,12 +34,44 @@ function CheckIcon() {
   );
 }
 
+function StatusMark({ isCorrect }) {
+  if (isCorrect) {
+    return (
+      <span
+        className="inline-flex h-5 w-5 items-center justify-center text-success"
+        aria-label="Correcto"
+        title="Correcto"
+      >
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="M5 12l4 4 10-10" />
+        </svg>
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className="inline-flex h-5 w-5 items-center justify-center text-danger"
+      aria-label="Incorrecto"
+      title="Incorrecto"
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5">
+        <path d="M6 6l12 12M18 6L6 18" />
+      </svg>
+    </span>
+  );
+}
+
 function normalizeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
 function normalizeObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function stripRichTextTags(value) {
+  return String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function toInt(value, fallback = 0) {
@@ -64,32 +97,35 @@ const EXERCISE_TYPE_LABELS = {
   cloze: "Fill in the blanks",
 };
 
+const WRITTEN_ANSWER_MODES = {
+  PLAIN_INPUT: "plain_input",
+  BLANK_INPUT: "blank_input",
+};
+
+function normalizeWrittenAnswerMode(value) {
+  const raw = String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
+  return raw === WRITTEN_ANSWER_MODES.BLANK_INPUT
+    ? WRITTEN_ANSWER_MODES.BLANK_INPUT
+    : WRITTEN_ANSWER_MODES.PLAIN_INPUT;
+}
+
 function normalizeExerciseTypeLabel(type) {
   const normalized = String(type || "").trim().toLowerCase();
   return EXERCISE_TYPE_LABELS[normalized] || "Ejercicio";
 }
 
-function renderRichMarkdownFragments(text, keyPrefix = "md") {
-  const raw = String(text || "");
-  const parts = raw.split(/(\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*)/g).filter(Boolean);
-  return parts.map((part, index) => {
-    const isBold = part.startsWith("**") && part.endsWith("**") && part.length > 4;
-    if (isBold) {
-      const content = part.slice(2, -2);
-      return <strong key={`${keyPrefix}-strong-${index}`}>{content}</strong>;
-    }
-    const isUnderline = part.startsWith("__") && part.endsWith("__") && part.length > 4;
-    if (isUnderline) {
-      const content = part.slice(2, -2);
-      return <u key={`${keyPrefix}-underline-${index}`}>{content}</u>;
-    }
-    const isItalic = part.startsWith("*") && part.endsWith("*") && part.length > 2;
-    if (isItalic) {
-      const content = part.slice(1, -1);
-      return <em key={`${keyPrefix}-italic-${index}`}>{content}</em>;
-    }
-    return <span key={`${keyPrefix}-span-${index}`}>{part}</span>;
-  });
+function renderRichTextFragments(text, keyPrefix = "rich") {
+  const html = toRichTextHtml(text);
+  if (!html) return null;
+  return <span key={`${keyPrefix}-html`} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function getWrittenExampleAnswer(question = {}) {
+  const explicitExample = String(question?.example_answer || question?.exampleAnswer || "").trim();
+  if (explicitExample) return explicitExample;
+  const accepted = normalizeArray(question?.accepted_answers);
+  const firstAccepted = String(accepted[0] || "").trim();
+  return firstAccepted || "";
 }
 
 function buildClozeBreakdownData(exercise, answerSnapshot) {
@@ -197,11 +233,10 @@ function buildCorrectAnswerLines(exercise) {
     if (questions.length) {
       return questions.map((question, index) => {
         const questionType = String(question?.type || "").trim().toLowerCase();
-        const prompt = String(question?.prompt || "").trim() || `Pregunta ${index + 1}`;
+        const prompt = stripRichTextTags(question?.prompt || "") || `Pregunta ${index + 1}`;
 
         if (questionType === "written") {
-          const answers = normalizeArray(question?.accepted_answers).map((item) => String(item || "").trim()).filter(Boolean);
-          return `${prompt}: ${answers.join(" / ") || "-"}`;
+          return `${prompt}: ${getWrittenExampleAnswer(question) || "-"}`;
         }
 
         if (questionType === "true_false") {
@@ -279,8 +314,15 @@ function buildCorrectAnswerLines(exercise) {
 }
 
 function buildExerciseExplanationLines(exercise, clozeBreakdown = null) {
+  const type = String(exercise?.type || "").trim().toLowerCase();
+  if (type === "audio_match" || type === "reading_exercise") {
+    return [];
+  }
   const content = normalizeObject(exercise?.content_json);
   const baseText = String(content.explanation || "").trim();
+  if (/<\/?[a-z][\s\S]*>/i.test(baseText)) {
+    return [baseText];
+  }
   const baseLines = baseText
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -329,18 +371,118 @@ function buildUserResponseRows(exercise, answerSnapshot, fallbackIsCorrect = fal
   }
 
   if ((type === "audio_match" || type === "reading_exercise") && snapshot.type === "question_set") {
+    const contentQuestions = normalizeArray(normalizeObject(exercise?.content_json).questions);
+    const questionById = new Map(
+      contentQuestions.map((question, index) => [
+        String(question?.id || `q_${index + 1}`).trim(),
+        question,
+      ])
+    );
     const questions = normalizeArray(snapshot.questions);
     if (!questions.length) {
       return [{ label: "Respuesta", value: "[no answer]", isCorrect: false }];
     }
-    return questions.map((question, index) => ({
-      label: `${index + 1}. ${String(question?.prompt || "").trim()}`,
-      value: String(question?.selectedText || "").trim() || "[no answer]",
-      isCorrect: Boolean(question?.isCorrect),
-    }));
+    return questions.map((question, index) => {
+      const questionId = String(question?.id || `q_${index + 1}`).trim();
+      const sourceQuestion = questionById.get(questionId) || contentQuestions[index] || {};
+      const promptLabel = stripRichTextTags(question?.prompt || "") || `Pregunta ${index + 1}`;
+      const writtenAnswerMode = normalizeWrittenAnswerMode(
+        question?.writtenAnswerMode ?? sourceQuestion?.written_answer_mode ?? sourceQuestion?.writtenAnswerMode
+      );
+      const promptSegments = writtenAnswerMode === WRITTEN_ANSWER_MODES.BLANK_INPUT
+        ? splitClozeSentenceSegments(promptLabel, ["blank_1"]).segments
+        : [];
+      return {
+        label: `${index + 1}. ${promptLabel}`,
+        value: String(question?.selectedText || "").trim() || "[no answer]",
+        isCorrect: Boolean(question?.isCorrect),
+        questionId,
+        isBlankInput: writtenAnswerMode === WRITTEN_ANSWER_MODES.BLANK_INPUT,
+        promptSegments,
+        questionExplanation: String(
+          sourceQuestion?.explanation ?? sourceQuestion?.explanation_richtext ?? ""
+        ).trim(),
+      };
+    });
   }
 
   return [{ label: "Respuesta", value: "[no answer]", isCorrect: Boolean(fallbackIsCorrect) }];
+}
+
+function buildQuestionCorrectText(question = {}, fallbackIndex = 0) {
+  const questionType = String(question?.type || "").trim().toLowerCase();
+  if (questionType === "written") {
+    return getWrittenExampleAnswer(question);
+  }
+  if (questionType === "true_false") {
+    return question?.correct_boolean ? "True" : "False";
+  }
+  const options = normalizeArray(question?.options).map((item) => String(item || "").trim());
+  const correctIndex = Math.max(0, Math.min(options.length - 1, toInt(question?.correct_index, fallbackIndex)));
+  return options[correctIndex] || "";
+}
+
+function buildQuestionSetBreakdownRows(exercise, answerSnapshot) {
+  const contentQuestions = normalizeArray(normalizeObject(exercise?.content_json).questions);
+  const contentById = new Map(
+    contentQuestions.map((question, index) => [
+      String(question?.id || `q_${index + 1}`).trim(),
+      question,
+    ])
+  );
+
+  const snapshot = normalizeObject(answerSnapshot);
+  const snapshotQuestions = normalizeArray(snapshot.questions);
+  const totalRows = Math.max(snapshotQuestions.length, contentQuestions.length);
+  if (!totalRows) return [];
+
+  return Array.from({ length: totalRows }).map((_, index) => {
+    const snapshotQuestion = normalizeObject(snapshotQuestions[index]);
+    const fallbackQuestion = normalizeObject(contentQuestions[index]);
+    const questionId = String(
+      snapshotQuestion.id || fallbackQuestion.id || `q_${index + 1}`
+    ).trim();
+    const sourceQuestion = normalizeObject(contentById.get(questionId) || fallbackQuestion);
+    const prompt = stripRichTextTags(snapshotQuestion.prompt || sourceQuestion.prompt || "") || `Pregunta ${index + 1}`;
+    const selectedText = String(snapshotQuestion.selectedText || "").trim();
+    const correctText = String(
+      snapshotQuestion.correctText || buildQuestionCorrectText(sourceQuestion, index)
+    ).trim();
+    const writtenAnswerMode = normalizeWrittenAnswerMode(
+      snapshotQuestion.writtenAnswerMode ??
+      sourceQuestion.written_answer_mode ??
+      sourceQuestion.writtenAnswerMode
+    );
+    const isBlankInput = String(sourceQuestion?.type || "").trim().toLowerCase() === "written" &&
+      writtenAnswerMode === WRITTEN_ANSWER_MODES.BLANK_INPUT;
+    const promptSegments = isBlankInput
+      ? splitClozeSentenceSegments(prompt, ["blank_1"]).segments
+      : [];
+    const explanation = String(
+      sourceQuestion.explanation ?? sourceQuestion.explanation_richtext ?? ""
+    ).trim();
+    return {
+      id: questionId || `q_${index + 1}`,
+      label: `${index + 1}. ${prompt}`,
+      selectedText: selectedText || "[no answer]",
+      isCorrect: Boolean(snapshotQuestion.isCorrect),
+      correctText: correctText || "-",
+      isBlankInput,
+      promptSegments,
+      explanation,
+    };
+  });
+}
+
+function computeSnapshotPartialScore(answerSnapshot, weight) {
+  const snapshot = normalizeObject(answerSnapshot);
+  if (snapshot.type === "question_set") {
+    const questions = normalizeArray(snapshot.questions);
+    if (!questions.length) return 0;
+    const correctCount = questions.filter((question) => Boolean(question?.isCorrect)).length;
+    return round2((Number(weight) || 0) * (correctCount / questions.length));
+  }
+  return null;
 }
 
 function computeExerciseWeight(totalExercises, exerciseIndex) {
@@ -545,6 +687,101 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
   const remainingRestarts = Math.max(0, LESSON_QUIZ_MAX_RESTARTS - repeatCount);
   const canRepeat = remainingRestarts > 0;
   const repeatLimitWarning = searchParams?.repeat_limit === "1";
+  const detailEntries = [];
+
+  published.forEach((exercise, idx) => {
+    const exerciseId = String(exercise?.id || "").trim();
+    const progress = progressByExercise.get(exerciseId) || null;
+    const hasResult = progress != null;
+    const exerciseType = String(exercise?.type || "").trim().toLowerCase();
+    const typeLabel = normalizeExerciseTypeLabel(exercise.type);
+    const weight = computeExerciseWeightFromPoints(totalExercises, idx, exercisePointValues);
+    const finalStatus = hasResult
+      ? String(progress.final_status || (progress.is_correct ? "passed" : "failed")).toLowerCase()
+      : null;
+    const fallbackPartialScore = hasResult ? computeSnapshotPartialScore(progress?.answer_snapshot, weight) : null;
+    const awarded = hasResult
+      ? round2(
+          progress.score_awarded != null
+            ? progress.score_awarded
+            : fallbackPartialScore != null
+              ? fallbackPartialScore
+              : finalStatus === "passed"
+                ? weight
+                : 0
+        )
+      : null;
+    const isPassed = finalStatus === "passed";
+
+    if (exerciseType === "reading_exercise" || exerciseType === "audio_match") {
+      const questionRows = buildQuestionSetBreakdownRows(exercise, progress?.answer_snapshot);
+      if (questionRows.length) {
+        const baseQuestionWeight = round2(weight / questionRows.length);
+        questionRows.forEach((questionRow, questionIndex) => {
+          const questionWeight = questionIndex < questionRows.length - 1
+            ? baseQuestionWeight
+            : round2(weight - (baseQuestionWeight * (questionRows.length - 1)));
+          detailEntries.push({
+            key: `exercise-${idx}-${exerciseId || "item"}-${exerciseType}-q-${questionIndex}-${questionRow.id || "q"}`,
+            kind: "question_set_item",
+            hasResult,
+            typeLabel,
+            weight: questionWeight,
+            awarded: questionRow.isCorrect ? questionWeight : 0,
+            isPassed: questionRow.isCorrect,
+            userResponseRows: [{
+              label: questionRow.label,
+              value: questionRow.selectedText,
+              isCorrect: questionRow.isCorrect,
+              isBlankInput: questionRow.isBlankInput,
+              promptSegments: questionRow.promptSegments,
+            }],
+            answerLines: [questionRow.correctText],
+            explanationLines: questionRow.explanation ? [questionRow.explanation] : [],
+          });
+        });
+        return;
+      }
+    }
+
+    const clozeReview = exerciseType === "cloze"
+      ? buildClozeBreakdownData(exercise, progress?.answer_snapshot)
+      : null;
+    const answerLines = exerciseType === "cloze"
+      ? normalizeArray(clozeReview?.correctAnswers)
+      : buildCorrectAnswerLines(exercise);
+    const explanationLines = buildExerciseExplanationLines(exercise, clozeReview);
+    const userResponseRows = exerciseType === "cloze"
+      ? []
+      : buildUserResponseRows(exercise, progress?.answer_snapshot, isPassed);
+    const questionExplanationRows =
+      exerciseType === "audio_match" || exerciseType === "reading_exercise"
+        ? userResponseRows
+          .filter((row) => !row.isCorrect)
+          .map((row, rowIndex) => ({
+            key: row.questionId || `${exerciseId}-qexp-${rowIndex}`,
+            label: row.label,
+            text: String(row.questionExplanation || "").trim(),
+          }))
+          .filter((row) => row.text)
+        : [];
+
+    detailEntries.push({
+      key: `exercise-${idx}-${exerciseId || "item"}`,
+      kind: "exercise",
+      hasResult,
+      typeLabel,
+      weight,
+      awarded,
+      isPassed,
+      clozeReview,
+      userResponseRows,
+      answerLines,
+      explanationLines,
+      questionExplanationRows,
+    });
+  });
+
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-4 py-8 text-foreground sm:px-6 sm:py-10">
       <div className="pointer-events-none absolute inset-0">
@@ -640,39 +877,22 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
             Revisa lo que respondiste, identifica en que fallaste y compara con las respuestas correctas.
           </p>
           <div className="mt-4 space-y-3">
-            {published.map((exercise, idx) => {
-              const progress = progressByExercise.get(String(exercise.id || "").trim()) || null;
-              const hasResult = progress != null;
-              const weight = computeExerciseWeightFromPoints(totalExercises, idx, exercisePointValues);
-              const finalStatus = hasResult
-                ? String(progress.final_status || (progress.is_correct ? "passed" : "failed")).toLowerCase()
-                : null;
-              const awarded = hasResult
-                ? round2(
-                    progress.score_awarded != null
-                      ? progress.score_awarded
-                      : finalStatus === "passed"
-                      ? weight
-                      : 0
-                  )
-                : null;
-              const isPassed = finalStatus === "passed";
-              const exerciseType = String(exercise?.type || "").trim().toLowerCase();
-              const clozeReview = exerciseType === "cloze"
-                ? buildClozeBreakdownData(exercise, progress?.answer_snapshot)
-                : null;
-              const answerLines = exerciseType === "cloze"
-                ? normalizeArray(clozeReview?.correctAnswers)
-                : buildCorrectAnswerLines(exercise);
-              const explanationLines = buildExerciseExplanationLines(exercise, clozeReview);
-              const userResponseRows = exerciseType === "cloze"
-                ? []
-                : buildUserResponseRows(exercise, progress?.answer_snapshot, isPassed);
-              const typeLabel = normalizeExerciseTypeLabel(exercise.type);
+            {detailEntries.map((entry, idx) => {
+              const hasResult = Boolean(entry?.hasResult);
+              const isPassed = Boolean(entry?.isPassed);
+              const awarded = entry?.awarded;
+              const weight = entry?.weight;
+              const typeLabel = String(entry?.typeLabel || "Ejercicio");
+              const exerciseType = String(entry?.kind === "exercise" && entry?.clozeReview ? "cloze" : "").trim().toLowerCase();
+              const clozeReview = entry?.kind === "exercise" ? entry?.clozeReview || null : null;
+              const answerLines = normalizeArray(entry?.answerLines);
+              const explanationLines = normalizeArray(entry?.explanationLines);
+              const userResponseRows = normalizeArray(entry?.userResponseRows);
+              const questionExplanationRows = normalizeArray(entry?.questionExplanationRows);
 
               return (
                 <article
-                  key={exercise.id}
+                  key={`${entry.key}-${idx}`}
                   className={`rounded-2xl border p-4 sm:p-5 ${
                     hasResult
                       ? isPassed
@@ -701,15 +921,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                         {awarded != null ? `${awarded}/${weight}` : `0/${weight}`}
                       </span>
                       {hasResult ? (
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                            isPassed
-                              ? "bg-success/20 text-success"
-                              : "bg-danger/20 text-danger"
-                          }`}
-                        >
-                          {isPassed ? "Correcto" : "Incorrecto"}
-                        </span>
+                        <StatusMark isCorrect={isPassed} />
                       ) : (
                         <span className="rounded-full bg-surface px-3 py-1 text-xs font-semibold text-muted">
                           Sin data
@@ -723,7 +935,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                       <div className="text-base font-semibold text-foreground whitespace-pre-wrap leading-8 sm:text-lg">
                         {clozeReview.segments.map((segment, segmentIndex) => {
                           if (segment.kind !== "blank") {
-                            return <span key={`${exercise.id}-segment-text-${segmentIndex}`}>{segment.value}</span>;
+                            return <span key={`${entry.key}-segment-text-${segmentIndex}`}>{segment.value}</span>;
                           }
                           const key = String(segment.key || "").toLowerCase();
                           const row = clozeReview.reviewByKey.get(key) || {
@@ -731,7 +943,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                             isCorrect: false,
                           };
                           return (
-                            <span key={`${exercise.id}-segment-blank-${segmentIndex}`} className="mx-1 my-1 inline-flex items-center gap-1 align-middle">
+                            <span key={`${entry.key}-segment-blank-${segmentIndex}`} className="mx-1 my-1 inline-flex items-center gap-1 align-middle">
                               <span
                                 className={`inline-flex min-h-9 min-w-24 items-center justify-center border px-2 py-1 text-xs font-semibold ${
                                   row.isCorrect
@@ -741,15 +953,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                               >
                                 {row.selectedOrFallback}
                               </span>
-                              <span
-                                className={`inline-flex h-5 w-5 items-center justify-center text-sm font-bold ${
-                                  row.isCorrect ? "text-success" : "text-danger"
-                                }`}
-                                aria-label={row.isCorrect ? "Correcto" : "Incorrecto"}
-                                title={row.isCorrect ? "Correcto" : "Incorrecto"}
-                              >
-                                {row.isCorrect ? "✓" : "✕"}
-                              </span>
+                              <StatusMark isCorrect={row.isCorrect} />
                             </span>
                           );
                         })}
@@ -757,19 +961,36 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                     ) : (
                       <div className="space-y-1.5">
                         {userResponseRows.map((row, rowIndex) => (
-                          <p key={`${exercise.id}-user-row-${rowIndex}`} className="flex flex-wrap items-center gap-2 text-base text-foreground sm:text-lg">
-                            <span className="font-semibold text-muted">{row.label}:</span>
-                            <span>{row.value || "[no answer]"}</span>
-                            <span
-                              className={`inline-flex h-5 w-5 items-center justify-center text-sm font-bold ${
-                                row.isCorrect ? "text-success" : "text-danger"
-                              }`}
-                              aria-label={row.isCorrect ? "Correcto" : "Incorrecto"}
-                              title={row.isCorrect ? "Correcto" : "Incorrecto"}
-                            >
-                              {row.isCorrect ? "✓" : "✕"}
-                            </span>
-                          </p>
+                          row.isBlankInput ? (
+                            <div key={`${entry.key}-user-row-${rowIndex}`} className="flex flex-wrap items-start gap-2 text-base text-foreground sm:text-lg">
+                              <span className="font-semibold text-muted">{row.label}:</span>
+                              <span className="whitespace-pre-wrap leading-8">
+                                {normalizeArray(row.promptSegments).map((segment, segmentIndex) => (
+                                  segment.kind === "blank" ? (
+                                    <span
+                                      key={`${entry.key}-blank-segment-${rowIndex}-${segmentIndex}`}
+                                      className={`mx-1 inline-flex min-h-9 min-w-24 items-center justify-center border px-2 py-1 text-xs font-semibold align-middle ${
+                                        row.isCorrect
+                                          ? "border-success/45 bg-success/10 text-success"
+                                          : "border-danger/45 bg-danger/10 text-danger"
+                                      }`}
+                                    >
+                                      {row.value || "[no answer]"}
+                                    </span>
+                                  ) : (
+                                    <span key={`${entry.key}-text-segment-${rowIndex}-${segmentIndex}`}>{segment.value}</span>
+                                  )
+                                ))}
+                              </span>
+                              <StatusMark isCorrect={row.isCorrect} />
+                            </div>
+                          ) : (
+                            <p key={`${entry.key}-user-row-${rowIndex}`} className="flex flex-wrap items-center gap-2 text-base text-foreground sm:text-lg">
+                              <span className="font-semibold text-muted">{row.label}:</span>
+                              <span>{row.value || "[no answer]"}</span>
+                              <StatusMark isCorrect={row.isCorrect} />
+                            </p>
+                          )
                         ))}
                       </div>
                     )}
@@ -783,8 +1004,18 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                     {explanationLines.length ? (
                       <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground">
                         {explanationLines.map((line, lineIndex) => (
-                          <li key={`${exercise.id}-explanation-${lineIndex}`}>
-                            {renderRichMarkdownFragments(line, `${exercise.id}-explanation-${lineIndex}`)}
+                          <li key={`${entry.key}-explanation-${lineIndex}`}>
+                            {renderRichTextFragments(line, `${entry.key}-explanation-${lineIndex}`)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {questionExplanationRows.length ? (
+                      <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground">
+                        {questionExplanationRows.map((row) => (
+                          <li key={`${entry.key}-question-explanation-${row.key}`}>
+                            <span className="font-semibold text-muted">{row.label}: </span>
+                            {renderRichTextFragments(row.text, `${entry.key}-question-explanation-${row.key}`)}
                           </li>
                         ))}
                       </ul>
@@ -793,7 +1024,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                 </article>
               );
             })}
-            {!published.length ? (
+            {!detailEntries.length ? (
               <p className="text-sm text-muted">Test completado.</p>
             ) : null}
           </div>
