@@ -12,7 +12,7 @@ import {
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
-import { extractLessonIdFromQuizUrl, loadLessonQuizAssignments } from "@/lib/lesson-quiz-assignments";
+import { extractLessonIdFromQuizUrl, loadLessonQuizAssignments, parseLessonMarker } from "@/lib/lesson-quiz-assignments";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { restartLessonQuizAttempt, startLessonQuizAttempt } from "./actions";
 
@@ -41,6 +41,96 @@ function parseDateMs(value) {
   const date = new Date(value || "");
   if (Number.isNaN(date.getTime())) return Number.NaN;
   return date.getTime();
+}
+
+function normalizeMonthKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?/);
+  if (match?.[1] && match?.[2]) return `${match[1]}-${match[2]}`;
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getUTCFullYear();
+  const month = parsed.getUTCMonth() + 1;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+}
+
+function buildMonthDeadlineDate(monthKey) {
+  const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return "";
+  const endDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`;
+}
+
+function formatDeadlineLabel(deadlineAt) {
+  const date = new Date(deadlineAt || "");
+  if (Number.isNaN(date.getTime())) return "";
+  const dateLabel = new Intl.DateTimeFormat("es-PE", {
+    day: "2-digit",
+    month: "long",
+    timeZone: "America/Lima",
+  }).format(date);
+  const timeLabel = new Intl.DateTimeFormat("es-PE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Lima",
+  }).format(date);
+  return `${dateLabel} a las ${timeLabel}`;
+}
+
+async function resolveLessonQuizDeadline(supabase, lesson, profile) {
+  let monthKey = "";
+  const marker = parseLessonMarker(lesson?.description);
+  const profileCommissionId = String(profile?.commission_id || "").trim();
+
+  if (marker?.kind === "commission" && marker?.containerId) {
+    const { data: session } = await supabase
+      .from("course_sessions")
+      .select("id, commission_id, cycle_month, session_date")
+      .eq("id", marker.containerId)
+      .maybeSingle();
+    monthKey =
+      normalizeMonthKey(session?.cycle_month) ||
+      normalizeMonthKey(session?.session_date);
+
+    const sessionCommissionId = String(session?.commission_id || "").trim();
+    if (!monthKey && sessionCommissionId) {
+      const { data: commission } = await supabase
+        .from("course_commissions")
+        .select("id, start_month, start_date")
+        .eq("id", sessionCommissionId)
+        .maybeSingle();
+      monthKey =
+        normalizeMonthKey(commission?.start_month) ||
+        normalizeMonthKey(commission?.start_date);
+    }
+  }
+
+  if (!monthKey && profileCommissionId) {
+    const { data: profileCommission } = await supabase
+      .from("course_commissions")
+      .select("id, start_month, start_date")
+      .eq("id", profileCommissionId)
+      .maybeSingle();
+    monthKey =
+      normalizeMonthKey(profileCommission?.start_month) ||
+      normalizeMonthKey(profileCommission?.start_date);
+  }
+
+  const deadlineDate = buildMonthDeadlineDate(monthKey);
+  if (!deadlineDate) return null;
+  const deadlineAt = `${deadlineDate}T23:59:59-05:00`;
+  return {
+    deadlineAt,
+    deadlineDate,
+    deadlineLabel: formatDeadlineLabel(deadlineAt),
+    deadlinePassed: new Date().getTime() > new Date(deadlineAt).getTime(),
+  };
 }
 
 function formatSessionSubtitle(session) {
@@ -381,6 +471,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
   const fallbackNumber = Math.max(1, toInt(lesson?.ordering, 1));
   const testTitle = String(quiz?.title || lesson?.title || "").trim() || "Test de clase";
   const testNumber = Math.max(1, toInt(quiz?.testNumber, fallbackNumber));
+  const deadlineInfo = await resolveLessonQuizDeadline(supabase, lesson, profile);
 
   const currentAttemptResult = await loadAttemptRow(supabase, profile.id, lesson.id);
   let trackingAvailable = currentAttemptResult.trackingAvailable;
@@ -460,7 +551,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
       </div>
       <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-5">
         <header className="flex items-start justify-between gap-3">
-          <div className="space-y-2">
+          <div>
             <Link
               href="/app/curso"
               className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
@@ -468,10 +559,6 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
               <ArrowLeftIcon />
               Volver
             </Link>
-            <div>
-              <h1 className="text-2xl font-semibold sm:text-3xl">{`Test ${testNumber} - ${testTitle}`}</h1>
-              <p className="text-sm text-muted">Evalua lo aprendido en esta clase.</p>
-            </div>
           </div>
           {lesson.level ? (
             <span className="rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold text-muted">
@@ -491,7 +578,7 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
           </div>
         ) : null}
 
-        <article className="quiz-hero-card-enter rounded-[2rem] border border-border bg-surface p-5 shadow-2xl shadow-black/20 sm:p-7">
+        <article className="quiz-hero-card-enter rounded-xl border border-border bg-surface p-5 shadow-2xl shadow-black/20 sm:p-7">
           <div className="space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -500,9 +587,11 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
                 <p className="mt-1 text-sm text-muted">Evalua lo aprendido en esta clase.</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-foreground">
-                  {totalExercises} ejercicios
-                </span>
+                {deadlineInfo?.deadlineLabel ? (
+                  <span className="rounded-full border border-primary/35 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                    Hasta el {deadlineInfo.deadlineLabel}
+                  </span>
+                ) : null}
                 {estimatedMinutes != null ? (
                   <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-foreground">
                     ~{estimatedMinutes} min

@@ -3,11 +3,13 @@ import { notFound, redirect } from "next/navigation";
 import RestartLessonQuizButton from "@/components/restart-lesson-quiz-button";
 import { splitClozeSentenceSegments, tokenizeClozeSentence } from "@/lib/cloze-blanks";
 import { toRichTextHtml } from "@/lib/rich-text";
+import { getLimaTodayISO } from "@/lib/commissions";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
   LESSON_QUIZ_MAX_RESTARTS,
   LESSON_QUIZ_MAX_TOTAL_ATTEMPTS,
   LESSON_QUIZ_STATUS,
+  canShowCorrectionDetails,
   formatDurationSeconds,
   getUsedQuizAttempts,
   isMissingLessonQuizAttemptScoreColumnError,
@@ -15,7 +17,7 @@ import {
   isMissingLessonQuizTableError,
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
-import { loadLessonQuizAssignments } from "@/lib/lesson-quiz-assignments";
+import { loadLessonQuizAssignments, parseLessonMarker } from "@/lib/lesson-quiz-assignments";
 import { restartLessonQuizAttempt } from "../actions";
 
 function ArrowLeftIcon() {
@@ -74,6 +76,14 @@ function stripRichTextTags(value) {
   return String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[.,!?;:]/g, "")
+    .replace(/\s+/g, " ");
+}
+
 function toInt(value, fallback = 0) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -82,6 +92,123 @@ function toInt(value, fallback = 0) {
 function toNumber(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeMonthKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?/);
+  if (match?.[1] && match?.[2]) return `${match[1]}-${match[2]}`;
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getUTCFullYear();
+  const month = parsed.getUTCMonth() + 1;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+}
+
+function buildMonthDeadlineDate(monthKey) {
+  const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return "";
+  const endDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`;
+}
+
+async function resolveQuizDeadlineContext(supabase, lesson, profile = null) {
+  const marker = parseLessonMarker(lesson?.description);
+  let monthKey = "";
+  let commissionId = "";
+
+  if (marker?.kind === "commission" && marker?.containerId) {
+    const { data: session } = await supabase
+      .from("course_sessions")
+      .select("id, commission_id, cycle_month, session_date")
+      .eq("id", marker.containerId)
+      .maybeSingle();
+
+    monthKey =
+      normalizeMonthKey(session?.cycle_month) ||
+      normalizeMonthKey(session?.session_date);
+    commissionId = String(session?.commission_id || "").trim();
+  }
+
+  if (!monthKey && commissionId) {
+    const { data: commission } = await supabase
+      .from("course_commissions")
+      .select("id, start_month, start_date")
+      .eq("id", commissionId)
+      .maybeSingle();
+    monthKey =
+      normalizeMonthKey(commission?.start_month) ||
+      normalizeMonthKey(commission?.start_date);
+  }
+
+  if (!monthKey) {
+    monthKey =
+      normalizeMonthKey(profile?.commission?.start_month) ||
+      normalizeMonthKey(profile?.commission?.start_date);
+  }
+
+  if (!monthKey) {
+    return {
+      deadline_at: null,
+      deadlinePassed: false,
+    };
+  }
+
+  const deadlineDate = buildMonthDeadlineDate(monthKey);
+  if (!deadlineDate) {
+    return {
+      deadline_at: null,
+      deadlinePassed: false,
+    };
+  }
+
+  const deadlineAt = `${deadlineDate}T23:59:59-05:00`;
+  const deadlinePassed = getLimaTodayISO() > deadlineDate;
+  return {
+    deadline_at: deadlineAt,
+    deadlinePassed,
+  };
+}
+
+function resolveCorrectionStateFromEntry(entry) {
+  const clozeReview = entry?.clozeReview || null;
+  const userResponseRows = normalizeArray(entry?.userResponseRows);
+
+  if (clozeReview) {
+    const keys = normalizeArray(clozeReview?.orderedKeys);
+    const total = keys.length;
+    const correctCount = keys.reduce((count, key) => {
+      const row = clozeReview.reviewByKey?.get(String(key || "").toLowerCase());
+      return count + (row?.isCorrect ? 1 : 0);
+    }, 0);
+    return {
+      isFullyCorrect: total > 0 && correctCount === total,
+      isPartiallyIncorrect: correctCount > 0 && correctCount < total,
+      isIncorrect: total > 0 && correctCount === 0,
+    };
+  }
+
+  if (userResponseRows.length) {
+    const flags = userResponseRows.map((row) => Boolean(row?.isCorrect));
+    const total = flags.length;
+    const correctCount = flags.filter(Boolean).length;
+    return {
+      isFullyCorrect: total > 0 && correctCount === total,
+      isPartiallyIncorrect: correctCount > 0 && correctCount < total,
+      isIncorrect: total > 0 && correctCount === 0,
+    };
+  }
+
+  return {
+    isFullyCorrect: Boolean(entry?.isPassed),
+    isPartiallyIncorrect: false,
+    isIncorrect: !Boolean(entry?.isPassed),
+  };
 }
 
 function round2(value) {
@@ -126,6 +253,54 @@ function getWrittenExampleAnswer(question = {}) {
   const accepted = normalizeArray(question?.accepted_answers);
   const firstAccepted = String(accepted[0] || "").trim();
   return firstAccepted || "";
+}
+
+function createQuestionSourceResolver(contentQuestions = []) {
+  const questions = normalizeArray(contentQuestions).map((question) => normalizeObject(question));
+  const byId = new Map();
+  questions.forEach((question, index) => {
+    const questionId = String(question?.id || `q_${index + 1}`).trim();
+    if (!questionId) return;
+    const bucket = byId.get(questionId) || [];
+    bucket.push(question);
+    byId.set(questionId, bucket);
+  });
+
+  const usageById = new Map();
+  return function resolveQuestion(questionId, index) {
+    const fallbackQuestion = normalizeObject(questions[index]);
+    const fallbackId = String(fallbackQuestion?.id || `q_${index + 1}`).trim();
+    const normalizedId = String(questionId || "").trim();
+
+    if (!normalizedId) return fallbackQuestion;
+    if (fallbackId && normalizedId === fallbackId) return fallbackQuestion;
+
+    const bucket = byId.get(normalizedId);
+    if (!bucket?.length) return fallbackQuestion;
+
+    const currentUsage = usageById.get(normalizedId) || 0;
+    usageById.set(normalizedId, currentUsage + 1);
+    return normalizeObject(bucket[Math.min(currentUsage, bucket.length - 1)] || fallbackQuestion);
+  };
+}
+
+function resolveImageMatchImageUrl(exercise) {
+  const content = normalizeObject(exercise?.content_json);
+  const direct = String(content.image_url || content.imageUrl || "").trim();
+  if (direct) return direct;
+
+  const options = normalizeArray(content.options);
+  const correctIndex = Math.max(0, Math.min(options.length - 1, toInt(content.correct_index, 0)));
+  const correctOption = normalizeObject(options[correctIndex]);
+  const correctOptionImage = String(correctOption.image_url || correctOption.imageUrl || "").trim();
+  if (correctOptionImage) return correctOptionImage;
+
+  const fallbackOption = options.find((option) => {
+    const optionObj = normalizeObject(option);
+    return Boolean(String(optionObj.image_url || optionObj.imageUrl || "").trim());
+  });
+  const fallbackImage = String(normalizeObject(fallbackOption).image_url || normalizeObject(fallbackOption).imageUrl || "").trim();
+  return fallbackImage;
 }
 
 function buildClozeBreakdownData(exercise, answerSnapshot) {
@@ -343,10 +518,16 @@ function buildUserResponseRows(exercise, answerSnapshot, fallbackIsCorrect = fal
 
   if (type === "scramble" && snapshot.type === "scramble") {
     const selectedWords = normalizeArray(snapshot.selectedWords).map((word) => String(word || "").trim()).filter(Boolean);
+    const correctWords = normalizeArray(snapshot.correctWords).map((word) => String(word || "").trim());
+    const chips = selectedWords.map((word, index) => ({
+      text: word,
+      isCorrectPosition: normalizeText(word) === normalizeText(correctWords[index] || ""),
+    }));
     return [{
       label: "Respuesta",
       value: selectedWords.length ? selectedWords.join(" ") : "[no answer]",
       isCorrect: Boolean(snapshot.isCorrect),
+      scrambleWords: chips,
     }];
   }
 
@@ -372,28 +553,26 @@ function buildUserResponseRows(exercise, answerSnapshot, fallbackIsCorrect = fal
 
   if ((type === "audio_match" || type === "reading_exercise") && snapshot.type === "question_set") {
     const contentQuestions = normalizeArray(normalizeObject(exercise?.content_json).questions);
-    const questionById = new Map(
-      contentQuestions.map((question, index) => [
-        String(question?.id || `q_${index + 1}`).trim(),
-        question,
-      ])
-    );
+    const resolveQuestionSource = createQuestionSourceResolver(contentQuestions);
     const questions = normalizeArray(snapshot.questions);
     if (!questions.length) {
       return [{ label: "Respuesta", value: "[no answer]", isCorrect: false }];
     }
     return questions.map((question, index) => {
       const questionId = String(question?.id || `q_${index + 1}`).trim();
-      const sourceQuestion = questionById.get(questionId) || contentQuestions[index] || {};
-      const promptLabel = stripRichTextTags(question?.prompt || "") || `Pregunta ${index + 1}`;
+      const sourceQuestion = resolveQuestionSource(questionId, index);
+      const promptLabel = stripRichTextTags(question?.prompt || sourceQuestion?.prompt || "") || `Pregunta ${index + 1}`;
       const writtenAnswerMode = normalizeWrittenAnswerMode(
         question?.writtenAnswerMode ?? sourceQuestion?.written_answer_mode ?? sourceQuestion?.writtenAnswerMode
       );
       const promptSegments = writtenAnswerMode === WRITTEN_ANSWER_MODES.BLANK_INPUT
         ? splitClozeSentenceSegments(promptLabel, ["blank_1"]).segments
         : [];
+      const rowLabel = writtenAnswerMode === WRITTEN_ANSWER_MODES.BLANK_INPUT
+        ? `${index + 1}.`
+        : `${index + 1}. ${promptLabel}`;
       return {
-        label: `${index + 1}. ${promptLabel}`,
+        label: rowLabel,
         value: String(question?.selectedText || "").trim() || "[no answer]",
         isCorrect: Boolean(question?.isCorrect),
         questionId,
@@ -424,12 +603,7 @@ function buildQuestionCorrectText(question = {}, fallbackIndex = 0) {
 
 function buildQuestionSetBreakdownRows(exercise, answerSnapshot) {
   const contentQuestions = normalizeArray(normalizeObject(exercise?.content_json).questions);
-  const contentById = new Map(
-    contentQuestions.map((question, index) => [
-      String(question?.id || `q_${index + 1}`).trim(),
-      question,
-    ])
-  );
+  const resolveQuestionSource = createQuestionSourceResolver(contentQuestions);
 
   const snapshot = normalizeObject(answerSnapshot);
   const snapshotQuestions = normalizeArray(snapshot.questions);
@@ -442,7 +616,7 @@ function buildQuestionSetBreakdownRows(exercise, answerSnapshot) {
     const questionId = String(
       snapshotQuestion.id || fallbackQuestion.id || `q_${index + 1}`
     ).trim();
-    const sourceQuestion = normalizeObject(contentById.get(questionId) || fallbackQuestion);
+    const sourceQuestion = resolveQuestionSource(questionId, index);
     const prompt = stripRichTextTags(snapshotQuestion.prompt || sourceQuestion.prompt || "") || `Pregunta ${index + 1}`;
     const selectedText = String(snapshotQuestion.selectedText || "").trim();
     const correctText = String(
@@ -461,9 +635,10 @@ function buildQuestionSetBreakdownRows(exercise, answerSnapshot) {
     const explanation = String(
       sourceQuestion.explanation ?? sourceQuestion.explanation_richtext ?? ""
     ).trim();
+    const label = isBlankInput ? `${index + 1}.` : `${index + 1}. ${prompt}`;
     return {
       id: questionId || `q_${index + 1}`,
-      label: `${index + 1}. ${prompt}`,
+      label,
       selectedText: selectedText || "[no answer]",
       isCorrect: Boolean(snapshotQuestion.isCorrect),
       correctText: correctText || "-",
@@ -595,7 +770,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, role")
+    .select("id, role, commission_id, commission:course_commissions(id, start_month, start_date)")
     .eq("id", user.id)
     .maybeSingle();
   if (!profile?.id || profile.role !== "student") {
@@ -685,6 +860,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
   });
   const remainingAttempts = Math.max(0, LESSON_QUIZ_MAX_TOTAL_ATTEMPTS - attemptsUsed);
   const remainingRestarts = Math.max(0, LESSON_QUIZ_MAX_RESTARTS - repeatCount);
+  const deadlineContext = await resolveQuizDeadlineContext(supabase, lesson, profile);
   const canRepeat = remainingRestarts > 0;
   const repeatLimitWarning = searchParams?.repeat_limit === "1";
   const detailEntries = [];
@@ -779,6 +955,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
       answerLines,
       explanationLines,
       questionExplanationRows,
+      imageUrl: exerciseType === "image_match" ? resolveImageMatchImageUrl(exercise) : "",
     });
   });
 
@@ -889,6 +1066,17 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
               const explanationLines = normalizeArray(entry?.explanationLines);
               const userResponseRows = normalizeArray(entry?.userResponseRows);
               const questionExplanationRows = normalizeArray(entry?.questionExplanationRows);
+              const imageUrl = String(entry?.imageUrl || "").trim();
+              const correctionState = resolveCorrectionStateFromEntry({
+                ...entry,
+                userResponseRows,
+                clozeReview,
+              });
+              const showCorrectionDetails = canShowCorrectionDetails({
+                ...correctionState,
+                attemptsRemaining: remainingAttempts,
+                deadlinePassed: Boolean(deadlineContext?.deadlinePassed),
+              });
 
               return (
                 <article
@@ -931,6 +1119,16 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                   </div>
 
                   <div className="mt-4 space-y-2">
+                    {imageUrl ? (
+                      <div className="inline-flex max-w-full overflow-hidden rounded-lg border border-border">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={imageUrl}
+                          alt="Imagen del ejercicio"
+                          className="block h-auto max-h-40 w-auto max-w-full object-left object-contain"
+                        />
+                      </div>
+                    ) : null}
                     {exerciseType === "cloze" && clozeReview ? (
                       <div className="text-base font-semibold text-foreground whitespace-pre-wrap leading-8 sm:text-lg">
                         {clozeReview.segments.map((segment, segmentIndex) => {
@@ -963,7 +1161,7 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                         {userResponseRows.map((row, rowIndex) => (
                           row.isBlankInput ? (
                             <div key={`${entry.key}-user-row-${rowIndex}`} className="flex flex-wrap items-start gap-2 text-base text-foreground sm:text-lg">
-                              <span className="font-semibold text-muted">{row.label}:</span>
+                              <span className="font-semibold text-muted">{row.label}</span>
                               <span className="whitespace-pre-wrap leading-8">
                                 {normalizeArray(row.promptSegments).map((segment, segmentIndex) => (
                                   segment.kind === "blank" ? (
@@ -984,6 +1182,25 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                               </span>
                               <StatusMark isCorrect={row.isCorrect} />
                             </div>
+                          ) : Array.isArray(row.scrambleWords) && row.scrambleWords.length ? (
+                            <div key={`${entry.key}-user-row-${rowIndex}`} className="flex flex-wrap items-center gap-2 text-base text-foreground sm:text-lg">
+                              <span className="font-semibold text-muted">{row.label}:</span>
+                              <span className="flex flex-wrap items-center gap-1.5">
+                                {row.scrambleWords.map((word, wordIndex) => (
+                                  <span
+                                    key={`${entry.key}-scramble-word-${rowIndex}-${wordIndex}`}
+                                    className={`inline-flex min-h-8 items-center justify-center border px-2 py-1 text-sm font-semibold ${
+                                      word.isCorrectPosition
+                                        ? "border-success/45 bg-success/10 text-success"
+                                        : "border-danger/45 bg-danger/10 text-danger"
+                                    }`}
+                                  >
+                                    {word.text}
+                                  </span>
+                                ))}
+                              </span>
+                              <StatusMark isCorrect={row.isCorrect} />
+                            </div>
                           ) : (
                             <p key={`${entry.key}-user-row-${rowIndex}`} className="flex flex-wrap items-center gap-2 text-base text-foreground sm:text-lg">
                               <span className="font-semibold text-muted">{row.label}:</span>
@@ -996,31 +1213,35 @@ export default async function LessonQuizResultsPage({ params: paramsPromise, sea
                     )}
                   </div>
 
-                  <div className="mt-4 rounded-none border border-border bg-surface px-3 py-3">
-                    <p className="text-xs font-semibold text-muted">
-                      <span className="uppercase tracking-wide">Correct answer(s): </span>
-                      <span className="text-foreground">{answerLines.length ? answerLines.join(" / ") : "-"}</span>
-                    </p>
-                    {explanationLines.length ? (
-                      <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground">
-                        {explanationLines.map((line, lineIndex) => (
-                          <li key={`${entry.key}-explanation-${lineIndex}`}>
-                            {renderRichTextFragments(line, `${entry.key}-explanation-${lineIndex}`)}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {questionExplanationRows.length ? (
-                      <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground">
-                        {questionExplanationRows.map((row) => (
-                          <li key={`${entry.key}-question-explanation-${row.key}`}>
-                            <span className="font-semibold text-muted">{row.label}: </span>
-                            {renderRichTextFragments(row.text, `${entry.key}-question-explanation-${row.key}`)}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </div>
+                  {showCorrectionDetails && (answerLines.length || explanationLines.length || questionExplanationRows.length) ? (
+                    <div className="mt-4 rounded-none border border-border bg-surface px-3 py-3">
+                      {showCorrectionDetails ? (
+                        <p className="text-xs font-semibold text-muted">
+                          <span className="uppercase tracking-wide">Correct answer(s): </span>
+                          <span className="text-foreground">{answerLines.length ? answerLines.join(" / ") : "-"}</span>
+                        </p>
+                      ) : null}
+                      {explanationLines.length ? (
+                        <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground">
+                          {explanationLines.map((line, lineIndex) => (
+                            <li key={`${entry.key}-explanation-${lineIndex}`}>
+                              {renderRichTextFragments(line, `${entry.key}-explanation-${lineIndex}`)}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {questionExplanationRows.length ? (
+                        <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground">
+                          {questionExplanationRows.map((row) => (
+                            <li key={`${entry.key}-question-explanation-${row.key}`}>
+                              <span className="font-semibold text-muted">{row.label}: </span>
+                              {renderRichTextFragments(row.text, `${entry.key}-question-explanation-${row.key}`)}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </article>
               );
             })}

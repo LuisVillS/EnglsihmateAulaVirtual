@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { startTransition, useActionState, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import AppModal from "@/components/app-modal";
 import {
   duplicateExerciseLibraryEntry,
@@ -23,6 +22,7 @@ const INITIAL_STATE = {
   message: null,
   error: null,
   created: 0,
+  savedAt: null,
 };
 
 function createLocalId() {
@@ -40,7 +40,7 @@ function normalizePoints(value, fallback = 10) {
 
 function createAssignmentDraft(row = {}) {
   return {
-    localId: createLocalId(),
+    localId: String(row?.localId || "").trim() || createLocalId(),
     itemId: String(row?.itemId || "").trim(),
     exerciseId: String(row?.exerciseId || row?.id || "").trim(),
     title: String(row?.title || "").trim(),
@@ -57,6 +57,97 @@ function createAssignmentDraft(row = {}) {
         : {},
     points: normalizePoints(row?.points ?? row?.exercisePoints, 10),
   };
+}
+
+function hydrateAssignmentDrafts(rows = [], previousAssignments = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const previousByItemId = new Map();
+  const previousExerciseQueues = new Map();
+
+  (Array.isArray(previousAssignments) ? previousAssignments : []).forEach((assignment) => {
+    const localId = String(assignment?.localId || "").trim();
+    if (!localId) return;
+
+    const itemId = String(assignment?.itemId || "").trim();
+    if (itemId && !previousByItemId.has(itemId)) {
+      previousByItemId.set(itemId, localId);
+    }
+
+    const exerciseId = String(assignment?.exerciseId || "").trim();
+    if (exerciseId) {
+      const queue = previousExerciseQueues.get(exerciseId) || [];
+      queue.push(localId);
+      previousExerciseQueues.set(exerciseId, queue);
+    }
+  });
+
+  return safeRows.map((row) => {
+    const itemId = String(row?.itemId || "").trim();
+    const exerciseId = String(row?.exerciseId || row?.id || "").trim();
+    let localId = "";
+
+    if (itemId && previousByItemId.has(itemId)) {
+      localId = previousByItemId.get(itemId) || "";
+    } else if (exerciseId) {
+      const queue = previousExerciseQueues.get(exerciseId) || [];
+      localId = queue.shift() || "";
+      previousExerciseQueues.set(exerciseId, queue);
+    }
+
+    return createAssignmentDraft({
+      ...row,
+      localId,
+    });
+  });
+}
+
+function applyPersistedAssignments(previousAssignments = [], persistedAssignments = []) {
+  const safePrevious = Array.isArray(previousAssignments) ? previousAssignments : [];
+  const safePersisted = [...(Array.isArray(persistedAssignments) ? persistedAssignments : [])]
+    .map((row) => ({
+      itemId: String(row?.itemId || "").trim(),
+      exerciseId: String(row?.exerciseId || "").trim(),
+      points: normalizePoints(row?.points, 10),
+      order: Number(row?.order || 0),
+    }))
+    .filter((row) => row.itemId && row.exerciseId)
+    .sort((left, right) => left.order - right.order);
+
+  if (!safePersisted.length) return safePrevious;
+
+  if (safePersisted.length === safePrevious.length) {
+    return safePrevious.map((assignment, index) => {
+      const persisted = safePersisted[index];
+      if (!persisted) return assignment;
+      return {
+        ...assignment,
+        itemId: persisted.itemId,
+        exerciseId: persisted.exerciseId,
+        points: normalizePoints(persisted.points, assignment.points),
+      };
+    });
+  }
+
+  const queuesByExerciseId = new Map();
+  safePersisted.forEach((row) => {
+    const queue = queuesByExerciseId.get(row.exerciseId) || [];
+    queue.push(row);
+    queuesByExerciseId.set(row.exerciseId, queue);
+  });
+
+  return safePrevious.map((assignment) => {
+    const exerciseId = String(assignment?.exerciseId || "").trim();
+    const queue = queuesByExerciseId.get(exerciseId) || [];
+    const persisted = queue.shift() || null;
+    queuesByExerciseId.set(exerciseId, queue);
+    if (!persisted) return assignment;
+    return {
+      ...assignment,
+      itemId: persisted.itemId,
+      exerciseId: persisted.exerciseId,
+      points: normalizePoints(persisted.points, assignment.points),
+    };
+  });
 }
 
 function moveArrayItem(list, fromIndex, toIndex) {
@@ -102,12 +193,11 @@ export default function SessionExerciseLibraryEditor({
   libraryCategories = [],
   libraryError = "",
 }) {
-  const router = useRouter();
   const submitAction = scope === "commission" ? saveCourseSessionExerciseBatch : saveTemplateSessionExerciseBatch;
   const [state, formAction, pending] = useActionState(submitAction, INITIAL_STATE);
   const [quizTitle, setQuizTitle] = useState(() => String(initialQuizTitle || "Prueba de clase").trim() || "Prueba de clase");
   const [assignments, setAssignments] = useState(() =>
-    Array.isArray(initialAssignments) ? initialAssignments.map((row) => createAssignmentDraft(row)) : []
+    hydrateAssignmentDrafts(initialAssignments, [])
   );
   const [clientNotice, setClientNotice] = useState("");
   const [clientError, setClientError] = useState("");
@@ -119,29 +209,49 @@ export default function SessionExerciseLibraryEditor({
   const [pickerSelection, setPickerSelection] = useState([]);
   const [pickerPreviewId, setPickerPreviewId] = useState("");
   const [busyKey, setBusyKey] = useState("");
+  const initialHydrationKeyRef = useRef("");
   const hydratedStateKeyRef = useRef("");
 
   useEffect(() => {
-    setQuizTitle(String(initialQuizTitle || "Prueba de clase").trim() || "Prueba de clase");
-    setAssignments(Array.isArray(initialAssignments) ? initialAssignments.map((row) => createAssignmentDraft(row)) : []);
+    const safeRows = Array.isArray(initialAssignments) ? initialAssignments : [];
+    const hydrationKey = JSON.stringify({
+      title: String(initialQuizTitle || "").trim(),
+      rows: safeRows.map((row) => ({
+        itemId: String(row?.itemId || "").trim(),
+        exerciseId: String(row?.exerciseId || row?.id || "").trim(),
+        points: normalizePoints(row?.points ?? row?.exercisePoints, 10),
+        order: Number(row?.exerciseOrder || row?.order || 0),
+      })),
+    });
+    if (initialHydrationKeyRef.current === hydrationKey) return;
+    initialHydrationKeyRef.current = hydrationKey;
+
+    startTransition(() => {
+      setQuizTitle(String(initialQuizTitle || "Prueba de clase").trim() || "Prueba de clase");
+      setAssignments((previous) => hydrateAssignmentDrafts(safeRows, previous));
+    });
   }, [initialAssignments, initialQuizTitle]);
 
   useEffect(() => {
     if (!state?.success) return;
     const hydrationKey = `${String(state?.message || "").trim()}|${Number(state?.created || 0)}|${Number(state?.updated || 0)}|${
-      Array.isArray(state?.assignments) ? state.assignments.length : -1
-    }`;
+      Array.isArray(state?.persistedAssignments) ? state.persistedAssignments.length : -1
+    }|${String(state?.savedAt || "")}`;
     if (hydratedStateKeyRef.current === hydrationKey) return;
     hydratedStateKeyRef.current = hydrationKey;
 
-    if (Array.isArray(state.assignments)) {
-      setAssignments(state.assignments.map((row) => createAssignmentDraft(row)));
-    }
-    if (state.quizTitle) {
-      setQuizTitle(String(state.quizTitle || "").trim() || "Prueba de clase");
-    }
-    router.refresh();
-  }, [router, state]);
+    startTransition(() => {
+      if (Array.isArray(state.persistedAssignments)) {
+        setAssignments((previous) => applyPersistedAssignments(previous, state.persistedAssignments));
+      } else if (Array.isArray(state.assignments)) {
+        setAssignments((previous) => hydrateAssignmentDrafts(state.assignments, previous));
+      }
+      if (state.quizTitle) {
+        setQuizTitle(String(state.quizTitle || "").trim() || "Prueba de clase");
+      }
+    });
+
+  }, [state]);
 
   const selectedExerciseIds = useMemo(
     () => new Set(assignments.map((assignment) => String(assignment.exerciseId || "").trim()).filter(Boolean)),

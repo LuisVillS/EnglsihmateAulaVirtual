@@ -218,6 +218,25 @@ function parseTimeToMinutes(value) {
   return hours * 60 + minutes;
 }
 
+function formatMinutesToTime(value) {
+  const totalMinutes = Number(value);
+  if (!Number.isFinite(totalMinutes)) return "";
+  const minutesInDay = 24 * 60;
+  const normalized = ((Math.round(totalMinutes) % minutesInDay) + minutesInDay) % minutesInDay;
+  const hours = Math.floor(normalized / 60)
+    .toString()
+    .padStart(2, "0");
+  const minutes = (normalized % 60).toString().padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function getClassDurationMinutesFromFrequency(frequency) {
+  const reference = getFrequencyReference(frequency);
+  const hours = Number(reference?.hoursPerClass || 0);
+  if (!Number.isFinite(hours) || hours <= 0) return 60;
+  return Math.max(1, Math.round(hours * 60));
+}
+
 function parseTimeWithSeconds(value) {
   if (!value) return null;
   const [hoursStr, minutesStr] = value.split(":");
@@ -306,7 +325,7 @@ function normalizeExerciseSkillTag(value, type) {
 function normalizeExerciseStatus(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (raw === "published" || raw === "archived" || raw === "deleted") return raw;
-  return "draft";
+  return "published";
 }
 
 function parseAdditionalSlidesJson(rawValue) {
@@ -668,75 +687,6 @@ function sortSavedExerciseAssignmentRows(rows = []) {
   });
 }
 
-async function loadSavedExerciseAssignments({
-  supabase,
-  tableName,
-  containerColumn,
-  containerId,
-}) {
-  try {
-    const { data: itemRows, error: itemsError } = await supabase
-      .from(tableName)
-      .select("id, exercise_id, exercise_points, exercise_order, created_at")
-      .eq(containerColumn, containerId)
-      .eq("type", "exercise");
-
-    if (itemsError) return [];
-
-    const orderedItems = sortSavedExerciseAssignmentRows(itemRows || []);
-    const exerciseIds = Array.from(
-      new Set(orderedItems.map((item) => String(item?.exercise_id || "").trim()).filter(Boolean))
-    );
-    if (!exerciseIds.length) return [];
-
-    const { data: exerciseRows, error: exercisesError } = await supabase
-      .from("exercises")
-      .select(`
-        id,
-        title,
-        prompt,
-        type,
-        status,
-        skill_tag,
-        cefr_level,
-        category_id,
-        content_json,
-        category:exercise_categories (
-          id,
-          name,
-          skill,
-          cefr_level
-        )
-      `)
-      .in("id", exerciseIds);
-
-    if (exercisesError) return [];
-
-    const exerciseById = new Map(
-      (exerciseRows || []).map((row) => {
-        const mapped = mapExerciseLibraryRow(row);
-        return [String(mapped.id || "").trim(), mapped];
-      })
-    );
-
-    return orderedItems
-      .map((item) => {
-        const exerciseId = String(item?.exercise_id || "").trim();
-        const exercise = exerciseById.get(exerciseId) || null;
-        if (!exercise?.id) return null;
-        return {
-          itemId: String(item?.id || "").trim(),
-          exerciseId: exercise.id,
-          points: normalizeExerciseItemPoints(item?.exercise_points, 10),
-          ...exercise,
-        };
-      })
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
 async function archiveReleasedExercises({ supabase, actorId, exerciseIds = [] }) {
   const releasedIds = Array.from(
     new Set((exerciseIds || []).map((value) => String(value || "").trim()).filter(Boolean))
@@ -1006,6 +956,23 @@ async function ensureTemplateSessionLessonId(supabase, { templateId, templateSes
   }
 
   return insertedLesson.id;
+}
+
+async function resolveTemplateIdFromTemplateSession(supabase, templateSessionId, fallbackTemplateId = null) {
+  const fallbackId = String(fallbackTemplateId || "").trim();
+  if (fallbackId) return fallbackId;
+
+  const safeTemplateSessionId = String(templateSessionId || "").trim();
+  if (!safeTemplateSessionId) return "";
+
+  const { data, error } = await supabase
+    .from("template_sessions")
+    .select("template_id")
+    .eq("id", safeTemplateSessionId)
+    .maybeSingle();
+
+  if (error) return "";
+  return String(data?.template_id || "").trim();
 }
 
 async function ensureCommissionExerciseUnitId(supabase, commissionId) {
@@ -1375,36 +1342,62 @@ async function ensureTemplateSessionSkeleton(supabase, templateId, frequency) {
   };
 }
 
-async function loadTemplateMaterialBySessionIndex(supabase, { courseLevel, frequency }) {
-  const normalizedFrequency = normalizeTemplateFrequency(frequency);
-  if (!courseLevel || !normalizedFrequency) {
-    return { templateFound: false, byMonthAndSession: new Map() };
+async function loadTemplateMaterialBySessionIndex(supabase, { templateId = null, courseLevel, frequency }) {
+  const safeTemplateId = String(templateId || "").trim();
+  const normalizedFrequencyInput = normalizeTemplateFrequency(frequency);
+
+  let template = null;
+  if (safeTemplateId) {
+    const { data: templateRow, error: templateError } = await supabase
+      .from("course_templates")
+      .select("id, course_level, frequency")
+      .eq("id", safeTemplateId)
+      .maybeSingle();
+
+    if (templateError) {
+      const missingTable = getMissingTableName(templateError);
+      if (missingTable?.endsWith("course_templates")) {
+        return { missingTable: true, templateFound: false, byMonthAndSession: new Map() };
+      }
+      return { error: templateError.message || "No se pudo consultar la plantilla." };
+    }
+    if (!templateRow?.id) {
+      return { templateFound: false, byMonthAndSession: new Map() };
+    }
+    template = templateRow;
+  } else {
+    const normalizedFrequency = normalizeTemplateFrequency(frequency);
+    if (!courseLevel || !normalizedFrequency) {
+      return { templateFound: false, byMonthAndSession: new Map() };
+    }
+
+    const { data: templateRow, error: templateError } = await supabase
+      .from("course_templates")
+      .select("id, course_level, frequency")
+      .eq("course_level", courseLevel)
+      .eq("frequency", normalizedFrequency)
+      .maybeSingle();
+
+    if (templateError) {
+      const missingTable = getMissingTableName(templateError);
+      if (missingTable?.endsWith("course_templates")) {
+        return { missingTable: true, templateFound: false, byMonthAndSession: new Map() };
+      }
+      return { error: templateError.message || "No se pudo consultar la plantilla." };
+    }
+
+    if (!templateRow?.id) {
+      return { templateFound: false, byMonthAndSession: new Map() };
+    }
+    template = templateRow;
   }
 
+  const normalizedFrequency = normalizeTemplateFrequency(template?.frequency || normalizedFrequencyInput);
   const structure = getTemplateStructure(normalizedFrequency);
   if (!structure) {
     return { templateFound: false, byMonthAndSession: new Map() };
   }
   const { sessionsPerMonth } = structure;
-
-  const { data: template, error: templateError } = await supabase
-    .from("course_templates")
-    .select("id")
-    .eq("course_level", courseLevel)
-    .eq("frequency", normalizedFrequency)
-    .maybeSingle();
-
-  if (templateError) {
-    const missingTable = getMissingTableName(templateError);
-    if (missingTable?.endsWith("course_templates")) {
-      return { missingTable: true, templateFound: false, byMonthAndSession: new Map() };
-    }
-    return { error: templateError.message || "No se pudo consultar la plantilla." };
-  }
-
-  if (!template?.id) {
-    return { templateFound: false, byMonthAndSession: new Map() };
-  }
 
   let sessionsResult = await supabase
     .from("template_sessions")
@@ -1582,6 +1575,7 @@ async function loadTemplateMaterialBySessionIndex(supabase, { courseLevel, frequ
     byMonthAndSession.set(
       buildTemplateSessionKey(position.monthIndex, position.sessionInMonth),
       {
+        templateSessionId: row.id,
         title: row.title || null,
         items: allItems.filter((item) => normalizeTemplateItemType(item?.type) !== "flashcards"),
         flashcardsMaterial,
@@ -1596,9 +1590,816 @@ async function loadTemplateMaterialBySessionIndex(supabase, { courseLevel, frequ
   }
 
   return {
+    templateId: template.id,
+    templateLevel: template.course_level || null,
+    templateFrequency: normalizedFrequency,
     templateFound: true,
     byMonthAndSession,
   };
+}
+
+function buildCommissionCycleSessionKey(cycleMonth, sessionInCycle) {
+  return `${String(cycleMonth || "").trim()}::${Number(sessionInCycle) || 0}`;
+}
+
+function buildTemplateManagedItemKey(templateSessionItemId, note) {
+  const safeTemplateSessionItemId = String(templateSessionItemId || "").trim();
+  if (safeTemplateSessionItemId) {
+    return `template:item:${safeTemplateSessionItemId}`;
+  }
+  const safeNote = String(note || "").trim();
+  return safeNote.startsWith("template:") ? safeNote : "";
+}
+
+async function updateCommissionRowWithMissingColumnFallback(supabase, commissionId, payload) {
+  let safePayload = { ...(payload || {}) };
+  while (true) {
+    const { error } = await supabase
+      .from("course_commissions")
+      .update(safePayload)
+      .eq("id", commissionId);
+
+    if (!error) return null;
+    const missingColumn = getMissingColumnFromError(error);
+    if (missingColumn && Object.prototype.hasOwnProperty.call(safePayload, missingColumn)) {
+      delete safePayload[missingColumn];
+      continue;
+    }
+    return error;
+  }
+}
+
+async function loadCommissionSessionsForTemplateSync(supabase, commissionId) {
+  let columns = [
+    "id",
+    "commission_id",
+    "template_session_id",
+    "cycle_month",
+    "session_index",
+    "session_in_cycle",
+    "session_date",
+    "starts_at",
+    "ends_at",
+    "day_label",
+    "status",
+  ];
+  let hasTemplateSessionIdColumn = true;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await supabase
+      .from("course_sessions")
+      .select(columns.join(","))
+      .eq("commission_id", commissionId)
+      .order("session_index", { ascending: true, nullsFirst: false })
+      .order("session_date", { ascending: true });
+
+    if (!result.error) {
+      return {
+        rows: result.data || [],
+        hasTemplateSessionIdColumn,
+      };
+    }
+
+    const missingColumn = getMissingColumnFromError(result.error);
+    if (missingColumn === "template_session_id" && columns.includes("template_session_id")) {
+      columns = columns.filter((column) => column !== "template_session_id");
+      hasTemplateSessionIdColumn = false;
+      continue;
+    }
+
+    const missingTable = getMissingTableName(result.error);
+    if (missingTable?.endsWith("course_sessions")) {
+      return {
+        rows: [],
+        hasTemplateSessionIdColumn,
+        missingTable: true,
+      };
+    }
+
+    throw new Error(result.error.message || "No se pudieron cargar las sesiones de la comision.");
+  }
+
+  return { rows: [], hasTemplateSessionIdColumn };
+}
+
+async function saveCommissionSessionWithFallback({
+  supabase,
+  existingSessionId = null,
+  payload,
+  hasTemplateSessionIdColumn = true,
+}) {
+  const sessionPayload = { ...(payload || {}) };
+  if (!hasTemplateSessionIdColumn) {
+    delete sessionPayload.template_session_id;
+  }
+
+  while (true) {
+    if (existingSessionId) {
+      const { error } = await supabase
+        .from("course_sessions")
+        .update({ ...sessionPayload, updated_at: new Date().toISOString() })
+        .eq("id", existingSessionId);
+      if (!error) {
+        return { id: existingSessionId };
+      }
+      const missingColumn = getMissingColumnFromError(error);
+      if (missingColumn && Object.prototype.hasOwnProperty.call(sessionPayload, missingColumn)) {
+        delete sessionPayload[missingColumn];
+        continue;
+      }
+      throw new Error(error.message || "No se pudo actualizar la sesion de la comision.");
+    }
+
+    const { data, error } = await supabase
+      .from("course_sessions")
+      .insert(sessionPayload)
+      .select("id")
+      .maybeSingle();
+    if (!error && data?.id) {
+      return { id: data.id };
+    }
+    const missingColumn = getMissingColumnFromError(error);
+    if (missingColumn && Object.prototype.hasOwnProperty.call(sessionPayload, missingColumn)) {
+      delete sessionPayload[missingColumn];
+      continue;
+    }
+    throw new Error(error?.message || "No se pudo crear la sesion de la comision.");
+  }
+}
+
+async function loadSessionItemsForTemplateSync(supabase, sessionIds = []) {
+  const safeSessionIds = Array.from(new Set((sessionIds || []).map((value) => String(value || "").trim()).filter(Boolean)));
+  if (!safeSessionIds.length) {
+    return { rows: [], hasTemplateSessionItemIdColumn: true };
+  }
+
+  let columns = [
+    "id",
+    "session_id",
+    "template_session_item_id",
+    "type",
+    "title",
+    "url",
+    "exercise_id",
+    "note",
+    "updated_at",
+    "created_at",
+  ];
+  let hasTemplateSessionItemIdColumn = true;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await supabase
+      .from("session_items")
+      .select(columns.join(","))
+      .in("session_id", safeSessionIds)
+      .order("created_at", { ascending: true });
+
+    if (!result.error) {
+      return {
+        rows: result.data || [],
+        hasTemplateSessionItemIdColumn,
+      };
+    }
+
+    const missingColumn = getMissingColumnFromError(result.error);
+    if (missingColumn === "template_session_item_id" && columns.includes("template_session_item_id")) {
+      columns = columns.filter((column) => column !== "template_session_item_id");
+      hasTemplateSessionItemIdColumn = false;
+      continue;
+    }
+
+    throw new Error(result.error.message || "No se pudieron cargar los materiales de sesiones.");
+  }
+
+  return { rows: [], hasTemplateSessionItemIdColumn };
+}
+
+async function saveSessionItemWithMissingColumnFallback(supabase, itemId, payload) {
+  let safePayload = { ...(payload || {}) };
+  while (true) {
+    const result = itemId
+      ? await supabase.from("session_items").update(safePayload).eq("id", itemId)
+      : await supabase.from("session_items").insert(safePayload);
+    if (!result.error) return null;
+    const missingColumn = getMissingColumnFromError(result.error);
+    if (missingColumn && Object.prototype.hasOwnProperty.call(safePayload, missingColumn)) {
+      delete safePayload[missingColumn];
+      continue;
+    }
+    return result.error;
+  }
+}
+
+function pickLegacyItemCandidate(existingRows, desiredRow, consumedIds = new Set()) {
+  const available = (Array.isArray(existingRows) ? existingRows : []).filter(
+    (row) => row?.id && !consumedIds.has(String(row.id || ""))
+  );
+  if (!available.length) return null;
+
+  if (desiredRow.type === "exercise" && desiredRow.exercise_id) {
+    return (
+      available.find((row) => {
+        if (buildTemplateManagedItemKey(row?.template_session_item_id, row?.note)) return false;
+        return (
+          normalizeTemplateItemType(row?.type) === "exercise" &&
+          String(row?.exercise_id || "").trim() === String(desiredRow.exercise_id || "").trim()
+        );
+      }) || null
+    );
+  }
+
+  return (
+    available.find((row) => {
+      if (buildTemplateManagedItemKey(row?.template_session_item_id, row?.note)) return false;
+      return (
+        normalizeTemplateItemType(row?.type) === normalizeTemplateItemType(desiredRow.type) &&
+        String(row?.url || "").trim() === String(desiredRow.url || "").trim()
+      );
+    }) || null
+  );
+}
+
+async function syncSessionItemsFromTemplatePayload({
+  supabase,
+  commissionId,
+  sessionId,
+  templatePayload,
+  existingItems = [],
+  hasTemplateSessionItemIdColumn = true,
+}) {
+  const safeCommissionId = String(commissionId || "").trim();
+  const safeSessionId = String(sessionId || "").trim();
+  const byManagedKey = new Map();
+  const bySessionRows = (Array.isArray(existingItems) ? existingItems : []).filter(
+    (row) => String(row?.session_id || "").trim() === safeSessionId
+  );
+  bySessionRows.forEach((row) => {
+    const managedKey = buildTemplateManagedItemKey(row?.template_session_item_id, row?.note);
+    if (managedKey) byManagedKey.set(managedKey, row);
+  });
+
+  const desiredRows = [];
+  const classSlideUrl = String(templatePayload?.classSlide?.url || "").trim();
+  if (classSlideUrl) {
+    desiredRows.push({
+      managedKey: "template:primary_slide",
+      templateSessionItemId: null,
+      type: "slides",
+      title: String(templatePayload?.classSlide?.title || "").trim() || "Slide de clase",
+      url: classSlideUrl,
+      exercise_id: null,
+      note: "template:primary_slide",
+    });
+  }
+
+  const additionalSlides = Array.isArray(templatePayload?.additionalSlides) ? templatePayload.additionalSlides : [];
+  additionalSlides.forEach((slide, index) => {
+    const url = String(slide?.url || "").trim();
+    if (!url) return;
+    desiredRows.push({
+      managedKey: `template:additional_slide:${index + 1}`,
+      templateSessionItemId: null,
+      type: "slides",
+      title: String(slide?.title || "").trim() || `Slide adicional ${index + 1}`,
+      url,
+      exercise_id: null,
+      note: `template:additional_slide:${index + 1}`,
+    });
+  });
+
+  const templateItems = Array.isArray(templatePayload?.items) ? templatePayload.items : [];
+  templateItems.forEach((item) => {
+    const templateItemId = String(item?.id || "").trim();
+    if (!templateItemId) return;
+    desiredRows.push({
+      managedKey: `template:item:${templateItemId}`,
+      templateSessionItemId: templateItemId,
+      type: normalizeTemplateItemType(item?.type),
+      title: String(item?.title || "").trim(),
+      url: String(item?.url || "").trim() || null,
+      exercise_id: String(item?.exercise_id || "").trim() || null,
+      exercise_points: normalizeExerciseItemPoints(item?.exercise_points, 10),
+      exercise_order: toPositiveInt(item?.exercise_order, desiredRows.length + 1),
+      lesson_id: String(item?.lesson_id || "").trim() || null,
+      note: `template:item:${templateItemId}`,
+    });
+  });
+
+  const flashcardsMaterial = templatePayload?.flashcardsMaterial || null;
+  if (flashcardsMaterial) {
+    desiredRows.push({
+      managedKey: "template:flashcards_material",
+      templateSessionItemId: null,
+      type: "flashcards",
+      title: String(flashcardsMaterial?.title || "Flashcards").trim() || "Flashcards",
+      url: String(flashcardsMaterial?.url || INTERNAL_FLASHCARDS_URL).trim() || INTERNAL_FLASHCARDS_URL,
+      exercise_id: null,
+      note: "template:flashcards_material",
+    });
+  }
+
+  const consumedExistingIds = new Set();
+  const desiredKeys = new Set(desiredRows.map((row) => row.managedKey));
+  const hasExerciseRows = desiredRows.some(
+    (row) => normalizeTemplateItemType(row?.type) === "exercise" && String(row?.exercise_id || "").trim()
+  );
+  let commissionLessonId = "";
+  if (hasExerciseRows && safeCommissionId && safeSessionId) {
+    commissionLessonId = await ensureCourseSessionLessonId(supabase, {
+      commissionId: safeCommissionId,
+      courseSessionId: safeSessionId,
+      title: String(templatePayload?.title || "").trim(),
+    });
+  }
+
+  for (const desired of desiredRows) {
+    let existing = byManagedKey.get(desired.managedKey) || null;
+    if (!existing) {
+      existing = pickLegacyItemCandidate(bySessionRows, desired, consumedExistingIds);
+    }
+
+    const normalizedDesiredType = normalizeTemplateItemType(desired.type);
+    const isExerciseItem = normalizedDesiredType === "exercise";
+    const resolvedExerciseId =
+      isExerciseItem ? String(desired.exercise_id || "").trim() : "";
+    const resolvedLessonId =
+      isExerciseItem
+        ? String(commissionLessonId || desired.lesson_id || "").trim() || null
+        : null;
+    const resolvedUrl =
+      isExerciseItem
+        ? buildPracticeExerciseUrl(resolvedExerciseId, resolvedLessonId)
+        : desired.url || null;
+
+    const itemPayload = {
+      session_id: sessionId,
+      type: normalizedDesiredType,
+      title: desired.title || "Material",
+      url: resolvedUrl,
+      lesson_id: resolvedLessonId,
+      exercise_id: isExerciseItem ? (resolvedExerciseId || null) : null,
+      note: desired.note || null,
+      updated_at: new Date().toISOString(),
+    };
+    if (isExerciseItem) {
+      itemPayload.exercise_points = normalizeExerciseItemPoints(desired?.exercise_points, 10);
+      itemPayload.exercise_order = toPositiveInt(desired?.exercise_order, 1);
+    }
+    if (hasTemplateSessionItemIdColumn && desired.templateSessionItemId) {
+      itemPayload.template_session_item_id = desired.templateSessionItemId;
+    }
+
+    const saveError = await saveSessionItemWithMissingColumnFallback(
+      supabase,
+      existing?.id || null,
+      itemPayload
+    );
+    if (saveError) {
+      throw new Error(saveError.message || "No se pudo sincronizar material de la sesion.");
+    }
+    if (existing?.id) {
+      consumedExistingIds.add(String(existing.id));
+    }
+  }
+
+  const staleManagedIds = bySessionRows
+    .filter((row) => {
+      const managedKey = buildTemplateManagedItemKey(row?.template_session_item_id, row?.note);
+      if (!managedKey) return false;
+      return !desiredKeys.has(managedKey);
+    })
+    .map((row) => String(row?.id || "").trim())
+    .filter(Boolean);
+
+  if (staleManagedIds.length) {
+    const { error: staleDeleteError } = await supabase
+      .from("session_items")
+      .delete()
+      .in("id", staleManagedIds);
+    if (staleDeleteError) {
+      throw new Error(staleDeleteError.message || "No se pudo limpiar material obsoleto de sesion.");
+    }
+  }
+}
+
+async function syncSessionFlashcardsFromTemplatePayload({
+  supabase,
+  sessionId,
+  templatePayload,
+}) {
+  const flashcards = Array.isArray(templatePayload?.flashcards) ? templatePayload.flashcards : [];
+  const { error: deleteRowsError } = await supabase
+    .from("session_flashcards")
+    .delete()
+    .eq("session_id", sessionId);
+  if (deleteRowsError) {
+    const missingTable = getMissingTableName(deleteRowsError);
+    if (!missingTable?.endsWith("session_flashcards")) {
+      throw new Error(deleteRowsError.message || "No se pudieron limpiar flashcards de la sesion.");
+    }
+    return;
+  }
+
+  if (!flashcards.length) return;
+
+  const rows = flashcards.map((card, index) => ({
+    session_id: sessionId,
+    flashcard_id: String(card?.flashcardId || "").trim() || null,
+    word: String(card?.word || "").trim() || null,
+    meaning: String(card?.meaning || "").trim() || null,
+    image_url: String(card?.image || "").trim() || null,
+    card_order: Number(card?.order || index + 1) || index + 1,
+    accepted_answers: Array.isArray(card?.acceptedAnswers) ? card.acceptedAnswers : [],
+    updated_at: new Date().toISOString(),
+  }));
+
+  const { error: insertRowsError } = await supabase
+    .from("session_flashcards")
+    .insert(rows);
+  if (insertRowsError) {
+    throw new Error(insertRowsError.message || "No se pudieron sincronizar flashcards de la sesion.");
+  }
+}
+
+async function resolveTemplateForCommission(supabase, commission, forcedTemplateId = null) {
+  async function loadTemplate(queryBuilder) {
+    let columns = [
+      "id",
+      "course_level",
+      "frequency",
+      "course_duration_months",
+      "class_duration_minutes",
+    ];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await queryBuilder(columns.join(","));
+      if (!result.error) {
+        return result.data || null;
+      }
+      const missingColumn = getMissingColumnFromError(result.error);
+      if (!missingColumn || !columns.includes(missingColumn)) {
+        throw new Error(result.error.message || "No se pudo cargar la plantilla.");
+      }
+      columns = columns.filter((column) => column !== missingColumn);
+    }
+    return null;
+  }
+
+  const forcedId = String(forcedTemplateId || "").trim();
+  if (forcedId) {
+    const template = await loadTemplate((columns) =>
+      supabase
+        .from("course_templates")
+        .select(columns)
+        .eq("id", forcedId)
+        .maybeSingle()
+    );
+    return template || null;
+  }
+
+  const linkedTemplateId = String(commission?.template_id || "").trim();
+  if (linkedTemplateId) {
+    const template = await loadTemplate((columns) =>
+      supabase
+        .from("course_templates")
+        .select(columns)
+        .eq("id", linkedTemplateId)
+        .maybeSingle()
+    );
+    if (template?.id) return template;
+  }
+
+  const normalizedFrequency = normalizeTemplateFrequency(commission?.modality_key);
+  if (!commission?.course_level || !normalizedFrequency) return null;
+
+  const template = await loadTemplate((columns) =>
+    supabase
+      .from("course_templates")
+      .select(columns)
+      .eq("course_level", commission.course_level)
+      .eq("frequency", normalizedFrequency)
+      .maybeSingle()
+  );
+  return template || null;
+}
+
+async function syncCommissionFromTemplate(supabase, commission, { templateId = null } = {}) {
+  const commissionId = String(commission?.id || "").trim();
+  if (!commissionId) {
+    return { error: "Comision invalida para sincronizacion." };
+  }
+
+  const template = await resolveTemplateForCommission(supabase, commission, templateId);
+  if (!template?.id) {
+    return { error: "No se encontro plantilla para sincronizar la comision." };
+  }
+
+  const normalizedFrequency = normalizeTemplateFrequency(template.frequency);
+  const modality = getModalityDefinition(normalizedFrequency);
+  if (!normalizedFrequency || !modality) {
+    return { error: "La frecuencia de la plantilla es invalida." };
+  }
+
+  const startMonthValue = formatDateOnly(parseMonthInput(commission.start_month || commission.start_date)) || formatDateOnly(new Date());
+  const durationMonths = toPositiveInt(
+    template.course_duration_months || getFrequencyDurationMonths(normalizedFrequency),
+    Math.max(1, getFrequencyDurationMonths(normalizedFrequency) || 1)
+  );
+  const startTime = String(commission.start_time || "").slice(0, 5) || "18:00";
+  const startMinutes = parseTimeToMinutes(startTime);
+  if (startMinutes == null) {
+    return { error: "La comision no tiene una hora de inicio valida para sincronizar." };
+  }
+
+  const classDurationMinutes = toPositiveInt(
+    template.class_duration_minutes || getClassDurationMinutesFromFrequency(normalizedFrequency),
+    getClassDurationMinutesFromFrequency(normalizedFrequency)
+  );
+  const computedEndTime = formatMinutesToTime(startMinutes + classDurationMinutes);
+
+  const generatedRows = buildFrequencySessionDrafts({
+    commissionId,
+    frequency: normalizedFrequency,
+    startMonth: startMonthValue,
+    durationMonths,
+    startTime,
+    endTime: computedEndTime,
+    status: "scheduled",
+  });
+  if (!generatedRows.length) {
+    return { error: "No se pudieron calcular sesiones para la plantilla seleccionada." };
+  }
+
+  const firstSessionDate = generatedRows[0]?.session_date || startMonthValue;
+  const lastSessionDate = generatedRows[generatedRows.length - 1]?.session_date || startMonthValue;
+
+  const commissionSyncPayload = {
+    template_id: template.id,
+    course_level: template.course_level,
+    modality_key: normalizedFrequency,
+    days_of_week: modality.days,
+    start_month: startMonthValue,
+    duration_months: durationMonths,
+    start_date: firstSessionDate,
+    end_date: lastSessionDate,
+    start_time: startTime,
+    end_time: computedEndTime,
+    template_frequency_snapshot: normalizedFrequency,
+    template_course_duration_months_snapshot: durationMonths,
+    template_class_duration_minutes_snapshot: classDurationMinutes,
+  };
+
+  const updateCommissionError = await updateCommissionRowWithMissingColumnFallback(
+    supabase,
+    commissionId,
+    commissionSyncPayload
+  );
+  if (updateCommissionError) {
+    return { error: updateCommissionError.message || "No se pudo actualizar la comision desde plantilla." };
+  }
+
+  const templateSeed = await loadTemplateMaterialBySessionIndex(supabase, { templateId: template.id });
+  if (templateSeed.error) return { error: templateSeed.error };
+  if (templateSeed.missingTable) {
+    return { missingTable: true, count: 0 };
+  }
+
+  const loadedSessions = await loadCommissionSessionsForTemplateSync(supabase, commissionId);
+  if (loadedSessions.missingTable) {
+    return { missingTable: true, count: 0 };
+  }
+
+  const existingRows = loadedSessions.rows || [];
+  const hasTemplateSessionIdColumn = loadedSessions.hasTemplateSessionIdColumn;
+  const existingByTemplateSessionId = new Map();
+  const existingByCycleKey = new Map();
+  existingRows.forEach((row) => {
+    const templateSessionId = String(row?.template_session_id || "").trim();
+    if (templateSessionId) {
+      existingByTemplateSessionId.set(templateSessionId, row);
+    }
+    existingByCycleKey.set(
+      buildCommissionCycleSessionKey(row?.cycle_month, row?.session_in_cycle),
+      row
+    );
+  });
+
+  const monthIndexByCycleMonth = new Map();
+  const orderedCycleMonths = Array.from(
+    new Set(generatedRows.map((row) => String(row?.cycle_month || "").trim()).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+  orderedCycleMonths.forEach((cycleMonth, index) => {
+    monthIndexByCycleMonth.set(cycleMonth, index + 1);
+  });
+
+  const syncedSessions = [];
+  const usedExistingIds = new Set();
+  for (const generated of generatedRows) {
+    const cycleMonth = String(generated?.cycle_month || "").trim();
+    const sessionInCycle = Number(generated?.session_in_cycle || 0);
+    const monthIndex = monthIndexByCycleMonth.get(cycleMonth) || null;
+    const sessionPayload = monthIndex
+      ? templateSeed.byMonthAndSession.get(buildTemplateSessionKey(monthIndex, sessionInCycle))
+      : null;
+
+    const templateSessionId = String(sessionPayload?.templateSessionId || "").trim();
+    const existingByTemplate = templateSessionId ? existingByTemplateSessionId.get(templateSessionId) : null;
+    const existingByCycle = existingByCycleKey.get(buildCommissionCycleSessionKey(cycleMonth, sessionInCycle)) || null;
+    const existing = existingByTemplate || existingByCycle || null;
+
+    const savePayload = {
+      commission_id: commissionId,
+      template_session_id: templateSessionId || null,
+      cycle_month: generated.cycle_month,
+      session_index: generated.session_index,
+      session_in_cycle: generated.session_in_cycle,
+      session_date: generated.session_date,
+      starts_at: generated.starts_at,
+      ends_at: generated.ends_at,
+      day_label: String(sessionPayload?.title || generated.day_label || "").trim() || generated.day_label,
+      kind: "class",
+      status: existing?.status === "completed" ? "completed" : "scheduled",
+    };
+
+    const saved = await saveCommissionSessionWithFallback({
+      supabase,
+      existingSessionId: existing?.id || null,
+      payload: savePayload,
+      hasTemplateSessionIdColumn,
+    });
+
+    if (existing?.id) {
+      usedExistingIds.add(String(existing.id));
+    }
+
+    syncedSessions.push({
+      id: saved.id,
+      templatePayload: sessionPayload || {
+        classSlide: { title: "", url: "" },
+        additionalSlides: [],
+        items: [],
+        flashcards: [],
+        flashcardsMaterial: null,
+      },
+    });
+  }
+
+  const staleTemplateLinkedIds = existingRows
+    .filter((row) => {
+      const id = String(row?.id || "").trim();
+      if (!id || usedExistingIds.has(id)) return false;
+      if (String(row?.template_session_id || "").trim()) return true;
+      return false;
+    })
+    .map((row) => String(row.id || "").trim())
+    .filter(Boolean);
+
+  if (staleTemplateLinkedIds.length) {
+    const { error: staleUpdateError } = await supabase
+      .from("course_sessions")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .in("id", staleTemplateLinkedIds);
+    if (staleUpdateError) {
+      return { error: staleUpdateError.message || "No se pudo actualizar sesiones obsoletas." };
+    }
+  }
+
+  const syncedSessionIds = syncedSessions.map((row) => String(row.id || "").trim()).filter(Boolean);
+  const loadedItems = await loadSessionItemsForTemplateSync(supabase, syncedSessionIds);
+  const existingItems = loadedItems.rows || [];
+
+  for (const sessionRow of syncedSessions) {
+    await syncSessionItemsFromTemplatePayload({
+      supabase,
+      commissionId,
+      sessionId: sessionRow.id,
+      templatePayload: sessionRow.templatePayload,
+      existingItems,
+      hasTemplateSessionItemIdColumn: loadedItems.hasTemplateSessionItemIdColumn,
+    });
+    await syncSessionFlashcardsFromTemplatePayload({
+      supabase,
+      sessionId: sessionRow.id,
+      templatePayload: sessionRow.templatePayload,
+    });
+  }
+
+  return {
+    success: true,
+    count: syncedSessions.length,
+    templateId: template.id,
+  };
+}
+
+async function syncTemplateToAllLinkedCommissions(supabase, templateId) {
+  const safeTemplateId = String(templateId || "").trim();
+  if (!safeTemplateId) {
+    return { success: true, synced: 0, errors: [] };
+  }
+
+  const { data: template, error: templateError } = await supabase
+    .from("course_templates")
+    .select("id, course_level, frequency")
+    .eq("id", safeTemplateId)
+    .maybeSingle();
+  if (templateError || !template?.id) {
+    return {
+      success: false,
+      synced: 0,
+      errors: [templateError?.message || "No se encontro la plantilla para sincronizar comisiones."],
+    };
+  }
+
+  const normalizedTemplateFrequency = normalizeTemplateFrequency(template.frequency);
+  if (!normalizedTemplateFrequency) {
+    return {
+      success: false,
+      synced: 0,
+      errors: ["La frecuencia de la plantilla es invalida para sincronizacion."],
+    };
+  }
+
+  let selectColumns = ["id", "course_level", "modality_key", "start_month", "start_date", "start_time", "template_id"];
+  const commissionsById = new Map();
+
+  let supportsTemplateIdColumn = true;
+  {
+    const result = await supabase
+      .from("course_commissions")
+      .select(selectColumns.join(","))
+      .eq("template_id", template.id);
+
+    if (result.error) {
+      const missingColumn = getMissingColumnFromError(result.error);
+      if (missingColumn === "template_id") {
+        supportsTemplateIdColumn = false;
+        selectColumns = selectColumns.filter((column) => column !== "template_id");
+      } else {
+        return {
+          success: false,
+          synced: 0,
+          errors: [result.error.message || "No se pudieron cargar comisiones vinculadas a la plantilla."],
+        };
+      }
+    } else {
+      (result.data || []).forEach((row) => {
+        if (row?.id) commissionsById.set(String(row.id), row);
+      });
+    }
+  }
+
+  {
+    const fallbackResult = await supabase
+      .from("course_commissions")
+      .select(selectColumns.join(","))
+      .eq("course_level", template.course_level)
+      .eq("modality_key", normalizedTemplateFrequency);
+    if (fallbackResult.error) {
+      return {
+        success: false,
+        synced: 0,
+        errors: [fallbackResult.error.message || "No se pudieron cargar comisiones para sincronizacion por nivel/frecuencia."],
+      };
+    }
+    (fallbackResult.data || []).forEach((row) => {
+      if (row?.id) commissionsById.set(String(row.id), row);
+    });
+  }
+
+  const commissionsRows = Array.from(commissionsById.values()).map((row) => (
+    supportsTemplateIdColumn
+      ? row
+      : { ...row, template_id: null }
+  ));
+
+  const errors = [];
+  let synced = 0;
+  for (const commission of commissionsRows) {
+    const result = await syncCommissionFromTemplate(supabase, commission, { templateId: template.id });
+    if (result?.error) {
+      errors.push(`Comision ${commission?.id || "-"}: ${result.error}`);
+      continue;
+    }
+    if (result?.missingTable) {
+      errors.push(`Comision ${commission?.id || "-"}: falta tabla course_sessions.`);
+      continue;
+    }
+    synced += 1;
+  }
+
+  return {
+    success: errors.length === 0,
+    synced,
+    errors,
+  };
+}
+
+async function syncTemplateLinkedCommissionsAfterChange(supabase, templateId) {
+  const syncResult = await syncTemplateToAllLinkedCommissions(supabase, templateId);
+  if (syncResult.success) return null;
+  if (syncResult.errors?.length) {
+    return `Se guardó la plantilla, pero falló la sincronización de comisiones: ${syncResult.errors[0]}`;
+  }
+  return "Se guardó la plantilla, pero falló la sincronización de comisiones.";
 }
 
 async function replaceCommissionSessions(supabase, commissionId, rows) {
@@ -1642,6 +2443,18 @@ async function replaceCommissionSessions(supabase, commissionId, rows) {
 async function regenerateCommissionSessions(supabase, commission) {
   const commissionId = commission?.id;
   if (!commissionId) return { error: "Comision invalida." };
+
+  try {
+    const template = await resolveTemplateForCommission(supabase, commission);
+    if (template?.id) {
+      const synced = await syncCommissionFromTemplate(supabase, commission, { templateId: template.id });
+      if (synced?.error) return { error: synced.error };
+      if (synced?.missingTable) return { missingTable: true, count: 0 };
+      return { count: synced.count || 0, templateFound: true };
+    }
+  } catch (error) {
+    return { error: error?.message || "No se pudo sincronizar la comision desde plantilla." };
+  }
 
   const normalizedFrequency = normalizeTemplateFrequency(commission.modality_key);
   const rows = normalizedFrequency
@@ -1877,31 +2690,28 @@ async function createCommissionWithRetry(supabase, courseLevel, payload) {
       .maybeSingle();
 
     const nextNumber = (latest?.commission_number || 100) + 1;
-    const insertPayload = { ...payload, course_level: courseLevel, commission_number: nextNumber };
-    let { data, error } = await supabase
-      .from("course_commissions")
-      .insert(insertPayload)
-      .select("id")
-      .maybeSingle();
+    let insertPayload = { ...payload, course_level: courseLevel, commission_number: nextNumber };
+    while (true) {
+      const { data, error } = await supabase
+        .from("course_commissions")
+        .insert(insertPayload)
+        .select("id")
+        .maybeSingle();
 
-    if (error) {
-      const missingColumn = getMissingColumnFromError(error);
-      if (missingColumn === "status") {
-        const fallbackPayload = { ...insertPayload };
-        delete fallbackPayload.status;
-        ({ data, error } = await supabase
-          .from("course_commissions")
-          .insert(fallbackPayload)
-          .select("id")
-          .maybeSingle());
+      if (!error && data?.id) {
+        return data.id;
       }
-    }
 
-    if (!error && data?.id) {
-      return data.id;
-    }
+      const missingColumn = getMissingColumnFromError(error);
+      if (missingColumn && Object.prototype.hasOwnProperty.call(insertPayload, missingColumn)) {
+        delete insertPayload[missingColumn];
+        continue;
+      }
 
-    if (error?.code !== "23505") {
+      if (error?.code === "23505") {
+        break;
+      }
+
       throw new Error(error?.message || "No se pudo crear la comision.");
     }
   }
@@ -1913,25 +2723,87 @@ export async function upsertCommission(prevState, formData) {
   const resolvedFormData = formData instanceof FormData ? formData : prevState;
   const supabase = await requireAdmin();
   const id = resolvedFormData.get("commissionId")?.toString();
-  const courseLevel = getText(resolvedFormData, "course_level");
+  const requestedTemplateId =
+    getText(resolvedFormData, "template_id") || getText(resolvedFormData, "templateId");
+  const usingTemplateFlow = Boolean(requestedTemplateId);
+
+  let courseLevel = getText(resolvedFormData, "course_level");
   const startMonthInput = getText(resolvedFormData, "start_month");
   const durationMonthsInput = getText(resolvedFormData, "duration_months");
   const startDateInput = getText(resolvedFormData, "start_date");
-  const modalityKey = normalizeModalityKey(getText(resolvedFormData, "modality_key"));
-  const startTime = getText(resolvedFormData, "start_time");
-  const endTime = getText(resolvedFormData, "end_time");
+  let modalityKey = normalizeModalityKey(getText(resolvedFormData, "modality_key"));
+  let startTime = getText(resolvedFormData, "start_time");
+  let endTime = getText(resolvedFormData, "end_time");
+  let durationMonths = toPositiveInt(durationMonthsInput, 4);
+  let classDurationMinutesSnapshot = null;
+  let syncedTemplateId = "";
+
+  if (usingTemplateFlow) {
+    const safeTemplateId = String(requestedTemplateId || "").trim();
+    let templateColumns = [
+      "id",
+      "course_level",
+      "frequency",
+      "course_duration_months",
+      "class_duration_minutes",
+    ];
+    let template = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await supabase
+        .from("course_templates")
+        .select(templateColumns.join(","))
+        .eq("id", safeTemplateId)
+        .maybeSingle();
+      if (!result.error) {
+        template = result.data || null;
+        break;
+      }
+      const missingColumn = getMissingColumnFromError(result.error);
+      if (!missingColumn || !templateColumns.includes(missingColumn)) {
+        return { error: result.error.message || "No se pudo cargar la plantilla seleccionada." };
+      }
+      templateColumns = templateColumns.filter((column) => column !== missingColumn);
+    }
+
+    if (!template?.id) {
+      return { error: "Selecciona una plantilla valida." };
+    }
+
+    courseLevel = String(template.course_level || "").trim();
+    modalityKey = normalizeTemplateFrequency(template.frequency);
+    syncedTemplateId = String(template.id || "").trim();
+    if (!modalityKey) {
+      return { error: "La plantilla tiene una frecuencia invalida." };
+    }
+
+    if (!startTime) {
+      return { error: "La hora de inicio es obligatoria." };
+    }
+    const startMinutes = parseTimeToMinutes(startTime);
+    if (startMinutes == null) {
+      return { error: "La hora de inicio es invalida." };
+    }
+
+    classDurationMinutesSnapshot = toPositiveInt(
+      template.class_duration_minutes || getClassDurationMinutesFromFrequency(modalityKey),
+      getClassDurationMinutesFromFrequency(modalityKey)
+    );
+    endTime = formatMinutesToTime(startMinutes + classDurationMinutesSnapshot);
+    durationMonths = toPositiveInt(
+      template.course_duration_months || getFrequencyDurationMonths(modalityKey),
+      Math.max(1, getFrequencyDurationMonths(modalityKey) || 1)
+    );
+  }
 
   if (!STUDENT_LEVELS.includes(courseLevel)) {
     return { error: "Selecciona un curso valido." };
   }
-
   const modality = getModalityDefinition(modalityKey);
   if (!modality) {
     return { error: "Selecciona una modalidad valida." };
   }
 
   const startMonthDate = parseMonthInput(startMonthInput) || parseDateOnly(startDateInput);
-  const durationMonths = toPositiveInt(durationMonthsInput, 4);
   if (!startMonthDate) {
     return { error: "El mes de inicio es obligatorio." };
   }
@@ -1973,19 +2845,17 @@ export async function upsertCommission(prevState, formData) {
     start_month: monthStartValue,
     duration_months: durationMonths,
   };
+  if (usingTemplateFlow && syncedTemplateId) {
+    payload.template_id = syncedTemplateId;
+    payload.template_frequency_snapshot = modalityKey;
+    payload.template_course_duration_months_snapshot = durationMonths;
+    payload.template_class_duration_minutes_snapshot =
+      classDurationMinutesSnapshot || getClassDurationMinutesFromFrequency(modalityKey);
+  }
 
   let commissionId = id || null;
   if (id) {
-    let { error } = await supabase.from("course_commissions").update(payload).eq("id", id);
-    if (error) {
-      const missingColumn = getMissingColumnFromError(error);
-      if (missingColumn === "status") {
-        const fallbackPayload = { ...payload };
-        delete fallbackPayload.status;
-        const fallbackResult = await supabase.from("course_commissions").update(fallbackPayload).eq("id", id);
-        error = fallbackResult.error;
-      }
-    }
+    const error = await updateCommissionRowWithMissingColumnFallback(supabase, id, payload);
     if (error) {
       const message = String(error.message || "");
       if (message.toLowerCase().includes("start_month") || message.toLowerCase().includes("duration_months")) {
@@ -2011,10 +2881,23 @@ export async function upsertCommission(prevState, formData) {
     commissionId = createdId;
   }
 
-  const regeneration = await regenerateCommissionSessions(supabase, {
-    ...payload,
-    id: commissionId,
-  });
+  let regeneration = null;
+  if (usingTemplateFlow && syncedTemplateId) {
+    const sessionPayloadForSync = {
+      id: commissionId,
+      ...payload,
+      template_id: syncedTemplateId,
+    };
+    regeneration = await syncCommissionFromTemplate(supabase, sessionPayloadForSync, {
+      templateId: syncedTemplateId,
+    });
+  } else {
+    regeneration = await regenerateCommissionSessions(supabase, {
+      ...payload,
+      id: commissionId,
+      template_id: null,
+    });
+  }
   if (regeneration.error) {
     return { error: regeneration.error };
   }
@@ -2025,7 +2908,10 @@ export async function upsertCommission(prevState, formData) {
   if (regeneration.missingTable) {
     return { success: true, message: "Comision guardada. Falta crear la tabla course_sessions." };
   }
-  return { success: true, message: `Comision guardada. ${regeneration.count || 0} clases generadas.` };
+  return {
+    success: true,
+    message: `Comision guardada. ${regeneration.count || 0} clases sincronizadas.`,
+  };
 }
 
 export async function setCommissionActive(formData) {
@@ -2441,6 +3327,7 @@ export async function saveTemplateSessionFlashcardsBatch(prevState, maybeFormDat
   if (templateId && String(session.template_id || "") !== templateId) {
     return { success: false, error: "La clase no pertenece a la plantilla indicada.", cards: null };
   }
+  const resolvedTemplateId = templateId || String(session.template_id || "").trim();
 
   if (!rows.length) {
     const deleteCardsResult = await supabase
@@ -2478,9 +3365,13 @@ export async function saveTemplateSessionFlashcardsBatch(prevState, maybeFormDat
       };
     }
 
-    revalidateTemplateAdminPaths(templateId);
-    if (templateId) {
-      revalidatePath(`/admin/courses/templates/${templateId}/sessions/${templateSessionId}/flashcards`);
+    const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, resolvedTemplateId);
+    if (syncError) {
+      return { success: false, error: syncError, cards: null };
+    }
+    revalidateTemplateAdminPaths(resolvedTemplateId);
+    if (resolvedTemplateId) {
+      revalidatePath(`/admin/courses/templates/${resolvedTemplateId}/sessions/${templateSessionId}/flashcards`);
     }
     return {
       success: true,
@@ -2557,9 +3448,13 @@ export async function saveTemplateSessionFlashcardsBatch(prevState, maybeFormDat
     return { success: false, error: replaceResult.error, cards: null };
   }
 
-  revalidateTemplateAdminPaths(templateId);
-  if (templateId) {
-    revalidatePath(`/admin/courses/templates/${templateId}/sessions/${templateSessionId}/flashcards`);
+  const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, resolvedTemplateId);
+  if (syncError) {
+    return { success: false, error: syncError, cards: null };
+  }
+  revalidateTemplateAdminPaths(resolvedTemplateId);
+  if (resolvedTemplateId) {
+    revalidatePath(`/admin/courses/templates/${resolvedTemplateId}/sessions/${templateSessionId}/flashcards`);
   }
 
   return {
@@ -2800,7 +3695,7 @@ export async function upsertExerciseLibraryEntry(prevState, maybeFormData) {
         type: requestedType,
         skill_tag: requestedSkill,
         kind: LEGACY_KIND_BY_TYPE[requestedType] || "multiple_choice",
-        status: "draft",
+        status: "published",
         prompt: deriveExercisePrompt(requestedType, contentJson),
         payload: contentJson,
         content_json: contentJson,
@@ -2809,7 +3704,7 @@ export async function upsertExerciseLibraryEntry(prevState, maybeFormData) {
         updated_at: new Date().toISOString(),
         updated_by: actorId || null,
         last_editor: actorId || null,
-        published_at: null,
+        published_at: new Date().toISOString(),
       };
 
     const nowIso = new Date().toISOString();
@@ -2864,9 +3759,9 @@ export async function upsertExerciseLibraryEntry(prevState, maybeFormData) {
 
     return {
       success: true,
-      message: publishable.publishable
-        ? (exerciseId ? "Ejercicio actualizado en la biblioteca." : "Ejercicio creado en la biblioteca.")
-        : "Ejercicio guardado como borrador. Completa los campos requeridos para publicarlo.",
+      message: exerciseId
+        ? "Ejercicio actualizado en la biblioteca."
+        : "Ejercicio creado en la biblioteca.",
       exercise,
       category,
     };
@@ -3106,6 +4001,11 @@ export async function upsertCourseTemplate(prevState, maybeFormData) {
     return { error: "Falta crear la tabla template_sessions. Ejecuta SQL actualizado." };
   }
 
+  const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, resolvedTemplateId);
+  if (syncError) {
+    return { error: syncError };
+  }
+
   revalidateTemplateAdminPaths(resolvedTemplateId);
   return {
     success: true,
@@ -3157,6 +4057,23 @@ export async function deleteCourseTemplate(formData) {
       ignoreLessonReference: true,
     });
     await runExerciseGarbageCollection({ db: supabase, actorId });
+  }
+
+  {
+    let updatePayload = { template_id: null };
+    while (true) {
+      const { error: detachTemplateError } = await supabase
+        .from("course_commissions")
+        .update(updatePayload)
+        .eq("template_id", templateId);
+      if (!detachTemplateError) break;
+      const missingColumn = getMissingColumnFromError(detachTemplateError);
+      if (missingColumn && Object.prototype.hasOwnProperty.call(updatePayload, missingColumn)) {
+        delete updatePayload[missingColumn];
+        continue;
+      }
+      break;
+    }
   }
 
   revalidateTemplateAdminPaths();
@@ -3312,9 +4229,19 @@ export async function upsertTemplateClass(prevState, maybeFormData) {
     }
   }
 
+  const resolvedTemplateId = await resolveTemplateIdFromTemplateSession(
+    supabase,
+    templateSessionId,
+    templateId
+  );
+
   const actorId = await getAdminActorId(supabase);
   await runExerciseGarbageCollection({ db: supabase, actorId });
-  revalidateTemplateAdminPaths(templateId);
+  const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, resolvedTemplateId);
+  if (syncError) {
+    return { error: syncError };
+  }
+  revalidateTemplateAdminPaths(resolvedTemplateId);
   return { success: true };
 }
 
@@ -3368,7 +4295,16 @@ export async function upsertTemplateSession(prevState, maybeFormData) {
     return { error: error.message || "No se pudo actualizar la sesion de plantilla." };
   }
 
-  revalidateTemplateAdminPaths(templateId);
+  const resolvedTemplateId = await resolveTemplateIdFromTemplateSession(
+    supabase,
+    templateSessionId,
+    templateId
+  );
+  const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, resolvedTemplateId);
+  if (syncError) {
+    return { error: syncError };
+  }
+  revalidateTemplateAdminPaths(resolvedTemplateId);
   return { success: true };
 }
 
@@ -3525,7 +4461,16 @@ export async function upsertTemplateSessionItem(prevState, maybeFormData) {
     await runExerciseGarbageCollection({ db: supabase, actorId });
   }
 
-  revalidateTemplateAdminPaths(templateId);
+  const resolvedTemplateId = await resolveTemplateIdFromTemplateSession(
+    supabase,
+    templateSessionId,
+    templateId
+  );
+  const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, resolvedTemplateId);
+  if (syncError) {
+    return { error: syncError };
+  }
+  revalidateTemplateAdminPaths(resolvedTemplateId);
   return { success: true };
 }
 
@@ -3674,6 +4619,10 @@ export async function createTemplateSessionExercise(prevState, maybeFormData) {
       return { error: insertItemError.message || "No se pudo asignar el ejercicio a la clase." };
     }
 
+    const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, templateId);
+    if (syncError) {
+      return { error: syncError };
+    }
     revalidateTemplateAdminPaths(templateId);
     return { success: true, exerciseId: insertedExercise.id };
   } catch (error) {
@@ -3716,6 +4665,7 @@ async function saveExerciseBatchForContainer({
   let created = 0;
   let updated = 0;
   const publishedExerciseIds = new Set();
+  const persistedAssignments = [];
 
   for (let index = 0; index < safeRows.length; index += 1) {
     const row = safeRows[index] || {};
@@ -3818,6 +4768,12 @@ async function saveExerciseBatchForContainer({
 
     if (persistedItemId) {
       keptItemIds.add(persistedItemId);
+      persistedAssignments.push({
+        itemId: String(persistedItemId || "").trim(),
+        exerciseId: savedExerciseId,
+        points: pointValue,
+        order: exerciseOrder,
+      });
     }
   }
 
@@ -3831,7 +4787,22 @@ async function saveExerciseBatchForContainer({
     }
   }
 
-  return { created, updated };
+  return {
+    created,
+    updated,
+    persistedAssignments: sortSavedExerciseAssignmentRows(
+      persistedAssignments.map((row) => ({
+        ...row,
+        exercise_order: row.order,
+        created_at: "",
+      }))
+    ).map((row) => ({
+      itemId: row.itemId,
+      exerciseId: row.exerciseId,
+      points: row.points,
+      order: Number(row.exercise_order || 0),
+    })),
+  };
 }
 
 export async function saveTemplateSessionExerciseBatch(prevState, maybeFormData) {
@@ -3902,12 +4873,11 @@ export async function saveTemplateSessionExerciseBatch(prevState, maybeFormData)
       containerId: templateSessionId,
       existingItems: existingItemsResult.data || [],
     });
-    const assignments = await loadSavedExerciseAssignments({
-      supabase,
-      tableName: "template_session_items",
-      containerColumn: "template_session_id",
-      containerId: templateSessionId,
-    });
+
+    const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, templateId);
+    if (syncError) {
+      return { error: syncError };
+    }
 
     revalidateTemplateAdminPaths(templateId);
     revalidatePath(`/admin/courses/templates/${templateId}/sessions/${templateSessionId}/exercises`);
@@ -3915,8 +4885,9 @@ export async function saveTemplateSessionExerciseBatch(prevState, maybeFormData)
     return {
       success: true,
       created: result.created,
-      assignments,
+      persistedAssignments: result.persistedAssignments || [],
       quizTitle,
+      savedAt: new Date().toISOString(),
       message:
         result.created > 0 && result.updated > 0
           ? `Prueba guardada. ${result.created} referencia(s) nuevas y ${result.updated} actualizadas.`
@@ -3927,6 +4898,28 @@ export async function saveTemplateSessionExerciseBatch(prevState, maybeFormData)
   } catch (error) {
     return { error: error?.message || "No se pudo guardar la prueba de la clase." };
   }
+}
+
+export async function syncTemplateLinkedCommissionsAction(prevState, maybeFormData) {
+  const formData = resolveFormDataArg(prevState, maybeFormData);
+  if (!formData) {
+    return { success: false, error: "No se recibieron datos para sincronizar comisiones." };
+  }
+
+  const supabase = await requireAdmin();
+  const templateId = getText(formData, "templateId");
+  if (!templateId) {
+    return { success: false, error: "Plantilla invalida para sincronizar comisiones." };
+  }
+
+  const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, templateId);
+  if (syncError) {
+    return { success: false, error: syncError };
+  }
+
+  revalidateCommissionAdminPaths();
+  revalidatePath("/app/curso");
+  return { success: true };
 }
 
 export async function createTemplateSessionExerciseBatch(prevState, maybeFormData) {
@@ -3994,12 +4987,6 @@ export async function saveCourseSessionExerciseBatch(prevState, maybeFormData) {
       containerId: courseSessionId,
       existingItems: existingItems || [],
     });
-    const assignments = await loadSavedExerciseAssignments({
-      supabase,
-      tableName: "session_items",
-      containerColumn: "session_id",
-      containerId: courseSessionId,
-    });
 
     revalidateCommissionAdminPaths();
     revalidatePath(`/admin/commissions/${commissionId}`);
@@ -4009,8 +4996,9 @@ export async function saveCourseSessionExerciseBatch(prevState, maybeFormData) {
     return {
       success: true,
       created: result.created,
-      assignments,
+      persistedAssignments: result.persistedAssignments || [],
       quizTitle,
+      savedAt: new Date().toISOString(),
       message:
         result.created > 0 && result.updated > 0
           ? `Prueba guardada. ${result.created} referencia(s) nuevas y ${result.updated} actualizadas.`
@@ -4061,6 +5049,10 @@ export async function deleteTemplateSessionExerciseBatch(formData) {
     return { error: deleteError.message || "No se pudo eliminar la prueba." };
   }
 
+  const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, templateId);
+  if (syncError) {
+    return { error: syncError };
+  }
   revalidateTemplateAdminPaths(templateId);
   revalidatePath(`/admin/courses/templates/${templateId}/sessions/${templateSessionId}/exercises`);
   return { success: true, message: "Prueba eliminada." };
@@ -4109,11 +5101,30 @@ export async function deleteTemplateSessionItem(formData) {
   const templateId = getText(formData, "templateId") || null;
   if (!itemId) return { error: "Material invalido." };
 
+  const { data: itemRow, error: itemLookupError } = await supabase
+    .from("template_session_items")
+    .select("id, template_session_id")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (itemLookupError || !itemRow?.id) {
+    return { error: itemLookupError?.message || "No se encontro el material de plantilla." };
+  }
+
+  const resolvedTemplateId = await resolveTemplateIdFromTemplateSession(
+    supabase,
+    itemRow.template_session_id,
+    templateId
+  );
+
   const { error } = await supabase.from("template_session_items").delete().eq("id", itemId);
   if (error) {
     return { error: error.message || "No se pudo eliminar el material." };
   }
-  revalidateTemplateAdminPaths(templateId);
+  const syncError = await syncTemplateLinkedCommissionsAfterChange(supabase, resolvedTemplateId);
+  if (syncError) {
+    return { error: syncError };
+  }
+  revalidateTemplateAdminPaths(resolvedTemplateId);
   return { success: true };
 }
 
@@ -4124,11 +5135,34 @@ export async function ensureCommissionSessions(formData) {
     return { error: "Comision invalida." };
   }
 
-  const { data: commission, error: commissionError } = await supabase
-    .from("course_commissions")
-    .select("id, course_level, start_date, end_date, start_month, duration_months, modality_key, days_of_week, start_time, end_time")
-    .eq("id", commissionId)
-    .maybeSingle();
+  let commissionColumns = [
+    "id",
+    "template_id",
+    "course_level",
+    "start_date",
+    "end_date",
+    "start_month",
+    "duration_months",
+    "modality_key",
+    "days_of_week",
+    "start_time",
+    "end_time",
+  ];
+  let commission = null;
+  let commissionError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await supabase
+      .from("course_commissions")
+      .select(commissionColumns.join(","))
+      .eq("id", commissionId)
+      .maybeSingle();
+    commission = result.data || null;
+    commissionError = result.error || null;
+    if (!commissionError) break;
+    const missingColumn = getMissingColumnFromError(commissionError);
+    if (!missingColumn || !commissionColumns.includes(missingColumn)) break;
+    commissionColumns = commissionColumns.filter((column) => column !== missingColumn);
+  }
 
   if (commissionError || !commission) {
     const message = String(commissionError?.message || "");
@@ -4580,7 +5614,7 @@ export async function upsertExercise(formData) {
       lesson_id: lessonId,
       type: requestedType,
       skill_tag: requestedSkillTag,
-      status: normalizeExerciseStatus(getText(formData, "status") || "draft"),
+      status: normalizeExerciseStatus(getText(formData, "status") || "published"),
       content_json: contentJson,
       ordering: 1,
     },

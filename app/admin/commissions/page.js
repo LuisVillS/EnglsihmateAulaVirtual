@@ -2,9 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
-import { upsertCommission } from "@/app/admin/actions";
-import CourseForm from "@/app/admin/courses/course-form";
 import CommissionsTable from "./table";
+import CommissionCreateForm from "./commission-create-form";
 
 export const metadata = {
   title: "Comisiones | Admin",
@@ -92,6 +91,34 @@ export default async function CommissionsPage() {
     enrolled_count: counts.get(commission.id) || 0,
   }));
 
+  let templateColumns = [
+    "id",
+    "course_level",
+    "frequency",
+    "template_name",
+    "course_duration_months",
+    "class_duration_minutes",
+  ];
+  let templates = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await supabase
+      .from("course_templates")
+      .select(templateColumns.join(","))
+      .order("course_level", { ascending: true })
+      .order("frequency", { ascending: true })
+      .order("template_name", { ascending: true });
+    if (!result.error) {
+      templates = result.data || [];
+      break;
+    }
+    const missingColumn = getMissingColumnFromError(result.error);
+    if (!missingColumn || !templateColumns.includes(missingColumn)) {
+      console.error("No se pudieron listar plantillas para crear comisiones", result.error);
+      break;
+    }
+    templateColumns = templateColumns.filter((column) => column !== missingColumn);
+  }
+
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
       <div className="pointer-events-none absolute inset-0">
@@ -126,7 +153,7 @@ export default async function CommissionsPage() {
             Crear nueva comision
           </summary>
           <div className="mt-4 max-w-3xl">
-            <CourseForm action={upsertCommission} submitLabel="Crear comision" />
+            <CommissionCreateForm templates={templates} />
           </div>
         </details>
 

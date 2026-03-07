@@ -295,7 +295,7 @@ export default async function LessonQuizPlayPage({ params: paramsPromise, search
           Volver al test
         </Link>
 
-        <article className="rounded-[2rem] border border-border bg-surface p-5 shadow-2xl shadow-black/20 sm:p-10">
+        <article className="rounded-xl border border-border bg-surface p-5 shadow-2xl shadow-black/20 sm:p-10">
           <header className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1">

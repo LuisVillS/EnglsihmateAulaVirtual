@@ -255,7 +255,23 @@ function isSlidesItem(item) {
 
 function isPrimarySlideItem(item) {
   const note = String(item?.note || "").trim().toLowerCase();
-  return note === "primary_slide";
+  return note === "primary_slide" || note === "template:primary_slide";
+}
+
+function isInternalSystemNote(note) {
+  const safeNote = String(note || "").trim().toLowerCase();
+  if (!safeNote) return false;
+  if (safeNote.startsWith("template:")) return true;
+  if (safeNote === "primary_slide") return true;
+  if (safeNote === "extra_slide") return true;
+  return false;
+}
+
+function getVisibleNote(note) {
+  const safeNote = String(note || "").trim();
+  if (!safeNote) return null;
+  if (isInternalSystemNote(safeNote)) return null;
+  return safeNote;
 }
 
 function isVideoItem(item) {
@@ -366,7 +382,7 @@ function groupExerciseItems(items = []) {
   return Array.from(groups.values()).map((group) => {
     const note =
       group.items
-        .map((item) => String(item?.note || "").trim())
+        .map((item) => getVisibleNote(item?.note))
         .find(Boolean) || null;
     const hasLinkedExercise = group.items.some(
       (item) =>
@@ -507,7 +523,8 @@ export default function CourseSessionList({
   const primarySlides = selectedSlidesItems.filter((item) => isPrimarySlideItem(item));
   const slidesItem =
     primarySlides[0] ||
-    (selectedSlidesItems.length === 1 ? selectedSlidesItems[0] : null);
+    selectedSlidesItems[0] ||
+    null;
   const selectedSlideUrl = String(slidesItem?.url || "").trim();
   const selectedPresentationTitle = String(slidesItem?.title || "").trim() || "Presentacion de clase";
   const selectedClassTitle = String(selectedSession?.title || "").trim() || "Slide de la clase";
@@ -756,7 +773,9 @@ export default function CourseSessionList({
                                         <p className="text-xs uppercase tracking-wide text-muted">
                                           {formatResourceTypeLabel(item.type)}
                                         </p>
-                                        {item.note ? <p className="text-xs text-muted">{item.note}</p> : null}
+                                        {getVisibleNote(item.note) ? (
+                                          <p className="text-xs text-muted">{getVisibleNote(item.note)}</p>
+                                        ) : null}
                                       </div>
                                       {isFlashcardsItem(item) ? (
                                         <button
@@ -1015,8 +1034,8 @@ export default function CourseSessionList({
                   : "Este material no se puede previsualizar dentro del aula."}
               </div>
             )}
-            {selectedMaterialItem?.note ? (
-              <p className="text-sm text-muted">{selectedMaterialItem.note}</p>
+            {getVisibleNote(selectedMaterialItem?.note) ? (
+              <p className="text-sm text-muted">{getVisibleNote(selectedMaterialItem?.note)}</p>
             ) : null}
             <div className="flex justify-end border-t border-border pt-3">
               <button
