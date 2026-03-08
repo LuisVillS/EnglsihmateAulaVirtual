@@ -1,0 +1,307 @@
+"use client";
+
+import { startTransition, useDeferredValue, useEffect, useState } from "react";
+import LibraryBookCard from "@/components/library-book-card";
+
+function buildSearchParams({ query, cefrLevel, category, tag }) {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (cefrLevel) params.set("cefr", cefrLevel);
+  if (category) params.set("category", category);
+  if (tag) params.set("tag", tag);
+  return params.toString();
+}
+
+function HorizontalBookRow({ title, books = [], subtitle = "" }) {
+  if (!books.length) return null;
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.26em] text-muted">{subtitle || "Curated row"}</p>
+          <h2 className="mt-2 text-2xl font-semibold text-foreground">{title}</h2>
+        </div>
+        <p className="text-sm text-muted">{books.length} books</p>
+      </div>
+
+      <div className="-mx-1 overflow-x-auto pb-2">
+        <div className="flex min-w-max gap-4 px-1">
+          {books.map((book) => (
+            <div key={book.id} className="w-[240px] shrink-0">
+              <LibraryBookCard book={book} compact />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function EmptyPanel({ title, description }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-border bg-surface px-6 py-10 text-center">
+      <p className="text-lg font-semibold text-foreground">{title}</p>
+      <p className="mt-2 text-sm text-muted">{description}</p>
+    </div>
+  );
+}
+
+export default function StudentLibraryBrowser({ homePayload, studentLevel = "" }) {
+  const [query, setQuery] = useState("");
+  const [cefrLevel, setCefrLevel] = useState("");
+  const [category, setCategory] = useState("");
+  const [tag, setTag] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const deferredQuery = useDeferredValue(query.trim());
+
+  const filters = homePayload?.filters || {
+    cefrOptions: [],
+    categoryOptions: [],
+    tagOptions: [],
+  };
+  const myLibrary = homePayload?.myLibrary || {
+    currentlyReading: [],
+    saved: [],
+    completed: [],
+  };
+  const levelMatchedRows = homePayload?.levelMatchedRows || [];
+  const hasActiveSearch = Boolean(deferredQuery || cefrLevel || category || tag);
+
+  useEffect(() => {
+    if (!hasActiveSearch) {
+      setResults([]);
+      setError("");
+      setLoading(false);
+      return undefined;
+    }
+
+    let active = true;
+    const controller = new AbortController();
+
+    async function loadResults() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const params = buildSearchParams({
+          query: deferredQuery,
+          cefrLevel,
+          category,
+          tag,
+        });
+        const response = await fetch(`/api/library/books?${params}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.error || "No se pudo buscar en la biblioteca.");
+        }
+
+        if (active) {
+          startTransition(() => {
+            setResults(Array.isArray(payload?.books) ? payload.books : []);
+          });
+        }
+      } catch (requestError) {
+        if (active && requestError?.name !== "AbortError") {
+          setError(requestError?.message || "No se pudo buscar en la biblioteca.");
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadResults();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [category, cefrLevel, deferredQuery, hasActiveSearch, tag]);
+
+  const myLibraryCount =
+    (myLibrary.currentlyReading?.length || 0) +
+    (myLibrary.saved?.length || 0) +
+    (myLibrary.completed?.length || 0);
+
+  return (
+    <section className="space-y-8 text-foreground">
+      <header className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+        <div className="grid gap-6 px-6 py-7 lg:grid-cols-[1.05fr_0.95fr] lg:px-8">
+          <div className="space-y-4">
+            <p className="text-xs uppercase tracking-[0.35em] text-muted">EnglishMate Library</p>
+            <div className="space-y-2">
+              <h1 className="max-w-2xl text-3xl font-semibold leading-tight sm:text-4xl">
+                Search first, then continue reading where you left off
+              </h1>
+              <p className="max-w-2xl text-sm text-muted sm:text-base">
+                Every title here is already approved, English-only, and readable inside EnglishMate.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs uppercase tracking-[0.24em] text-muted">
+              <span>My Library: {myLibraryCount}</span>
+              <span>{studentLevel || "All levels"} default view</span>
+              <span>Internal catalog only</span>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-surface-2 p-5">
+            <div className="grid gap-4">
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Search</label>
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-foreground"
+                  placeholder="Title, author, tag"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">CEFR</label>
+                  <select
+                    value={cefrLevel}
+                    onChange={(event) => setCefrLevel(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-foreground"
+                  >
+                    <option value="">All levels</option>
+                    {filters.cefrOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Category</label>
+                  <select
+                    value={category}
+                    onChange={(event) => setCategory(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-foreground"
+                  >
+                    <option value="">All categories</option>
+                    {filters.categoryOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Tag</label>
+                  <select
+                    value={tag}
+                    onChange={(event) => setTag(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-foreground"
+                  >
+                    <option value="">All tags</option>
+                    {filters.tagOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {hasActiveSearch ? (
+        <section className="space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.26em] text-muted">Search results</p>
+              <h2 className="mt-2 text-2xl font-semibold text-foreground">
+                {loading ? "Searching library..." : `${results.length} result${results.length === 1 ? "" : "s"}`}
+              </h2>
+            </div>
+            {error ? <p className="text-sm text-danger">{error}</p> : null}
+          </div>
+
+          {results.length ? (
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+              {results.map((book) => (
+                <LibraryBookCard key={book.id} book={book} />
+              ))}
+            </div>
+          ) : loading ? (
+            <EmptyPanel title="Searching the catalog" description="Reading the internal library catalog only." />
+          ) : (
+            <EmptyPanel title="No books match these filters" description="Try a broader search or clear one of the filters." />
+          )}
+        </section>
+      ) : (
+        <>
+          <section className="space-y-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.26em] text-muted">My Library</p>
+              <h2 className="mt-2 text-2xl font-semibold text-foreground">Your reading collection</h2>
+            </div>
+
+            {myLibraryCount ? (
+              <div className="space-y-8">
+                <HorizontalBookRow
+                  title="Currently Reading"
+                  subtitle="Resume from your latest page"
+                  books={myLibrary.currentlyReading || []}
+                />
+                <HorizontalBookRow
+                  title="Saved for Later"
+                  subtitle="Books you added to My Library"
+                  books={myLibrary.saved || []}
+                />
+                <HorizontalBookRow
+                  title="Completed"
+                  subtitle="Books you already finished"
+                  books={myLibrary.completed || []}
+                />
+              </div>
+            ) : (
+              <EmptyPanel
+                title="Your library is empty"
+                description="Add a book to My Library or open a book to start building your personal shelf."
+              />
+            )}
+          </section>
+
+          <section className="space-y-6">
+            <div>
+              <p className="text-xs uppercase tracking-[0.26em] text-muted">Level-matched rows</p>
+              <h2 className="mt-2 text-2xl font-semibold text-foreground">
+                {studentLevel ? `${studentLevel} category rows` : "Browse by category"}
+              </h2>
+            </div>
+
+            {levelMatchedRows.length ? (
+              <div className="space-y-8">
+                {levelMatchedRows.map((row) => (
+                  <HorizontalBookRow
+                    key={row.category}
+                    title={row.category}
+                    subtitle={studentLevel ? `${studentLevel} level match` : "Curated category"}
+                    books={row.books}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyPanel
+                title="No personalized rows yet"
+                description="Assign CEFR and category data to more books to populate the default library view."
+              />
+            )}
+          </section>
+        </>
+      )}
+    </section>
+  );
+}

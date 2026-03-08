@@ -12,6 +12,7 @@ const NAV_LINKS = [
   { href: "/admin/courses/templates", label: "Plantillas" },
   { href: "/admin/exercises", label: "Exercises" },
   { href: "/admin/flashcards", label: "Flashcards" },
+  { href: "/admin/library", label: "Library" },
 ];
 
 function isLinkActive(pathname, href) {

@@ -17,6 +17,7 @@ const NAV_ITEMS = [
 ];
 
 const SECONDARY_ITEMS = [
+  { label: "Library", href: "/app/library", icon: "library" },
   { label: "Discord", href: "/app/discord", icon: "discord" },
   { label: "Eventos", href: "/app/eventos", icon: "spark" },
   { label: "Portal trabajo", href: "/app/empleo", icon: "briefcase" },
@@ -57,6 +58,14 @@ function Icon({ name }) {
       return (
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
           <path d="M19.1 4.9A16 16 0 0 0 15 3.5a11.7 11.7 0 0 0-.6 1.2 15 15 0 0 0-4.8 0c-.2-.4-.4-.8-.6-1.2a16 16 0 0 0-4.1 1.4C2.6 8.1 2 11.2 2.2 14.2a15.8 15.8 0 0 0 4.8 2.4c.4-.6.7-1.2 1-1.8a10.3 10.3 0 0 1-1.6-.8l.4-.3a11.2 11.2 0 0 0 10.4 0l.4.3a10.5 10.5 0 0 1-1.6.8c.3.6.6 1.2 1 1.8a15.7 15.7 0 0 0 4.8-2.4c.3-3-0.3-6.1-2.7-9.3ZM8.9 13.5c-.7 0-1.3-.7-1.3-1.6 0-.9.6-1.6 1.3-1.6.7 0 1.3.7 1.3 1.6 0 .9-.6 1.6-1.3 1.6Zm6.2 0c-.7 0-1.3-.7-1.3-1.6 0-.9.6-1.6 1.3-1.6.7 0 1.3.7 1.3 1.6 0 .9-.6 1.6-1.3 1.6Z" />
+        </svg>
+      );
+    case "library":
+      return (
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M5.5 4.5h11a2 2 0 0 1 2 2v12h-13a2 2 0 0 1-2-2v-10a2 2 0 0 1 2-2Z" />
+          <path d="M8.5 4.5v14" />
+          <path d="M11.5 8h4M11.5 11h4M11.5 14h3" />
         </svg>
       );
     case "spark":
