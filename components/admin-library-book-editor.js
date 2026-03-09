@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function AdminLibraryBookEditor({ initialBook }) {
+  const router = useRouter();
   const [form, setForm] = useState({
     title: initialBook.title || "",
     subtitle: initialBook.subtitle || "",
@@ -88,6 +90,28 @@ export default function AdminLibraryBookEditor({ initialBook }) {
       setMessage("Book archived.");
     } catch (requestError) {
       setError(requestError?.message || "No se pudo archivar el libro.");
+    } finally {
+      setPending("");
+    }
+  }
+
+  async function deleteBook() {
+    setPending("delete");
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await fetch(`/api/admin/library/books/${initialBook.id}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || "No se pudo eliminar el libro.");
+      }
+      router.push("/admin/library");
+      router.refresh();
+    } catch (requestError) {
+      setError(requestError?.message || "No se pudo eliminar el libro.");
     } finally {
       setPending("");
     }
@@ -202,6 +226,14 @@ export default function AdminLibraryBookEditor({ initialBook }) {
           className="rounded-xl border border-danger/40 px-4 py-3 text-sm font-semibold text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {pending === "archive" ? "Archiving..." : "Archive book"}
+        </button>
+        <button
+          type="button"
+          onClick={deleteBook}
+          disabled={Boolean(pending)}
+          className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm font-semibold text-danger transition hover:bg-danger/15 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {pending === "delete" ? "Deleting..." : "Delete from library"}
         </button>
       </div>
     </div>

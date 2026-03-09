@@ -161,7 +161,7 @@ export default function AdminLibraryImportManager() {
       }
 
       setCandidates(Array.isArray(payload?.candidates) ? payload.candidates : []);
-      setMessage(`${payload?.total || 0} result(s) loaded from Open Library.`);
+      setMessage(`${payload?.total || 0} readable result(s) loaded from Open Library.`);
     } catch (requestError) {
       setError(requestError?.message || "No se pudo consultar Open Library.");
     } finally {
@@ -236,10 +236,89 @@ export default function AdminLibraryImportManager() {
         return {
           ...candidate,
           imported: true,
-          staging_status: match.ingestionStatus,
+          publish_status: match.publishStatus || "published",
+          publishedBookId: match.id,
+          slug: match.slug || "",
         };
       })
     );
+  }
+
+  function updateCandidateUploadedEpub(id, uploadedEpub) {
+    setCandidates((previous) =>
+      previous.map((candidate) =>
+        candidateId(candidate) === id
+          ? {
+              ...candidate,
+              uploadedEpubKey: uploadedEpub?.key || "",
+              uploadedEpubFileName: uploadedEpub?.fileName || "",
+              uploadedEpubContentType: uploadedEpub?.contentType || "",
+              uploadedEpubBytes: uploadedEpub?.bytes ?? null,
+            }
+          : candidate
+      )
+    );
+  }
+
+  async function uploadCandidateEpub(id, file) {
+    if (!file) return;
+
+    setLoading(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("scope", "candidate");
+      formData.append("entityKey", id);
+
+      const response = await fetch("/api/admin/library/upload-epub", {
+        method: "POST",
+        body: formData,
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || "No se pudo subir el EPUB.");
+      }
+
+      updateCandidateUploadedEpub(id, payload?.uploadedEpub || null);
+      setMessage(`EPUB uploaded: ${payload?.uploadedEpub?.fileName || file.name}`);
+    } catch (requestError) {
+      setError(requestError?.message || "No se pudo subir el EPUB.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeCandidateEpub(id, uploadedEpubKey) {
+    if (!uploadedEpubKey) return;
+
+    setLoading(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await fetch("/api/admin/library/upload-epub", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ key: uploadedEpubKey }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || "No se pudo quitar el EPUB.");
+      }
+
+      updateCandidateUploadedEpub(id, null);
+      setMessage("Uploaded EPUB removed.");
+    } catch (requestError) {
+      setError(requestError?.message || "No se pudo quitar el EPUB.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function importSelected({ reject = false, explicitCandidates = null } = {}) {
@@ -247,6 +326,15 @@ export default function AdminLibraryImportManager() {
       ? explicitCandidates
       : candidates.filter((candidate) => selectedIds.includes(candidateId(candidate)));
     if (!selectedCandidates.length || loading) return;
+
+    if (reject) {
+      const rejectedIds = new Set(selectedCandidates.map((candidate) => candidateId(candidate)));
+      setCandidates((previous) => previous.filter((candidate) => !rejectedIds.has(candidateId(candidate))));
+      setSelectedIds([]);
+      setError("");
+      setMessage(`${selectedCandidates.length} selected title(s) removed from this import view.`);
+      return;
+    }
 
     setLoading(true);
     setError("");
@@ -264,8 +352,6 @@ export default function AdminLibraryImportManager() {
             cefrLevel: bulkForm.cefrLevel || undefined,
             category: bulkForm.category || undefined,
             tags: bulkForm.tags || undefined,
-            ingestionStatus: reject ? "rejected" : undefined,
-            rejectionReason: reject ? "Rejected during import review." : undefined,
           },
         }),
       });
@@ -277,11 +363,7 @@ export default function AdminLibraryImportManager() {
 
       applyImportedState(payload?.imported || []);
       setSelectedIds([]);
-      setMessage(
-        reject
-          ? `${payload?.imported?.length || 0} selected title(s) sent to rejected staging.`
-          : `${payload?.imported?.length || 0} selected title(s) imported to staging.`
-      );
+      setMessage(`${payload?.imported?.length || 0} selected title(s) published to the library.`);
       if (payload?.errors?.length) {
         setError(payload.errors.map((entry) => entry.error).join(" "));
       }
@@ -309,7 +391,7 @@ export default function AdminLibraryImportManager() {
               placeholder="Pride and Prejudice"
             />
             <p className="mt-2 text-sm text-muted">
-              Admin-only discovery. Students never search Open Library directly from the classroom.
+              Admin-only discovery. Search results are limited to readable candidates, and students never search Open Library directly from the classroom.
             </p>
           </div>
           <div>
@@ -371,7 +453,7 @@ export default function AdminLibraryImportManager() {
               disabled={!selectedCount || loading}
               className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Import selected ({selectedCount})
+              Publish selected ({selectedCount})
             </button>
             <button
               type="button"
@@ -379,7 +461,7 @@ export default function AdminLibraryImportManager() {
               disabled={!selectedCount || loading}
               className="rounded-xl border border-danger/40 px-4 py-2 text-sm font-semibold text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Reject selected
+              Remove selected
             </button>
           </div>
         </div>
@@ -453,6 +535,35 @@ export default function AdminLibraryImportManager() {
                     </div>
                   </dl>
 
+                  <div>
+                    <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">
+                      EPUB upload
+                    </label>
+                    <input
+                      type="file"
+                      accept=".epub,application/epub+zip"
+                      onChange={(event) => uploadCandidateEpub(id, event.target.files?.[0])}
+                      className="mt-2 block w-full text-sm text-foreground file:mr-3 file:rounded-lg file:border file:border-border file:bg-surface-2 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-foreground"
+                    />
+                    {candidate.uploadedEpubFileName ? (
+                      <div className="mt-3 flex items-center justify-between rounded-lg border border-border bg-surface-2 px-3 py-2 text-xs text-foreground">
+                        <span>{candidate.uploadedEpubFileName}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeCandidateEpub(id, candidate.uploadedEpubKey)}
+                          className="font-semibold text-danger"
+                          aria-label="Remove uploaded EPUB"
+                        >
+                          X
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-muted">
+                        Upload an EPUB if you want this book to use your internal reader immediately.
+                      </p>
+                    )}
+                  </div>
+
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -467,7 +578,7 @@ export default function AdminLibraryImportManager() {
                       disabled={loading}
                       className="flex-1 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {candidate.imported ? `Imported (${candidate.staging_status || "pending"})` : "Import"}
+                      {candidate.imported ? "Published" : "Publish"}
                     </button>
                   </div>
                 </div>
@@ -478,7 +589,7 @@ export default function AdminLibraryImportManager() {
       ) : (
         <div className="rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
           <p className="text-lg font-semibold text-foreground">No search results yet</p>
-          <p className="mt-2 text-sm text-muted">Run an admin search to preview and import readable candidates.</p>
+          <p className="mt-2 text-sm text-muted">Run an admin search to preview and publish readable candidates.</p>
         </div>
       )}
 

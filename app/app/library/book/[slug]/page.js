@@ -24,6 +24,20 @@ export default async function LibraryBookDetailPage({ params: paramsPromise }) {
     notFound();
   }
 
+  const { data: sourceRows } = await supabase
+    .from("library_book_sources")
+    .select("id, source_format, source_status, readable, is_preferred_read, updated_at")
+    .eq("library_book_id", book.id)
+    .eq("source_status", "active")
+    .eq("readable", true)
+    .order("is_preferred_read", { ascending: false })
+    .order("updated_at", { ascending: false });
+
+  const hasPreferredEpubSource = (Array.isArray(sourceRows) ? sourceRows : []).some(
+    (source) => source?.source_format === "epub"
+  );
+  const readHref = hasPreferredEpubSource ? `/app/library/epub/${book.slug}` : `/app/library/read/${book.slug}`;
+
   const relatedBooks = await listRelatedLibraryBooks({
     db: supabase,
     book,
@@ -87,7 +101,7 @@ export default async function LibraryBookDetailPage({ params: paramsPromise }) {
 
           <div className="flex flex-wrap gap-3">
             <Link
-              href={`/app/library/read/${book.slug}`}
+              href={readHref}
               className="inline-flex items-center justify-center rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2"
             >
               {book.savedPageNumber || book.savedPageCode || book.startedReading ? "Continue Reading" : "Read now"}

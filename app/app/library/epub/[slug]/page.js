@@ -13,7 +13,7 @@ import { resolveLibraryReadPayload, resolvePreferredEpubSource } from "@/lib/lib
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function LibraryReadPage({ params: paramsPromise }) {
+export default async function LibraryEpubReadPage({ params: paramsPromise }) {
   const { supabase, user } = await requireStudentLibraryPageAccess();
   const params = await paramsPromise;
 
@@ -33,8 +33,8 @@ export default async function LibraryReadPage({ params: paramsPromise }) {
     allowSourceSync: false,
   });
 
-  if (preferredEpubSource?.id) {
-    redirect(`/app/library/epub/${book.slug}`);
+  if (!preferredEpubSource?.id) {
+    redirect(`/app/library/read/${book.slug}`);
   }
 
   await recordLibraryReadOpen({

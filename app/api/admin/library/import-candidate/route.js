@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdminRouteAccess } from "@/lib/duolingo/api-auth";
-import { importLibraryCandidateToStaging } from "@/lib/library/admin";
+import { publishLibrarySourceCandidate } from "@/lib/library/admin";
 
 export async function POST(request) {
   const auth = await requireAdminRouteAccess();
@@ -12,14 +12,14 @@ export async function POST(request) {
       return NextResponse.json({ error: "candidate es obligatorio." }, { status: 400 });
     }
 
-    const stagingCandidate = await importLibraryCandidateToStaging({
+    const book = await publishLibrarySourceCandidate({
       db: auth.db,
       candidate: body.candidate,
       overrides: body.overrides || {},
     });
 
     return NextResponse.json({
-      stagingCandidate,
+      book,
     });
   } catch (error) {
     console.error("POST /api/admin/library/import-candidate failed", error);
@@ -29,4 +29,3 @@ export async function POST(request) {
     );
   }
 }
-

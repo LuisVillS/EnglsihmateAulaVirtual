@@ -51,13 +51,7 @@ export default async function AdminLibraryPage() {
               href="/admin/library/import"
               className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
             >
-              Import books
-            </Link>
-            <Link
-              href="/admin/library/staging"
-              className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-            >
-              Review staging
+              Publish books
             </Link>
             <Link
               href="/admin/library/duplicates"
@@ -78,8 +72,6 @@ export default async function AdminLibraryPage() {
           {[
             { label: "Published", value: counts.published, helper: "Visible to students" },
             { label: "Archived", value: counts.archived, helper: "Kept for history, hidden from students" },
-            { label: "In staging", value: counts.staging, helper: "Imported but not published" },
-            { label: "Pending review", value: counts.pendingReview, helper: "Needs admin review or metadata fixes" },
             { label: "Duplicate groups", value: counts.duplicates, helper: "Potential conflicts to resolve" },
           ].map((card) => (
             <article key={card.label} className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
@@ -98,10 +90,10 @@ export default async function AdminLibraryPage() {
                 <h2 className="mt-2 text-2xl font-semibold">Catalog snapshot</h2>
               </div>
               <Link
-                href="/admin/library/staging"
+                href="/admin/library/import"
                 className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
               >
-                Open staging
+                Publish more
               </Link>
             </div>
 
@@ -150,21 +142,21 @@ export default async function AdminLibraryPage() {
             <h2 className="mt-2 text-2xl font-semibold">What needs attention</h2>
             <div className="mt-5 space-y-4">
               <div className="rounded-xl border border-border bg-surface-2 p-4">
-                <p className="text-sm font-semibold text-foreground">Pending staging review</p>
+                <p className="text-sm font-semibold text-foreground">Direct publishing flow</p>
                 <p className="mt-1 text-sm text-muted">
-                  {counts.pendingReview} candidate(s) need manual approval, rejection, or metadata edits.
+                  Search Open Library, optionally attach an EPUB, and publish straight to the student catalog.
                 </p>
               </div>
               <div className="rounded-xl border border-border bg-surface-2 p-4">
                 <p className="text-sm font-semibold text-foreground">Duplicate resolution queue</p>
                 <p className="mt-1 text-sm text-muted">
-                  {counts.duplicates} duplicate group(s) detected across published and staging records.
+                  {counts.duplicates} duplicate group(s) detected across published records.
                 </p>
               </div>
               <div className="rounded-xl border border-border bg-surface-2 p-4">
-                <p className="text-sm font-semibold text-foreground">Import workflow</p>
+                <p className="text-sm font-semibold text-foreground">Reader source priority</p>
                 <p className="mt-1 text-sm text-muted">
-                  Search Open Library, import candidates to staging, and keep student traffic on our own DB only.
+                  Uploaded EPUBs stay the primary readable source, with Open Library remaining a metadata and fallback layer.
                 </p>
               </div>
             </div>

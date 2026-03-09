@@ -7,6 +7,16 @@ import { getAdminLibraryBookById } from "@/lib/library/repository";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const ADMIN_LIBRARY_SOURCE_FIELDS = [
+  "id",
+  "source_name",
+  "source_role",
+  "source_format",
+  "source_status",
+  "is_preferred_read",
+  "readable",
+].join(", ");
+
 export default async function AdminLibraryBookPage({ params: paramsPromise }) {
   const { supabase } = await requireAdminLibraryPageAccess();
   const params = await paramsPromise;
@@ -19,6 +29,24 @@ export default async function AdminLibraryBookPage({ params: paramsPromise }) {
   if (!book?.id) {
     notFound();
   }
+
+  const { data: sourceRows } = await supabase
+    .from("library_book_sources")
+    .select(ADMIN_LIBRARY_SOURCE_FIELDS)
+    .eq("library_book_id", book.id)
+    .order("created_at", { ascending: true });
+
+  const sources = Array.isArray(sourceRows)
+    ? sourceRows.map((source) => ({
+        id: source.id,
+        sourceName: source.source_name,
+        sourceRole: source.source_role,
+        sourceFormat: source.source_format,
+        sourceStatus: source.source_status,
+        isPreferredRead: Boolean(source.is_preferred_read),
+        readable: Boolean(source.readable),
+      }))
+    : [];
 
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
@@ -33,7 +61,7 @@ export default async function AdminLibraryBookPage({ params: paramsPromise }) {
             <p className="text-xs uppercase tracking-[0.35em] text-muted">Admin / Library / Book</p>
             <h1 className="text-3xl font-semibold">{book.title}</h1>
             <p className="text-sm text-muted">
-              {book.authorDisplay || "Unknown author"} · {book.slug}
+              {book.authorDisplay || "Unknown author"} - {book.slug}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -81,6 +109,24 @@ export default async function AdminLibraryBookPage({ params: paramsPromise }) {
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-muted">Source sync</p>
                 <p className="mt-1 text-foreground">{book.sourceSyncStatus || "pending"}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 border-t border-border pt-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-muted">Sources</p>
+              <div className="space-y-3 text-sm text-muted">
+                {sources.map((source) => (
+                  <div key={source.id || `${source.sourceName}-${source.sourceRole}`} className="rounded-xl border border-border bg-background px-3 py-3">
+                    <p className="font-semibold text-foreground">
+                      {source.sourceName} - {source.sourceRole}
+                    </p>
+                    <p className="mt-1">Status: {source.sourceStatus || "pending"}</p>
+                    <p>Format: {source.sourceFormat || "n/a"}</p>
+                    <p>Preferred read: {source.isPreferredRead ? "yes" : "no"}</p>
+                    <p>Readable: {source.readable ? "yes" : "no"}</p>
+                  </div>
+                ))}
+                {!sources.length ? <p>No linked source rows yet.</p> : null}
               </div>
             </div>
           </aside>

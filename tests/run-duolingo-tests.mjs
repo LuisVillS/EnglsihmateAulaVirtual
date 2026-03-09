@@ -37,7 +37,30 @@ import {
   getLibraryFloatingBookmarkPanelClasses,
   toggleLibraryReaderFullscreen,
 } from "../lib/library/reader-ui.js";
-import { canOpenLibraryReader, filterStudentVisibleLibraryBooks } from "../lib/library/policies.js";
+import {
+  buildLibraryEpubProgressLabel,
+  canUseLibraryReaderArrowKeys,
+  clampLibraryEpubFontScale,
+  flattenLibraryTocItems,
+  resolveLibraryEpubDisplayMode,
+  resolveLibraryEpubPageKind,
+  resolveLibraryEpubPageState,
+  resolveLibraryEpubVisiblePageNumbers,
+  shouldShowLibraryBookmarkPanel,
+} from "../lib/library/epub-reader-ui.js";
+import {
+  buildCanonicalManualEpubCacheKey,
+  buildLibraryManualUploadKey,
+  buildLegacyOpenLibrarySource,
+  pickPreferredLibraryReadSource,
+  resolveArchiveIdentifierFromSource,
+  sourceHasReadableEpubAsset,
+} from "../lib/library/source-manager.js";
+import {
+  canOpenLibraryReader,
+  filterStudentVisibleLibraryBooks,
+  isReadableOnlineLibraryRecord,
+} from "../lib/library/policies.js";
 
 const results = [];
 
@@ -180,6 +203,30 @@ await run("library filtering keeps only english readable public books", () => {
   assert.deepEqual(visible.map((book) => book.id), ["eng-visible"]);
 });
 
+await run("admin import search keeps only readable source candidates", () => {
+  assert.equal(
+    isReadableOnlineLibraryRecord(
+      createLibraryBook({
+        readable_online: true,
+        ebook_access: "public",
+        preview_only: false,
+        borrowable: false,
+      })
+    ),
+    true
+  );
+  assert.equal(
+    isReadableOnlineLibraryRecord(
+      createLibraryBook({
+        readable_online: false,
+        ebook_access: "preview",
+        preview_only: true,
+      })
+    ),
+    false
+  );
+});
+
 await run("library dedupe groups by work key", () => {
   const groups = detectDuplicateGroups([
     createLibraryBook({ id: "a", openlibrary_work_key: "OL1W" }),
@@ -310,16 +357,22 @@ await run("read state serialization exposes saved page number", () => {
     savedPageNumber: 170,
     savedPageCode: "leaf12",
     lastPageNumber: 168,
+    lastLocation: "epubcfi(/6/2[chapter1]!/4/1:0)",
+    progressPercent: 54.2,
     inMyLibrary: true,
     startedReading: true,
     completed: false,
+    lastOpenedAt: "2026-03-08T10:05:00.000Z",
     updatedAt: "2026-03-08T10:00:00.000Z",
   });
 
   assert.equal(serialized.savedPageNumber, 170);
   assert.equal(serialized.savedPageCode, "leaf12");
   assert.equal(serialized.lastPageNumber, 168);
+  assert.equal(serialized.lastLocation, "epubcfi(/6/2[chapter1]!/4/1:0)");
+  assert.equal(serialized.progressPercent, 54.2);
   assert.equal(serialized.inMyLibrary, true);
+  assert.equal(serialized.lastOpenedAt, "2026-03-08T10:05:00.000Z");
 });
 
 await run("read page uses saved page as first resume source", () => {
@@ -361,6 +414,112 @@ await run("saved full archive reader urls are normalized for resume", () => {
   });
 
   assert.equal(url, "https://www.archive.org/embed/a-tale-of-two-cities#page/n15/mode/2up");
+});
+
+await run("preferred library source selection favors preferred remote epub sources", () => {
+  const selected = pickPreferredLibraryReadSource({
+    book: createLibraryBook(),
+    sources: [
+      {
+        id: "openlibrary",
+        sourceName: "openlibrary",
+        sourceRole: "hybrid",
+        sourceStatus: "active",
+        readable: true,
+        isPreferredRead: false,
+        embedUrl: "https://www.archive.org/embed/book-one",
+      },
+      {
+        id: "standard",
+          sourceName: "remote_epub",
+        sourceRole: "read",
+        sourceStatus: "active",
+        readable: true,
+        isPreferredRead: true,
+        downloadUrl: "https://standardebooks.org/example.epub",
+      },
+    ],
+  });
+
+  assert.equal(selected.id, "standard");
+});
+
+await run("preferred library source selection favors uploaded epub when marked preferred", () => {
+  const selected = pickPreferredLibraryReadSource({
+    book: createLibraryBook(),
+    sources: [
+      {
+        id: "openlibrary",
+        sourceName: "openlibrary",
+        sourceRole: "hybrid",
+        sourceStatus: "active",
+        sourceFormat: "archive_embed",
+        readable: true,
+        isPreferredRead: false,
+        embedUrl: "https://www.archive.org/embed/book-one",
+      },
+      {
+        id: "manual-epub",
+        sourceName: "manual_epub",
+        sourceRole: "read",
+        sourceStatus: "active",
+        sourceFormat: "epub",
+        readable: true,
+        isPreferredRead: true,
+        cacheStatus: "ready",
+        cacheKey: "library/manual-uploads/book.epub",
+      },
+    ],
+  });
+
+  assert.equal(selected.id, "manual-epub");
+});
+
+await run("uploaded epub sources are readable from cache without a remote download url", () => {
+  assert.equal(
+    sourceHasReadableEpubAsset({
+      sourceStatus: "active",
+      sourceFormat: "epub",
+      readable: true,
+      downloadUrl: "",
+      cacheStatus: "ready",
+      cacheKey: "library/manual-uploads/book.epub",
+    }),
+    true
+  );
+});
+
+await run("legacy open library source builder preserves archive fallback", () => {
+  const source = buildLegacyOpenLibrarySource(
+    createLibraryBook({
+      id: "legacy-book",
+      openlibrary_work_key: "OL12W",
+      openlibrary_edition_key: "OL34M",
+      internet_archive_identifier: "legacy-archive",
+    }),
+    { preferRead: true }
+  );
+
+  assert.equal(source.sourceName, "openlibrary");
+  assert.equal(source.sourceRole, "hybrid");
+  assert.equal(source.readable, true);
+  assert.equal(source.isPreferredRead, true);
+  assert.equal(source.embedUrl, "https://www.archive.org/embed/legacy-archive");
+});
+
+await run("archive identifier resolution prefers embed urls over stale source identifiers", () => {
+  const resolved = resolveArchiveIdentifierFromSource(
+    {
+      sourceIdentifier: "OL25709295M",
+      embedUrl: "https://www.archive.org/embed/a-tale-of-two-cities",
+      readerUrl: "https://archive.org/details/a-tale-of-two-cities",
+    },
+    createLibraryBook({
+      internet_archive_identifier: "a-tale-of-two-cities",
+    })
+  );
+
+  assert.equal(resolved, "a-tale-of-two-cities");
 });
 
 await run("my library cards show saved page when available", () => {
@@ -454,6 +613,187 @@ await run("mobile layout does not break with panel visible", () => {
   const classes = getLibraryFloatingBookmarkPanelClasses({ isMobile: true, isFullscreen: false });
   assert.match(classes, /\bright-4\b/);
   assert.match(classes, /\bbottom-4\b/);
+});
+
+await run("epub readers hide the sticky bookmark panel", () => {
+  assert.equal(shouldShowLibraryBookmarkPanel({ type: "epub" }), false);
+  assert.equal(shouldShowLibraryBookmarkPanel({ type: "archive_embed" }), true);
+});
+
+await run("epub toc flattening keeps nested sections", () => {
+  const flattened = flattenLibraryTocItems([
+    {
+      href: "text/chapter-1.xhtml",
+      label: "Chapter 1",
+      subitems: [
+        {
+          href: "text/chapter-1.xhtml#part-2",
+          label: "Part 2",
+          subitems: [],
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(flattened.length, 2);
+  assert.equal(flattened[1].depth, 1);
+  assert.equal(flattened[1].label, "Part 2");
+});
+
+await run("epub font scale is clamped to safe bounds", () => {
+  assert.equal(clampLibraryEpubFontScale(50), 90);
+  assert.equal(clampLibraryEpubFontScale(118), 118);
+  assert.equal(clampLibraryEpubFontScale(999), 150);
+});
+
+await run("epub page state prefers global location counts when available", () => {
+  assert.deepEqual(
+    resolveLibraryEpubPageState({
+      location: {
+        start: {
+          displayed: {
+            page: 3,
+            total: 12,
+          },
+        },
+      },
+      locationIndex: 41,
+      locationTotal: 318,
+    }),
+    {
+      pageNumber: 42,
+      pageTotal: 319,
+    }
+  );
+  assert.deepEqual(
+    resolveLibraryEpubPageState({
+      location: {
+        start: {
+          displayed: {
+            page: 3,
+            total: 12,
+          },
+        },
+      },
+      locationIndex: null,
+      locationTotal: null,
+    }),
+    {
+      pageNumber: null,
+      pageTotal: null,
+    }
+  );
+});
+
+await run("epub page kind keeps front matter and dividers single-page", () => {
+  assert.equal(resolveLibraryEpubPageKind("text/titlepage.xhtml"), "title-leaf");
+  assert.equal(resolveLibraryEpubPageKind("text/imprint.xhtml"), "body");
+  assert.equal(resolveLibraryEpubPageKind("text/preface.xhtml"), "body");
+  assert.equal(resolveLibraryEpubPageKind("text/book-1-1.xhtml"), "divider");
+  assert.equal(resolveLibraryEpubPageKind("text/chapter-1-1-1.xhtml"), "body");
+});
+
+await run("epub display mode keeps title pages single and body pages spread", () => {
+  assert.equal(
+    resolveLibraryEpubDisplayMode({
+      href: "text/titlepage.xhtml",
+      location: { atStart: true, atEnd: false },
+      locationIndex: 0,
+      locationTotal: 400,
+      isMobile: false,
+    }),
+    "single"
+  );
+  assert.equal(
+    resolveLibraryEpubDisplayMode({
+      href: "text/titlepage.xhtml",
+      location: { atStart: false, atEnd: false },
+      locationIndex: 1,
+      locationTotal: 400,
+      isMobile: false,
+    }),
+    "spread"
+  );
+  assert.equal(
+    resolveLibraryEpubDisplayMode({
+      href: "text/imprint.xhtml",
+      location: { atStart: false, atEnd: false },
+      locationIndex: 1,
+      locationTotal: 400,
+      isMobile: false,
+    }),
+    "spread"
+  );
+  assert.equal(
+    resolveLibraryEpubDisplayMode({
+      href: "text/chapter-1-1-1.xhtml",
+      location: { atStart: false, atEnd: false },
+      locationIndex: 40,
+      locationTotal: 400,
+      isMobile: false,
+    }),
+    "spread"
+  );
+});
+
+await run("epub visible page numbers preserve both pages in a spread", () => {
+  assert.deepEqual(
+    resolveLibraryEpubVisiblePageNumbers({
+      location: {
+        start: { displayed: { page: 52 } },
+        end: { displayed: { page: 53 } },
+      },
+      pageNumber: 52,
+      displayMode: "spread",
+    }),
+    {
+      left: 52,
+      right: 53,
+    }
+  );
+});
+
+await run("manual upload keys are deterministic per entity", () => {
+  assert.equal(
+    buildLibraryManualUploadKey({
+      scope: "staging",
+      entityKey: "020e41c0-1234",
+    }),
+    "library/manual-uploads/staging/020e41c0-1234/active.epub"
+  );
+  assert.equal(
+    buildCanonicalManualEpubCacheKey("020e41c0-1234"),
+    "library/books/020e41c0-1234/manual.epub"
+  );
+});
+
+await run("reader arrow shortcuts ignore form controls", () => {
+  assert.equal(
+    canUseLibraryReaderArrowKeys({
+      key: "ArrowLeft",
+      target: { tagName: "input", isContentEditable: false },
+    }),
+    false
+  );
+  assert.equal(
+    canUseLibraryReaderArrowKeys({
+      key: "ArrowRight",
+      target: { tagName: "div", isContentEditable: false },
+    }),
+    true
+  );
+});
+
+await run("epub progress labels surface chapter, page, and percentage", () => {
+  assert.equal(
+    buildLibraryEpubProgressLabel({
+      chapterLabel: "Book One",
+      pageNumber: 12,
+      pageTotal: 22,
+      progressPercent: 18.4,
+    }),
+    "Book One / 12/22 / 18%"
+  );
 });
 
 const passed = results.filter((item) => item.ok).length;

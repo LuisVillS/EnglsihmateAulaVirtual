@@ -127,6 +127,7 @@ export default function LibraryFloatingBookmarkPanel({
             Page number
           </label>
           <input
+            suppressHydrationWarning
             id="library-bookmark-page-number"
             type="number"
             min="1"
@@ -150,6 +151,7 @@ export default function LibraryFloatingBookmarkPanel({
 
         <div className="space-y-2">
           <button
+            suppressHydrationWarning
             type="submit"
             disabled={saving}
             className="inline-flex w-full items-center justify-center border border-primary bg-primary px-3 py-2.5 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
@@ -162,6 +164,7 @@ export default function LibraryFloatingBookmarkPanel({
             <span className={hasUnsavedChange ? "text-muted" : "text-transparent"}>Unsaved change</span>
             {onClearPlace && savedPageNumber ? (
               <button
+                suppressHydrationWarning
                 type="button"
                 onClick={handleClear}
                 disabled={saving}

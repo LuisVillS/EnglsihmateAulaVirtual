@@ -7,6 +7,7 @@ import {
   recordLibraryReadOpen,
 } from "@/lib/library/repository";
 import { serializeLibraryReadState } from "@/lib/library/read-state";
+import { resolveLibraryReadPayload } from "@/lib/library/source-manager";
 
 export async function GET(request, { params: paramsPromise }) {
   const auth = await requireLibraryStudentRouteAccess();
@@ -36,6 +37,11 @@ export async function GET(request, { params: paramsPromise }) {
       libraryBookId: book.id,
     });
     const serializedState = serializeLibraryReadState(readState);
+    const readerPayload = await resolveLibraryReadPayload({
+      db: auth.db,
+      book,
+      allowSourceSync: false,
+    });
 
     console.info("library.read.open", {
       userId: auth.user.id,
@@ -52,13 +58,10 @@ export async function GET(request, { params: paramsPromise }) {
 
     return NextResponse.json({
       book,
-      reader: {
-        embedUrl: book.embedUrl || "",
-        readerUrl: book.readerUrl || "",
-        internetArchiveIdentifier: book.internetArchiveIdentifier || "",
-      },
+      reader: readerPayload.reader,
       readState: serializedState,
       relatedBooks,
+      sourceSyncError: readerPayload.syncError || "",
     });
   } catch (error) {
     console.error("GET /api/library/books/[slug]/read failed", error);

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdminRouteAccess } from "@/lib/duolingo/api-auth";
 import { getAdminLibraryBookById } from "@/lib/library/repository";
-import { patchLibraryBook } from "@/lib/library/admin";
+import { deleteLibraryBook, patchLibraryBook } from "@/lib/library/admin";
 
 export async function GET(request, { params: paramsPromise }) {
   const auth = await requireAdminRouteAccess();
@@ -51,3 +51,23 @@ export async function PATCH(request, { params: paramsPromise }) {
   }
 }
 
+export async function DELETE(request, { params: paramsPromise }) {
+  const auth = await requireAdminRouteAccess();
+  if (auth.errorResponse) return auth.errorResponse;
+
+  try {
+    const params = await paramsPromise;
+    await deleteLibraryBook({
+      db: auth.db,
+      id: params?.id,
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/admin/library/books/[id] failed", error);
+    return NextResponse.json(
+      { error: error?.message || "No se pudo eliminar el libro." },
+      { status: 500 }
+    );
+  }
+}

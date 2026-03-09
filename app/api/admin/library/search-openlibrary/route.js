@@ -3,6 +3,7 @@ import { requireAdminRouteAccess } from "@/lib/duolingo/api-auth";
 import { annotateLibrarySourceCandidates } from "@/lib/library/admin";
 import { DEFAULT_OPEN_LIBRARY_SEARCH_LIMIT } from "@/lib/library/constants";
 import { searchOpenLibraryCatalog } from "@/lib/library/openlibrary";
+import { isReadableOnlineLibraryRecord } from "@/lib/library/policies";
 
 function candidateSummary(candidate) {
   return {
@@ -37,9 +38,11 @@ export async function POST(request) {
       db: auth.db,
       candidates,
     });
+    const readableCandidates = annotatedCandidates.filter((candidate) => isReadableOnlineLibraryRecord(candidate));
+
     return NextResponse.json({
-      candidates: annotatedCandidates.map((candidate) => candidateSummary(candidate)),
-      total: annotatedCandidates.length,
+      candidates: readableCandidates.map((candidate) => candidateSummary(candidate)),
+      total: readableCandidates.length,
     });
   } catch (error) {
     console.error("POST /api/admin/library/search-openlibrary failed", error);
