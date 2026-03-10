@@ -47,6 +47,9 @@ export default async function AdminLibraryBookPage({ params: paramsPromise }) {
         readable: Boolean(source.readable),
       }))
     : [];
+  const providerName = book.sourceName || book.sourcePayload?.provider || "unknown";
+  const providerBookId = book.sourcePayload?.providerBookId || "N/A";
+  const providerUrl = book.sourcePayload?.providerUrl || "";
 
   return (
     <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
@@ -95,16 +98,16 @@ export default async function AdminLibraryBookPage({ params: paramsPromise }) {
 
             <div className="grid gap-3 text-sm text-muted">
               <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-muted">Work key</p>
-                <p className="mt-1 text-foreground">{book.openlibraryWorkKey || "N/A"}</p>
+                <p className="text-xs uppercase tracking-[0.2em] text-muted">Metadata provider</p>
+                <p className="mt-1 text-foreground">{providerName}</p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-muted">Edition key</p>
-                <p className="mt-1 text-foreground">{book.openlibraryEditionKey || "N/A"}</p>
+                <p className="text-xs uppercase tracking-[0.2em] text-muted">Provider ID</p>
+                <p className="mt-1 text-foreground">{providerBookId}</p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-muted">Archive identifier</p>
-                <p className="mt-1 text-foreground">{book.internetArchiveIdentifier || "N/A"}</p>
+                <p className="text-xs uppercase tracking-[0.2em] text-muted">Provider link</p>
+                <p className="mt-1 break-all text-foreground">{providerUrl || "N/A"}</p>
               </div>
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-muted">Source sync</p>

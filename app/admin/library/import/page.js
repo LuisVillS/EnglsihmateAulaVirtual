@@ -18,9 +18,9 @@ export default async function AdminLibraryImportPage() {
       <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-6">
         <header>
           <p className="text-xs uppercase tracking-[0.35em] text-muted">Admin / Library / Import</p>
-          <h1 className="text-3xl font-semibold">Import from Open Library</h1>
+          <h1 className="text-3xl font-semibold">Import from Gutenberg</h1>
           <p className="text-sm text-muted">
-            Search the source catalog, preview candidates, and publish readable records directly into the library.
+            Search Gutenberg metadata, preview candidates, attach an EPUB, and publish directly into the library.
           </p>
         </header>
 

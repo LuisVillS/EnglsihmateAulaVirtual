@@ -3,7 +3,13 @@
 import { useMemo, useState } from "react";
 
 function candidateId(candidate) {
-  return candidate.openlibrary_edition_key || candidate.openlibrary_work_key || candidate.normalized_title;
+  return (
+    candidate.provider_book_id ||
+    candidate.providerBookId ||
+    candidate.source_payload?.providerBookId ||
+    candidate.normalized_title ||
+    `${candidate.title || "untitled"}:${candidate.author_display || candidate.authorDisplay || "unknown"}`
+  );
 }
 
 function CandidateBadge({ label, tone = "neutral" }) {
@@ -19,6 +25,53 @@ function CandidateBadge({ label, tone = "neutral" }) {
   return <span className={`inline-flex rounded-lg border px-2.5 py-1 text-[11px] font-semibold ${toneClass}`}>{label}</span>;
 }
 
+function buildLocalPreview(candidate, overrides = {}) {
+  const title = candidate?.title || candidate?.rawTitle || candidate?.raw_title || "Untitled";
+  const subtitle = candidate?.subtitle || "";
+  const authorDisplay = candidate?.author_display || candidate?.authorDisplay || "Unknown author";
+  const category = overrides.category || candidate?.category || "";
+  const tags = String(overrides.tags || "")
+    ? String(overrides.tags)
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : Array.isArray(candidate?.tags)
+      ? candidate.tags
+      : [];
+
+  return {
+    title,
+    authorDisplay,
+    languageCode: candidate?.language_code || candidate?.languageCode || "eng",
+    category: category || null,
+    description: candidate?.description || "",
+    firstPublishYear: candidate?.first_publish_year || candidate?.firstPublishYear || null,
+    providerName: candidate?.source_name || candidate?.sourceName || "gutenberg",
+    providerBookId:
+      candidate?.provider_book_id || candidate?.providerBookId || candidate?.source_payload?.providerBookId || "",
+    coverUrl: candidate?.cover_url || candidate?.coverUrl || "",
+    uploadedEpub: candidate?.uploadedEpubFileName
+      ? {
+          fileName: candidate.uploadedEpubFileName,
+        }
+      : null,
+    duplicateWarning: candidate?.duplicateWarning || null,
+    bookDraft: {
+      title,
+      subtitle,
+      authorDisplay,
+      languageCode: candidate?.language_code || candidate?.languageCode || "eng",
+      cefrLevel: overrides.cefrLevel || "",
+      category: category || null,
+      tags,
+      coverUrl: candidate?.cover_url || candidate?.coverUrl || "",
+      description: candidate?.description || "",
+      firstPublishYear: candidate?.first_publish_year || candidate?.firstPublishYear || null,
+      sourceName: candidate?.source_name || candidate?.sourceName || "gutenberg",
+    },
+  };
+}
+
 function PreviewModal({ preview, loading, error, onClose }) {
   if (!preview && !loading && !error) return null;
 
@@ -27,7 +80,7 @@ function PreviewModal({ preview, loading, error, onClose }) {
       <div className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-muted">Source preview</p>
+            <p className="text-xs uppercase tracking-[0.24em] text-muted">Publish preview</p>
             <h2 className="mt-1 text-xl font-semibold text-foreground">
               {preview?.title || (loading ? "Loading preview..." : "Preview unavailable")}
             </h2>
@@ -60,19 +113,30 @@ function PreviewModal({ preview, loading, error, onClose }) {
 
                 <div className="flex flex-wrap gap-2">
                   <CandidateBadge label={preview?.languageCode || "unknown language"} />
-                  <CandidateBadge
-                    label={preview?.readableOnline ? "readable" : "not readable"}
-                    tone={preview?.readableOnline ? "success" : "danger"}
-                  />
-                  <CandidateBadge label={preview?.ebookAccess || "no access"} />
+                  <CandidateBadge label={preview?.providerName || "metadata"} />
+                  {preview?.firstPublishYear ? <CandidateBadge label={String(preview.firstPublishYear)} /> : null}
                 </div>
 
                 <div className="space-y-2 text-sm text-muted">
                   <p><span className="font-semibold text-foreground">Author:</span> {preview?.authorDisplay || "Unknown author"}</p>
-                  <p><span className="font-semibold text-foreground">Work:</span> {preview?.workKey || "N/A"}</p>
-                  <p><span className="font-semibold text-foreground">Edition:</span> {preview?.editionKey || "N/A"}</p>
-                  <p><span className="font-semibold text-foreground">Archive:</span> {preview?.internetArchiveIdentifier || "N/A"}</p>
+                  <p><span className="font-semibold text-foreground">Provider:</span> {preview?.providerName || "N/A"}</p>
+                  <p><span className="font-semibold text-foreground">Provider ID:</span> {preview?.providerBookId || "N/A"}</p>
+                  <p><span className="font-semibold text-foreground">Published:</span> {preview?.firstPublishYear || "N/A"}</p>
+                  <p><span className="font-semibold text-foreground">Category:</span> {preview?.category || "N/A"}</p>
                 </div>
+
+                {preview?.uploadedEpub?.fileName ? (
+                  <div className="rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm text-foreground">
+                    <p className="font-semibold">Uploaded EPUB</p>
+                    <p className="mt-1 text-muted">{preview.uploadedEpub.fileName}</p>
+                  </div>
+                ) : null}
+
+                {preview?.description ? (
+                  <div className="rounded-xl border border-border bg-background px-4 py-3 text-sm leading-6 text-muted">
+                    {preview.description}
+                  </div>
+                ) : null}
 
                 {preview?.duplicateWarning?.hasDuplicate ? (
                   <div className="rounded-xl border border-primary/25 bg-primary/8 p-4 text-sm text-foreground">
@@ -87,20 +151,63 @@ function PreviewModal({ preview, loading, error, onClose }) {
           </div>
 
           <div className="space-y-4 p-5">
-            {preview?.embedUrl ? (
-              <iframe
-                src={preview.embedUrl}
-                title={`${preview.title} preview`}
-                className="min-h-[56vh] w-full rounded-xl border border-border bg-white"
-                sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-                referrerPolicy="strict-origin-when-cross-origin"
-              />
+            {preview?.bookDraft ? (
+              <div className="space-y-4 rounded-xl border border-border bg-surface-2 p-5">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-muted">Book Data To Save</p>
+                  <h3 className="mt-2 text-lg font-semibold text-foreground">{preview.bookDraft.title || "Untitled"}</h3>
+                  {preview.bookDraft.subtitle ? (
+                    <p className="mt-1 text-sm text-muted">{preview.bookDraft.subtitle}</p>
+                  ) : null}
+                </div>
+
+                <dl className="grid gap-3 text-sm text-muted md:grid-cols-2">
+                  <div>
+                    <dt className="font-semibold text-foreground">Author</dt>
+                    <dd>{preview.bookDraft.authorDisplay || "Unknown author"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-foreground">Language</dt>
+                    <dd>{preview.bookDraft.languageCode || "eng"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-foreground">CEFR</dt>
+                    <dd>{preview.bookDraft.cefrLevel || "N/A"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-foreground">Category</dt>
+                    <dd>{preview.bookDraft.category || "N/A"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-foreground">Year</dt>
+                    <dd>{preview.bookDraft.firstPublishYear || "N/A"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-foreground">Cover</dt>
+                    <dd className="break-all">{preview.bookDraft.coverUrl || "N/A"}</dd>
+                  </div>
+                  <div className="md:col-span-2">
+                    <dt className="font-semibold text-foreground">Tags</dt>
+                    <dd>{Array.isArray(preview.bookDraft.tags) && preview.bookDraft.tags.length ? preview.bookDraft.tags.join(", ") : "N/A"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-foreground">Source provider</dt>
+                    <dd>{preview.bookDraft.sourceName || "gutenberg"}</dd>
+                  </div>
+                </dl>
+
+                {preview.bookDraft.description ? (
+                  <div className="rounded-xl border border-border bg-background px-4 py-3 text-sm leading-6 text-muted">
+                    {preview.bookDraft.description}
+                  </div>
+                ) : null}
+              </div>
             ) : (
               <div className="flex min-h-[56vh] items-center justify-center rounded-xl border border-dashed border-border bg-surface-2 px-6 text-center">
                 <div>
-                  <p className="text-lg font-semibold text-foreground">Embedded preview unavailable</p>
+                  <p className="text-lg font-semibold text-foreground">Preview unavailable</p>
                   <p className="mt-2 text-sm text-muted">
-                    Metadata preview is still available, but this source record does not currently expose an embeddable reader.
+                    We could not build the final book payload preview for this result.
                   </p>
                 </div>
               </div>
@@ -147,7 +254,7 @@ export default function AdminLibraryImportManager() {
     setSelectedIds([]);
 
     try {
-      const response = await fetch("/api/admin/library/search-openlibrary", {
+      const response = await fetch("/api/admin/library/search-gutenberg", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -157,13 +264,13 @@ export default function AdminLibraryImportManager() {
 
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload?.error || "No se pudo consultar Open Library.");
+        throw new Error(payload?.error || "No se pudo consultar Gutenberg API.");
       }
 
       setCandidates(Array.isArray(payload?.candidates) ? payload.candidates : []);
-      setMessage(`${payload?.total || 0} readable result(s) loaded from Open Library.`);
+      setMessage(`${payload?.total || 0} metadata result(s) loaded from Gutenberg.`);
     } catch (requestError) {
-      setError(requestError?.message || "No se pudo consultar Open Library.");
+      setError(requestError?.message || "No se pudo consultar Gutenberg API.");
     } finally {
       setLoading(false);
     }
@@ -179,38 +286,16 @@ export default function AdminLibraryImportManager() {
     setSelectedIds(allVisibleSelected ? [] : candidates.map((candidate) => candidateId(candidate)));
   }
 
-  async function openPreview(candidate) {
+  function openPreview(candidate) {
     setPreviewState({
-      loading: true,
+      loading: false,
       error: "",
-      preview: null,
+      preview: buildLocalPreview(candidate, {
+        cefrLevel: bulkForm.cefrLevel || undefined,
+        category: bulkForm.category || undefined,
+        tags: bulkForm.tags || undefined,
+      }),
     });
-
-    try {
-      const response = await fetch("/api/admin/library/preview-source", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ candidate }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.error || "No se pudo cargar la vista previa.");
-      }
-
-      setPreviewState({
-        loading: false,
-        error: "",
-        preview: payload?.preview || null,
-      });
-    } catch (requestError) {
-      setPreviewState({
-        loading: false,
-        error: requestError?.message || "No se pudo cargar la vista previa.",
-        preview: null,
-      });
-    }
   }
 
   function closePreview() {
@@ -224,12 +309,18 @@ export default function AdminLibraryImportManager() {
   function applyImportedState(imported = []) {
     setCandidates((previous) =>
       previous.map((candidate) => {
+        const candidateProviderId =
+          candidate.provider_book_id || candidate.providerBookId || candidate.source_payload?.providerBookId || "";
         const match = imported.find((row) => {
-          const sameEdition =
-            row.openlibraryEditionKey &&
-            row.openlibraryEditionKey === candidate.openlibrary_edition_key;
-          const sameWork = row.openlibraryWorkKey && row.openlibraryWorkKey === candidate.openlibrary_work_key;
-          return sameEdition || sameWork;
+          const sameProviderId =
+            row.sourcePayload?.providerBookId &&
+            row.sourcePayload.providerBookId === candidateProviderId;
+          const sameTitle =
+            String(row.title || "").trim().toLowerCase() === String(candidate.title || "").trim().toLowerCase();
+          const sameAuthor =
+            String(row.authorDisplay || "").trim().toLowerCase() ===
+            String(candidate.author_display || candidate.authorDisplay || "").trim().toLowerCase();
+          return sameProviderId || (sameTitle && sameAuthor);
         });
 
         if (!match) return candidate;
@@ -383,7 +474,7 @@ export default function AdminLibraryImportManager() {
       <form onSubmit={handleSearch} className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_160px_180px]">
           <div>
-            <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Search Open Library</label>
+            <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Search Gutenberg</label>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -391,7 +482,7 @@ export default function AdminLibraryImportManager() {
               placeholder="Pride and Prejudice"
             />
             <p className="mt-2 text-sm text-muted">
-              Admin-only discovery. Search results are limited to readable candidates, and students never search Open Library directly from the classroom.
+              Admin-only discovery. Search Gutenberg metadata, then attach your EPUB upload to make the title readable inside EnglishMate.
             </p>
           </div>
           <div>
@@ -407,7 +498,7 @@ export default function AdminLibraryImportManager() {
               <option value={48}>48</option>
               <option value={60}>60</option>
             </select>
-            <p className="mt-2 text-sm text-muted">Choose how many Open Library candidates to load.</p>
+            <p className="mt-2 text-sm text-muted">Choose how many Gutenberg candidates to load.</p>
           </div>
           <button
             type="submit"
@@ -505,11 +596,8 @@ export default function AdminLibraryImportManager() {
                 <div className="space-y-4 border-t border-border px-5 py-5">
                   <div className="flex flex-wrap gap-2">
                     <CandidateBadge label={candidate.language_code || "unknown language"} />
-                    <CandidateBadge
-                      label={candidate.readable_online ? "readable" : "not readable"}
-                      tone={candidate.readable_online ? "success" : "danger"}
-                    />
-                    <CandidateBadge label={candidate.ebook_access || "no access"} />
+                    <CandidateBadge label={candidate.source_name || "provider"} />
+                    {candidate.first_publish_year ? <CandidateBadge label={String(candidate.first_publish_year)} /> : null}
                     {duplicateWarning?.hasDuplicate ? (
                       <CandidateBadge label="possible duplicate" tone="warning" />
                     ) : null}
@@ -518,20 +606,27 @@ export default function AdminLibraryImportManager() {
                   <div>
                     <h2 className="text-lg font-semibold text-foreground">{candidate.title}</h2>
                     <p className="mt-1 text-sm text-muted">{candidate.author_display || "Unknown author"}</p>
+                    {candidate.description ? (
+                      <p className="mt-2 text-sm leading-6 text-muted">
+                        {candidate.description.length > 180
+                          ? `${candidate.description.slice(0, 180).trim()}...`
+                          : candidate.description}
+                      </p>
+                    ) : null}
                   </div>
 
                   <dl className="grid gap-2 text-xs text-muted">
                     <div>
-                      <dt className="font-semibold text-foreground">Work key</dt>
-                      <dd>{candidate.openlibrary_work_key || "N/A"}</dd>
+                      <dt className="font-semibold text-foreground">Provider ID</dt>
+                      <dd>{candidate.provider_book_id || candidate.source_payload?.providerBookId || "N/A"}</dd>
                     </div>
                     <div>
-                      <dt className="font-semibold text-foreground">Edition key</dt>
-                      <dd>{candidate.openlibrary_edition_key || "N/A"}</dd>
+                      <dt className="font-semibold text-foreground">Published</dt>
+                      <dd>{candidate.first_publish_year || "N/A"}</dd>
                     </div>
                     <div>
-                      <dt className="font-semibold text-foreground">Archive identifier</dt>
-                      <dd>{candidate.internet_archive_identifier || "N/A"}</dd>
+                      <dt className="font-semibold text-foreground">Category</dt>
+                      <dd>{candidate.category || "N/A"}</dd>
                     </div>
                   </dl>
 

@@ -56,6 +56,8 @@ import {
   resolveArchiveIdentifierFromSource,
   sourceHasReadableEpubAsset,
 } from "../lib/library/source-manager.js";
+import { normalizeGutenbergCandidate } from "../lib/library/gutenberg.js";
+import { buildLibraryBookPayloadFromCandidate as buildBookPayload } from "../lib/library/repository.js";
 import {
   canOpenLibraryReader,
   filterStudentVisibleLibraryBooks,
@@ -201,6 +203,47 @@ await run("library filtering keeps only english readable public books", () => {
   ]);
 
   assert.deepEqual(visible.map((book) => book.id), ["eng-visible"]);
+});
+
+await run("gutenberg metadata normalization maps clean admin candidates", () => {
+  const candidate = normalizeGutenbergCandidate({
+    id: 1342,
+    title: "Pride and Prejudice",
+    alternative_title: "",
+    authors: [{ id: 1, name: "Austen, Jane" }],
+    subjects: ["Love stories", "England -- Fiction"],
+    bookshelves: ["Best Books Ever Listings"],
+    language: "en",
+    issued: "1998-01-01T00:00:00.000Z",
+    cover_image: "https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg",
+    download_count: 89234,
+  });
+
+  assert.equal(candidate.source_name, "gutenberg");
+  assert.equal(candidate.language_code, "eng");
+  assert.equal(candidate.author_display, "Austen, Jane");
+  assert.equal(candidate.first_publish_year, 1998);
+  assert.equal(candidate.provider_book_id, "1342");
+  assert.equal(candidate.category, "Best Books Ever Listings");
+});
+
+await run("gutenberg imports become student-readable when an epub upload exists", () => {
+  const payload = buildBookPayload({
+    title: "Pride and Prejudice",
+    author_display: "Jane Austen",
+    language_code: "eng",
+    source_name: "gutenberg",
+    uploaded_epub_key: "library/books/book-1/manual.epub",
+    source_payload: {
+      provider: "gutenberg",
+      providerBookId: "1342",
+    },
+  });
+
+  assert.equal(payload.source_name, "gutenberg");
+  assert.equal(payload.readable_online, true);
+  assert.equal(payload.ebook_access, "internal");
+  assert.equal(payload.has_fulltext, true);
 });
 
 await run("admin import search keeps only readable source candidates", () => {
@@ -473,6 +516,23 @@ await run("preferred library source selection favors uploaded epub when marked p
   });
 
   assert.equal(selected.id, "manual-epub");
+});
+
+await run("gutenberg books do not invent a legacy open library fallback", () => {
+  const selected = pickPreferredLibraryReadSource({
+    book: {
+      id: "gutenberg-book",
+      slug: "pride-and-prejudice",
+      sourceName: "gutenberg",
+      sourcePayload: {
+        provider: "gutenberg",
+        providerBookId: "1342",
+      },
+    },
+    sources: [],
+  });
+
+  assert.equal(selected, null);
 });
 
 await run("uploaded epub sources are readable from cache without a remote download url", () => {

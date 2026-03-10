@@ -10,17 +10,18 @@ function sanitizeFileName(value = "") {
     .replace(/^-+|-+$/g, "");
 }
 
-function buildLibraryManualUploadKey({ scope = "manual", entityKey = "" } = {}) {
+function buildLibraryManualUploadKey({ scope = "manual", entityKey = "", fileName = "" } = {}) {
   const safeScope = ["candidate", "staging", "book", "manual"].includes(String(scope || "").trim().toLowerCase())
     ? String(scope || "").trim().toLowerCase()
     : "manual";
   const safeEntityKey = sanitizeFileName(String(entityKey || "").trim()) || "book";
+  const safeFileName = sanitizeFileName(String(fileName || "").trim()) || "book.epub";
 
   if (safeScope === "book") {
-    return `library/books/${safeEntityKey}/manual.epub`;
+    return `library/books/${safeEntityKey}/${safeFileName}`;
   }
 
-  return `library/manual-uploads/${safeScope}/${safeEntityKey}/active.epub`;
+  return `library/manual-uploads/${safeScope}/${safeEntityKey}/${safeFileName}`;
 }
 
 export async function POST(request) {
@@ -45,7 +46,7 @@ export async function POST(request) {
     const scope = String(formData.get("scope") || "manual").trim();
     const entityKey =
       String(formData.get("entityKey") || formData.get("entityId") || "").trim() || fileName.replace(/\.epub$/i, "");
-    const key = buildLibraryManualUploadKey({ scope, entityKey });
+    const key = buildLibraryManualUploadKey({ scope, entityKey, fileName });
 
     await putObjectToR2(key, fileBytes, contentType, getLibraryR2Bucket());
 

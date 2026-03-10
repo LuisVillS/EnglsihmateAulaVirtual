@@ -43,7 +43,7 @@ export default async function AdminLibraryPage() {
             <p className="text-xs uppercase tracking-[0.35em] text-muted">Admin / Library</p>
             <h1 className="text-3xl font-semibold">EnglishMate Library</h1>
             <p className="text-sm text-muted">
-              Curated student catalog powered by Open Library metadata and Internet Archive embeds.
+              Curated student catalog powered by Gutenberg metadata and EnglishMate’s internal EPUB reading flow.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -144,7 +144,7 @@ export default async function AdminLibraryPage() {
               <div className="rounded-xl border border-border bg-surface-2 p-4">
                 <p className="text-sm font-semibold text-foreground">Direct publishing flow</p>
                 <p className="mt-1 text-sm text-muted">
-                  Search Open Library, optionally attach an EPUB, and publish straight to the student catalog.
+                  Search Gutenberg, optionally attach an EPUB, and publish straight to the student catalog.
                 </p>
               </div>
               <div className="rounded-xl border border-border bg-surface-2 p-4">
@@ -156,7 +156,7 @@ export default async function AdminLibraryPage() {
               <div className="rounded-xl border border-border bg-surface-2 p-4">
                 <p className="text-sm font-semibold text-foreground">Reader source priority</p>
                 <p className="mt-1 text-sm text-muted">
-                  Uploaded EPUBs stay the primary readable source, with Open Library remaining a metadata and fallback layer.
+                  Uploaded EPUBs stay the primary readable source, with Gutenberg used only for catalog metadata.
                 </p>
               </div>
             </div>

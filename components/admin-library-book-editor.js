@@ -62,7 +62,7 @@ export default function AdminLibraryBookEditor({ initialBook }) {
       if (!response.ok) {
         throw new Error(payload?.error || "No se pudo revalidar el libro.");
       }
-      setMessage("Source metadata refreshed.");
+      setMessage("Metadata refreshed.");
       if (payload?.record?.coverUrl) {
         setForm((previous) => ({ ...previous, coverUrl: payload.record.coverUrl }));
       }
@@ -217,7 +217,7 @@ export default function AdminLibraryBookEditor({ initialBook }) {
           disabled={Boolean(pending)}
           className="rounded-xl border border-primary/35 bg-primary/10 px-4 py-3 text-sm font-semibold text-primary transition hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {pending === "recheck" ? "Rechecking..." : "Recheck source"}
+          {pending === "recheck" ? "Refreshing..." : "Refresh metadata"}
         </button>
         <button
           type="button"
