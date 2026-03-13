@@ -29,17 +29,15 @@ export async function GET(request) {
   }
 
   const code = searchParams.get("code");
+  let user = null;
   if (code) {
-    const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+    const { data: exchangeData, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
     if (exchangeError) {
       await supabase.auth.signOut();
       return buildErrorRedirect(request, GOOGLE_ERROR_MESSAGE);
     }
+    user = exchangeData?.user || exchangeData?.session?.user || null;
   }
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
   if (!user) {
     return buildErrorRedirect(request, GOOGLE_ERROR_MESSAGE);

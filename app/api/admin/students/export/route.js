@@ -1,12 +1,9 @@
 "use server";
 
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { requireAdminRouteAccess } from "@/lib/admin/access";
+import { loadAdminStudentsExportRows } from "@/lib/admin-students";
 import { STUDENT_LEVELS } from "@/lib/student-constants";
-
-function sanitizeSearch(value) {
-  return value.replace(/%/g, "\\%").replace(/,/g, "\\,");
-}
 
 function toCsvValue(value) {
   const safe = value == null ? "" : String(value);
@@ -19,19 +16,9 @@ function buildFilename() {
 }
 
 export async function GET(request) {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { data: adminRecord } = await supabase.from("admin_profiles").select("id").eq("id", user.id).maybeSingle();
-  if (!adminRecord?.id) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const auth = await requireAdminRouteAccess({ label: "api-admin-students-export" });
+  if (auth.errorResponse) return auth.errorResponse;
+  const { supabase } = auth;
 
   const { searchParams } = new URL(request.url);
   const rawCourse = searchParams.get("course") || "";
@@ -48,44 +35,12 @@ export async function GET(request) {
       ? parsedHour
       : null;
 
-  const studentsBaseSelect =
-    "student_code, full_name, email, dni, phone, birth_date, course_level, is_premium, start_month, enrollment_date, password_set, preferred_hour";
-  let studentsQuery = supabase
-    .from("profiles")
-    .select(studentsBaseSelect)
-    .eq("role", "student")
-    .or("status.eq.enrolled,status.is.null");
-
-  if (courseFilter) {
-    studentsQuery = studentsQuery.eq("course_level", courseFilter);
-  }
-
-  if (hourFilter != null) {
-    studentsQuery = studentsQuery.eq("preferred_hour", hourFilter);
-  }
-
-  if (searchTerm) {
-    const sanitized = sanitizeSearch(searchTerm);
-    studentsQuery = studentsQuery.or(
-      `full_name.ilike.%${sanitized}%,email.ilike.%${sanitized}%,dni.ilike.%${sanitized}%,student_code.ilike.%${sanitized}%`
-    );
-  }
-
-  let { data, error } = await studentsQuery.order("created_at", { ascending: false });
-  if (error && String(error.message || "").toLowerCase().includes("status")) {
-    let legacyQuery = supabase.from("profiles").select(studentsBaseSelect).eq("role", "student");
-    if (courseFilter) legacyQuery = legacyQuery.eq("course_level", courseFilter);
-    if (hourFilter != null) legacyQuery = legacyQuery.eq("preferred_hour", hourFilter);
-    if (searchTerm) {
-      const sanitized = sanitizeSearch(searchTerm);
-      legacyQuery = legacyQuery.or(
-        `full_name.ilike.%${sanitized}%,email.ilike.%${sanitized}%,dni.ilike.%${sanitized}%,student_code.ilike.%${sanitized}%`
-      );
-    }
-    const legacyResult = await legacyQuery.order("created_at", { ascending: false });
-    data = legacyResult.data;
-    error = legacyResult.error;
-  }
+  const { students, error } = await loadAdminStudentsExportRows({
+    supabase,
+    courseFilter,
+    searchTerm,
+    hourFilter,
+  });
 
   if (error) {
     return NextResponse.json({ error: "No se pudo generar la exportacion." }, { status: 500 });
@@ -106,7 +61,7 @@ export async function GET(request) {
     "estado_contrasena",
   ];
 
-  const rows = (data || []).map((student) => [
+  const rows = (students || []).map((student) => [
     toCsvValue(student.student_code || ""),
     toCsvValue(student.full_name || ""),
     toCsvValue(student.email || ""),

@@ -63,6 +63,52 @@ function SpeakerIcon({ enabled = false }) {
   );
 }
 
+function HeadphonesIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4">
+      <path d="M4.75 10.5V9a5.25 5.25 0 1 1 10.5 0v1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="3.5" y="10" width="2.75" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="13.75" y="10" width="2.75" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M6.25 16.25c.6.5 1.4.75 2.4.75h2.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-4 w-4">
+      <path d="M7 5.4c0-.78.86-1.25 1.52-.83l6 3.85a.99.99 0 0 1 0 1.66l-6 3.85A1 1 0 0 1 7 13.12V5.4Z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-4 w-4">
+      <rect x="5.5" y="4.5" width="3.2" height="11" rx="1" />
+      <rect x="11.3" y="4.5" width="3.2" height="11" rx="1" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4">
+      <path d="m5.5 5.5 9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="m14.5 5.5-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MouseIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4">
+      <rect x="6" y="2.75" width="8" height="14.5" rx="4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M10 2.75v5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function DotsIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-4 w-4">
@@ -105,16 +151,38 @@ export default function LibraryEpubToolbar({
   onThemeChange,
   onToggleSound,
   onToggleFullscreen,
+  ttsEnabled = false,
+  tts = {},
+  onTtsVoiceChange,
+  onTtsPlay,
+  onTtsPause,
+  onTtsResume,
+  onTtsStop,
+  onTtsToggleSelectionMode,
 }) {
   const [openPanel, setOpenPanel] = useState("");
   const rootRef = useRef(null);
   const tocItems = Array.isArray(readerState?.toc) ? readerState.toc : [];
   const currentHref = readerState?.currentHref || "";
   const currentTheme = resolveLibraryEpubTheme(theme);
+  const firstVisiblePageNumber =
+    readerState?.visiblePageNumbers?.left ?? readerState?.pageNumber ?? null;
+  const totalPageCount =
+    readerState?.pageTotal == null || readerState.pageTotal === ""
+      ? null
+      : Math.max(0, Number(readerState.pageTotal) || 0);
   const progressPercent =
-    readerState?.progressPercent == null || readerState.progressPercent === ""
-      ? 0
-      : Math.max(0, Math.min(100, Number(readerState.progressPercent) || 0));
+    firstVisiblePageNumber && totalPageCount
+      ? Math.max(0, Math.min(100, (Number(firstVisiblePageNumber) / Number(totalPageCount)) * 100))
+      : readerState?.progressPercent == null || readerState.progressPercent === ""
+        ? 0
+        : Math.max(0, Math.min(100, Number(readerState.progressPercent) || 0));
+  const pageProgressLabel =
+    firstVisiblePageNumber && totalPageCount
+      ? `${Number(firstVisiblePageNumber)}/${Number(totalPageCount)}`
+      : firstVisiblePageNumber
+        ? `${Number(firstVisiblePageNumber)}`
+        : "0/0";
   const panelShellStyle = useMemo(
     () => ({
       background: "rgba(13, 15, 18, 0.96)",
@@ -126,6 +194,12 @@ export default function LibraryEpubToolbar({
     }),
     [currentTheme.controlText]
   );
+  const ttsVoices = Array.isArray(tts?.voices) ? tts.voices : [];
+  const ttsStatus = String(tts?.status || "idle");
+  const ttsSelectionMode = Boolean(tts?.selectionMode);
+  const canResumeTts = ttsStatus === "paused";
+  const canPauseTts = ttsStatus === "playing";
+  const showTtsControls = Boolean(tts?.showControls);
 
   useEffect(() => {
     if (!openPanel) return undefined;
@@ -160,7 +234,7 @@ export default function LibraryEpubToolbar({
   return (
     <div
       ref={rootRef}
-      className={`pointer-events-none absolute inset-x-2 bottom-2 z-20 transition duration-300 sm:inset-x-4 sm:bottom-4 ${
+      className={`pointer-events-none absolute inset-x-2 bottom-0 z-20 transition duration-300 sm:inset-x-4 sm:bottom-0 ${
         chromeVisible ? "translate-y-0 opacity-100" : "translate-y-6 opacity-0"
       }`}
       aria-hidden={!chromeVisible}
@@ -269,6 +343,91 @@ export default function LibraryEpubToolbar({
           </div>
         ) : null}
 
+        {openPanel === "tts" && ttsEnabled ? (
+          <div
+            className={`mb-2 overflow-hidden border ${isMobile ? "w-full" : "ml-auto w-[17rem]"}`}
+            style={panelShellStyle}
+          >
+            <div className={`border-b border-white/10 ${isMobile ? "px-3 py-2.5" : "px-4 py-3"}`}>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/55">Voice</p>
+              <p className={`mt-1 text-white/78 ${isMobile ? "text-xs" : "text-sm"}`}>
+                Choose a voice for read aloud.
+              </p>
+            </div>
+            <div className={`space-y-2 ${isMobile ? "px-3 py-3" : "px-4 py-4"}`}>
+              <div className="grid grid-cols-3 gap-2">
+                {ttsVoices.map((voice) => {
+                  const active = voice.id === tts?.voiceId;
+                  return (
+                    <button
+                      key={voice.id}
+                      type="button"
+                      data-reader-ignore-keys="true"
+                      onClick={() => {
+                        onTtsVoiceChange?.(voice.id);
+                        setOpenPanel("");
+                      }}
+                      className={`border px-3 py-2 text-xs font-semibold transition ${
+                        active ? "border-white/18 bg-white/12 text-white" : "border-white/10 bg-white/5 text-white/72 hover:bg-white/9 hover:text-white"
+                      }`}
+                      style={{ borderRadius: "12px" }}
+                    >
+                      {voice.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showTtsControls ? (
+          <div className="mb-2 flex justify-center">
+            <div
+              className={`pointer-events-auto inline-flex items-center gap-2 border px-2 py-2 ${isMobile ? "max-w-[92vw]" : ""}`}
+              style={{
+                ...panelShellStyle,
+                borderRadius: "16px",
+              }}
+            >
+              <button
+                type="button"
+                data-reader-ignore-keys="true"
+                onClick={canResumeTts ? onTtsResume : canPauseTts ? onTtsPause : onTtsPlay}
+                className="inline-flex h-9 w-9 items-center justify-center border border-white/10 bg-white/5 text-white/82 transition hover:bg-white/10"
+                style={{ borderRadius: "12px" }}
+                aria-label={canResumeTts ? "Resume read aloud" : canPauseTts ? "Pause read aloud" : "Play read aloud"}
+              >
+                {canResumeTts || !canPauseTts ? <PlayIcon /> : <PauseIcon />}
+              </button>
+              <button
+                type="button"
+                data-reader-ignore-keys="true"
+                onClick={onTtsToggleSelectionMode}
+                className={`inline-flex h-9 w-9 items-center justify-center border transition ${
+                  ttsSelectionMode
+                    ? "border-white/18 bg-white/12 text-white"
+                    : "border-white/10 bg-white/5 text-white/82 hover:bg-white/10"
+                }`}
+                style={{ borderRadius: "12px" }}
+                aria-label="Pick paragraph to read aloud"
+              >
+                <MouseIcon />
+              </button>
+              <button
+                type="button"
+                data-reader-ignore-keys="true"
+                onClick={onTtsStop}
+                className="inline-flex h-9 w-9 items-center justify-center border border-white/10 bg-white/5 text-white/82 transition hover:bg-white/10"
+                style={{ borderRadius: "12px" }}
+                aria-label="Stop read aloud"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div
           className={`flex flex-col gap-2 border ${isMobile ? "px-2 py-1.5" : "px-2 py-2 sm:px-3"}`}
           style={barStyle}
@@ -287,7 +446,7 @@ export default function LibraryEpubToolbar({
             <div className="min-w-0 flex-1 px-0.5">
               <div className={`flex items-center justify-between gap-3 font-semibold uppercase tracking-[0.22em] text-white/55 ${isMobile ? "text-[9px]" : "text-[10px]"}`}>
                 <span className="truncate">{isMobile ? "Reading" : "Book progress"}</span>
-                <span>{Math.round(progressPercent)}%</span>
+                <span>{pageProgressLabel}</span>
               </div>
               <div className={`overflow-hidden bg-white/10 ${isMobile ? "mt-1 h-[5px]" : "mt-1.5 h-1.5"}`} style={{ borderRadius: "999px" }}>
                 <div
@@ -296,6 +455,17 @@ export default function LibraryEpubToolbar({
                 />
               </div>
             </div>
+
+            {!isMobile && ttsEnabled ? (
+              <ActionButton
+                active={openPanel === "tts"}
+                onClick={() => setOpenPanel((previous) => (previous === "tts" ? "" : "tts"))}
+                aria-label="Open read aloud voices"
+                className="w-10 px-0"
+              >
+                <HeadphonesIcon />
+              </ActionButton>
+            ) : null}
 
             {!isMobile ? (
               <ActionButton
@@ -329,6 +499,19 @@ export default function LibraryEpubToolbar({
               <DotsIcon />
             </ActionButton>
           </div>
+          {isMobile && ttsEnabled ? (
+            <div className="flex justify-end">
+              <ActionButton
+                active={openPanel === "tts"}
+                compact
+                onClick={() => setOpenPanel((previous) => (previous === "tts" ? "" : "tts"))}
+                aria-label="Open read aloud voices"
+                className="w-9 px-0"
+              >
+                <HeadphonesIcon />
+              </ActionButton>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

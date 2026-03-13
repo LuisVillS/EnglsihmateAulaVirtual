@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { strToU8, zipSync } from "fflate";
 import { buildSessionPlan } from "../lib/duolingo/session-generator.js";
 import { computeSpacedRepetitionUpdate, qualityFromAttempt } from "../lib/duolingo/sr.js";
 import {
@@ -49,6 +51,13 @@ import {
   shouldShowLibraryBookmarkPanel,
 } from "../lib/library/epub-reader-ui.js";
 import {
+  buildLibraryTtsPlaybackQueue,
+  normalizeLibraryTtsText,
+  resolveLibraryTtsVoice,
+  sanitizeLibraryTtsText,
+  splitLibraryTtsSentences,
+} from "../lib/library/tts.js";
+import {
   buildCanonicalManualEpubCacheKey,
   buildLibraryManualUploadKey,
   buildLegacyOpenLibrarySource,
@@ -56,6 +65,46 @@ import {
   resolveArchiveIdentifierFromSource,
   sourceHasReadableEpubAsset,
 } from "../lib/library/source-manager.js";
+import { DEFAULT_FLIPBOOK_LAYOUT_PROFILE } from "../lib/flipbook-core/layout-profile.js";
+import {
+  buildFlipbookVisualWindowKey,
+  buildFlipbookPlaceholderPage,
+  buildFlipbookPlaceholderPages,
+  buildFlipbookRuntimePages,
+  canFlipbookAdapterAcceptNavigation,
+  expandFlipbookVisualWindowForTts,
+  globalToLocalPageIndex,
+  isPageIndexInsideVisualWindow,
+  localToGlobalPageIndex,
+  mergeFlipbookPages,
+  resolveFlipbookNeighborPrefetchRange,
+  resolveFlipbookVisualWindow,
+  resolveInitialFlipbookPageWindow,
+  shouldIgnoreFlipbookAdapterEvent,
+  shouldShiftFlipbookVisualWindow,
+} from "../lib/flipbook-core/page-loading.js";
+import {
+  buildFlipbookManifestId,
+  paginateFlipbookPublication,
+} from "../lib/flipbook-core/page-paginator.js";
+import {
+  buildFlipbookPageChrome,
+  FLIPBOOK_VISUAL_STATE_CLOSED_BOOK,
+  FLIPBOOK_VISUAL_STATE_READING,
+  resolveInitialCanonicalPageIndex,
+  resolveFlipbookInitialVisualState,
+  resolveFlipbookPresentationMode,
+  resolvePrimaryReadingPage,
+  resolveResumePageIndex,
+  resolveFlipbookStageScale,
+  resolveFlipbookVisiblePageNumber,
+  resolveFlipbookVisiblePageTotal,
+} from "../lib/flipbook-core/presentation.js";
+import {
+  createFlipbookSessionToken,
+  verifyFlipbookSessionToken,
+} from "../lib/flipbook-services/session-token.js";
+import { normalizeFlipbookPublication } from "../lib/flipbook-core/publication-normalizer.js";
 import { normalizeGutenbergCandidate } from "../lib/library/gutenberg.js";
 import { buildLibraryBookPayloadFromCandidate as buildBookPayload } from "../lib/library/repository.js";
 import {
@@ -65,6 +114,70 @@ import {
 } from "../lib/library/policies.js";
 
 const results = [];
+
+function buildTestEpubBytes() {
+  const archive = {
+    mimetype: strToU8("application/epub+zip"),
+    "META-INF/container.xml": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+      <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+        <rootfiles>
+          <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml" />
+        </rootfiles>
+      </container>`),
+    "OEBPS/content.opf": strToU8(`<?xml version="1.0" encoding="utf-8"?>
+      <package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid">
+        <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+          <dc:title>Test Flipbook</dc:title>
+          <dc:creator>Jane Doe</dc:creator>
+        </metadata>
+        <manifest>
+          <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+          <item id="titlepage" href="titlepage.xhtml" media-type="application/xhtml+xml" />
+          <item id="imprint" href="imprint.xhtml" media-type="application/xhtml+xml" />
+          <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml" />
+          <item id="chapter2" href="chapter2.xhtml" media-type="application/xhtml+xml" />
+        </manifest>
+        <spine>
+          <itemref idref="titlepage" />
+          <itemref idref="imprint" />
+          <itemref idref="chapter1" />
+          <itemref idref="chapter2" />
+        </spine>
+      </package>`),
+    "OEBPS/nav.xhtml": strToU8(`<!doctype html>
+      <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <body>
+          <nav epub:type="toc">
+            <ol>
+              <li><a href="chapter1.xhtml#chapter-1">Chapter 1</a></li>
+              <li><a href="chapter2.xhtml#chapter-2">Chapter 2</a></li>
+            </ol>
+          </nav>
+        </body>
+      </html>`),
+    "OEBPS/titlepage.xhtml": strToU8(`<!doctype html><html><head><title>Titlepage</title></head><body><h1>Title Page</h1></body></html>`),
+    "OEBPS/imprint.xhtml": strToU8(`<!doctype html><html><head><title>Imprint</title></head><body><p>Imprint</p></body></html>`),
+    "OEBPS/chapter1.xhtml": strToU8(`<!doctype html>
+      <html>
+        <head><title>Chapter 1</title></head>
+        <body>
+          <h1 id="chapter-1">Chapter 1</h1>
+          <p id="p1">This is the opening paragraph. It is intentionally long enough to be paginated into predictable blocks. Another sentence keeps the paragraph dense.</p>
+          <p>This is the second paragraph for chapter one. It continues the same global flow.</p>
+        </body>
+      </html>`),
+    "OEBPS/chapter2.xhtml": strToU8(`<!doctype html>
+      <html>
+        <head><title>Chapter 2</title></head>
+        <body>
+          <h1 id="chapter-2">Chapter 2</h1>
+          <p>This is the opening paragraph of chapter two. It should map to a later page index without creating filler pages.</p>
+        </body>
+      </html>`),
+  };
+
+  return zipSync(archive, { level: 0 });
+}
 
 function createLibraryBook(overrides = {}) {
   return {
@@ -244,6 +357,24 @@ await run("gutenberg imports become student-readable when an epub upload exists"
   assert.equal(payload.readable_online, true);
   assert.equal(payload.ebook_access, "internal");
   assert.equal(payload.has_fulltext, true);
+});
+
+await run("library tts voice mapping and sentence chunking stay deterministic", () => {
+  assert.equal(resolveLibraryTtsVoice("jenny").label, "Jenny");
+  assert.equal(resolveLibraryTtsVoice("unknown").label, "Alba");
+  assert.equal(normalizeLibraryTtsText("  Hello   world.\nHow are you? "), "Hello world. How are you?");
+  assert.equal(sanitizeLibraryTtsText("Hello\u0000 world \udc9d again"), "Hello world again");
+  assert.deepEqual(splitLibraryTtsSentences("Hello world. How are you?"), [
+    "Hello world.",
+    "How are you?",
+  ]);
+
+  const queue = buildLibraryTtsPlaybackQueue([
+    { id: "seg-1", text: "Hello world. How are you?" },
+  ]);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].segmentId, "seg-1");
+  assert.equal(queue[0].highlightMode, "paragraph");
 });
 
 await run("admin import search keeps only readable source candidates", () => {
@@ -768,7 +899,7 @@ await run("epub display mode keeps title pages single and body pages spread", ()
     resolveLibraryEpubDisplayMode({
       href: "text/titlepage.xhtml",
       location: { atStart: false, atEnd: false },
-      locationIndex: 1,
+      locationIndex: 2,
       locationTotal: 400,
       isMobile: false,
     }),
@@ -796,6 +927,804 @@ await run("epub display mode keeps title pages single and body pages spread", ()
   );
 });
 
+await run("flipbook normalization removes titlepage and imprint", async () => {
+  const publication = await normalizeFlipbookPublication({
+    epubBytes: buildTestEpubBytes(),
+    coverUrl: "https://example.com/cover.jpg",
+    fallbackTitle: "Fallback Title",
+    fallbackAuthor: "Fallback Author",
+  });
+
+  assert.equal(publication.metadata.title, "Test Flipbook");
+  assert.equal(publication.metadata.author, "Jane Doe");
+  assert.deepEqual(
+    publication.sections.map((section) => section.href),
+    ["OEBPS/chapter1.xhtml", "OEBPS/chapter2.xhtml"]
+  );
+  assert.deepEqual(
+    publication.toc.map((item) => item.label),
+    ["Chapter 1", "Chapter 2"]
+  );
+  assert.match(publication.sections[0].blocks[0].html, /^<h1[^>]*class="[^"]*flipbook-block/);
+  assert.match(publication.sections[0].blocks[0].html, /data-block-id="seg-oebps-chapter1-xhtml-0-0"/);
+  assert.match(publication.sections[0].blocks[0].html, /data-anchors="chapter-1"/);
+  assert.equal(publication.sections[0].blocks[0].html.includes("<section"), false);
+});
+
+await run("flipbook paginator starts with synthetic cover and maps toc globally", async () => {
+  const publication = await normalizeFlipbookPublication({
+    epubBytes: buildTestEpubBytes(),
+    coverUrl: "https://example.com/cover.jpg",
+  });
+  const manifest = paginateFlipbookPublication({
+    normalizedPublication: publication,
+    layoutProfile: DEFAULT_FLIPBOOK_LAYOUT_PROFILE,
+    manifestId: buildFlipbookManifestId({
+      libraryBookId: "book-1",
+      sourceFingerprint: "source-1",
+      layoutProfileId: "layout-1",
+    }),
+    layoutProfileId: "layout-1",
+    sourceFingerprint: "source-1",
+  });
+
+  assert.equal(manifest.pages[0].flags.isSyntheticCover, true);
+  assert.equal(manifest.pages[0].pageIndex, 0);
+  assert.equal(manifest.toc[0].pageIndex >= 1, true);
+  assert.equal(manifest.toc[1].pageIndex >= manifest.toc[0].pageIndex, true);
+  assert.equal(Object.values(manifest.anchorMap).includes(0), false);
+});
+
+await run("flipbook paginator is deterministic and does not create filler pages", async () => {
+  const publication = await normalizeFlipbookPublication({
+    epubBytes: buildTestEpubBytes(),
+    coverUrl: "https://example.com/cover.jpg",
+  });
+  const manifestId = buildFlipbookManifestId({
+    libraryBookId: "book-1",
+    sourceFingerprint: "source-1",
+    layoutProfileId: "layout-1",
+  });
+  const manifestA = paginateFlipbookPublication({
+    normalizedPublication: publication,
+    layoutProfile: DEFAULT_FLIPBOOK_LAYOUT_PROFILE,
+    manifestId,
+    layoutProfileId: "layout-1",
+    sourceFingerprint: "source-1",
+  });
+  const manifestB = paginateFlipbookPublication({
+    normalizedPublication: publication,
+    layoutProfile: DEFAULT_FLIPBOOK_LAYOUT_PROFILE,
+    manifestId,
+    layoutProfileId: "layout-1",
+    sourceFingerprint: "source-1",
+  });
+
+  assert.deepEqual(
+    manifestA.pages.map((page) => page.pageId),
+    manifestB.pages.map((page) => page.pageId)
+  );
+  assert.equal(
+    manifestA.pages.some((page, index) => index > 0 && page.flags?.isFiller),
+    false
+  );
+});
+
+await run("flipbook visible numbering excludes the synthetic cover", () => {
+  assert.equal(resolveFlipbookVisiblePageNumber(0), null);
+  assert.equal(resolveFlipbookVisiblePageNumber(1), 1);
+  assert.equal(resolveFlipbookVisiblePageTotal(1), 0);
+  assert.equal(resolveFlipbookVisiblePageTotal(8), 7);
+});
+
+await run("flipbook lazy loading picks the correct initial window", () => {
+  assert.deepEqual(
+    resolveInitialFlipbookPageWindow({
+      pageCount: 1200,
+      startPageIndex: 0,
+      hasSavedState: false,
+    }),
+    { from: 0, to: 11 }
+  );
+  assert.deepEqual(
+    resolveInitialFlipbookPageWindow({
+      pageCount: 1200,
+      startPageIndex: 540,
+      hasSavedState: true,
+    }),
+    { from: 534, to: 546 }
+  );
+});
+
+await run("flipbook lazy loading merges windows by stable page index", () => {
+  const placeholders = buildFlipbookPlaceholderPages(4);
+  const merged = mergeFlipbookPages({
+    pageCount: 4,
+    existingPages: placeholders,
+    incomingPages: [
+      { ...buildFlipbookPlaceholderPage(1), pageId: "page-1", html: "<article>One</article>", flags: {} },
+      { ...buildFlipbookPlaceholderPage(3), pageId: "page-3", html: "<article>Three</article>", flags: {} },
+    ],
+  });
+
+  assert.equal(merged[0].flags.isPlaceholder, true);
+  assert.equal(merged[1].pageId, "page-1");
+  assert.equal(merged[2].flags.isPlaceholder, true);
+  assert.equal(merged[3].pageId, "page-3");
+});
+
+await run("flipbook lazy loading only prefetches an adjacent range near the loaded edge", () => {
+  const initialLoaded = new Set(Array.from({ length: 12 }, (_, index) => index));
+  assert.deepEqual(
+    resolveFlipbookNeighborPrefetchRange({
+      pageCount: 350,
+      currentPageIndex: 8,
+      loadedPageIndexes: initialLoaded,
+      prefetchRadius: 10,
+    }),
+    { from: 12, to: 21 }
+  );
+
+  const centeredLoaded = new Set(Array.from({ length: 13 }, (_, index) => 534 + index));
+  assert.deepEqual(
+    resolveFlipbookNeighborPrefetchRange({
+      pageCount: 1200,
+      currentPageIndex: 540,
+      loadedPageIndexes: centeredLoaded,
+      prefetchRadius: 10,
+    }),
+    { from: 547, to: 556 }
+  );
+
+  assert.deepEqual(
+    resolveFlipbookNeighborPrefetchRange({
+      pageCount: 1200,
+      currentPageIndex: 539,
+      loadedPageIndexes: centeredLoaded,
+      prefetchRadius: 10,
+    }),
+    { from: 524, to: 533 }
+  );
+});
+
+await run("flipbook runtime pages keep loaded content live and placeholders only for missing pages", () => {
+  const runtimePages = buildFlipbookRuntimePages({
+    pages: [
+      { ...buildFlipbookPlaceholderPage(0), pageId: "page-0", flags: { isSyntheticCover: true, isPlaceholder: false } },
+      {
+        ...buildFlipbookPlaceholderPage(1),
+        pageId: "page-1",
+        html: "<article>One</article>",
+        runtimeMode: "skeleton",
+        flags: { isRuntimeSkeleton: true },
+      },
+      { ...buildFlipbookPlaceholderPage(2), pageId: "page-2", html: "<article>Two</article>", flags: {} },
+      buildFlipbookPlaceholderPage(3),
+      {
+        ...buildFlipbookPlaceholderPage(4),
+        pageId: "page-4",
+        html: "<article>Four</article>",
+        runtimeMode: "skeleton",
+        flags: { isRuntimeSkeleton: true },
+      },
+    ],
+  });
+
+  assert.equal(runtimePages[1].runtimeMode, "live");
+  assert.equal(runtimePages[3].runtimeMode, "placeholder");
+  assert.equal(runtimePages[4].runtimeMode, "live");
+  assert.equal(runtimePages[1].flags.isRuntimeSkeleton, false);
+  assert.equal(runtimePages[4].flags.isRuntimeSkeleton, false);
+});
+
+await run("flipbook runtime pages never degrade loaded content after a later chapter load", () => {
+  const initialRuntimePages = buildFlipbookRuntimePages({
+    pages: [
+      { ...buildFlipbookPlaceholderPage(10), pageId: "page-10", html: "<article>Ten</article>", flags: {} },
+      buildFlipbookPlaceholderPage(11),
+      { ...buildFlipbookPlaceholderPage(12), pageId: "page-12", html: "<article>Twelve</article>", flags: {} },
+    ],
+  });
+  const jumpedRuntimePages = buildFlipbookRuntimePages({
+    pages: [
+      { ...buildFlipbookPlaceholderPage(10), pageId: "page-10", html: "<article>Ten</article>", flags: {} },
+      { ...buildFlipbookPlaceholderPage(11), pageId: "page-11", html: "<article>Eleven</article>", flags: {} },
+      { ...buildFlipbookPlaceholderPage(12), pageId: "page-12", html: "<article>Twelve</article>", flags: {} },
+    ],
+  });
+
+  assert.equal(initialRuntimePages[0].runtimeMode, "live");
+  assert.equal(initialRuntimePages[2].runtimeMode, "live");
+  assert.equal(jumpedRuntimePages[0].runtimeMode, "live");
+  assert.equal(jumpedRuntimePages[1].runtimeMode, "live");
+  assert.equal(jumpedRuntimePages[2].runtimeMode, "live");
+});
+
+await run("flipbook visual window maps cleanly between global and local indexes", () => {
+  assert.equal(globalToLocalPageIndex(33, 17), 16);
+  assert.equal(localToGlobalPageIndex(16, 17, 800), 33);
+  assert.equal(isPageIndexInsideVisualWindow(33, 17, 48), true);
+  assert.equal(isPageIndexInsideVisualWindow(49, 17, 48), false);
+});
+
+await run("flipbook visual window keeps a stable spread-sized segment around the anchor", () => {
+  assert.deepEqual(
+    resolveFlipbookVisualWindow({
+      pageCount: 1200,
+      anchorPageIndex: 0,
+      isSinglePageView: false,
+    }),
+    { start: 0, end: 31, size: 32, key: "0:31" }
+  );
+
+  assert.deepEqual(
+    resolveFlipbookVisualWindow({
+      pageCount: 1200,
+      anchorPageIndex: 539,
+      isSinglePageView: false,
+    }),
+    { start: 523, end: 554, size: 32, key: "523:554" }
+  );
+
+  assert.deepEqual(
+    resolveFlipbookVisualWindow({
+      pageCount: 1200,
+      anchorPageIndex: 540,
+      isSinglePageView: true,
+    }),
+    { start: 532, end: 547, size: 16, key: "532:547" }
+  );
+});
+
+await run("flipbook visual window shifts only when the reader nears a local edge", () => {
+  assert.equal(
+    shouldShiftFlipbookVisualWindow({
+      pageIndex: 539,
+      windowStart: 523,
+      windowEnd: 554,
+      isSinglePageView: false,
+    }),
+    false
+  );
+  assert.equal(
+    shouldShiftFlipbookVisualWindow({
+      pageIndex: 549,
+      windowStart: 523,
+      windowEnd: 554,
+      isSinglePageView: false,
+    }),
+    true
+  );
+  assert.equal(
+    shouldShiftFlipbookVisualWindow({
+      pageIndex: 535,
+      windowStart: 532,
+      windowEnd: 547,
+      isSinglePageView: true,
+    }),
+    true
+  );
+});
+
+await run("flipbook visual window can be rebuilt around a chapter jump outside the current segment", () => {
+  const currentWindow = resolveFlipbookVisualWindow({
+    pageCount: 1200,
+    anchorPageIndex: 539,
+    isSinglePageView: false,
+  });
+  assert.equal(isPageIndexInsideVisualWindow(611, currentWindow.start, currentWindow.end), false);
+
+  const jumpedWindow = resolveFlipbookVisualWindow({
+    pageCount: 1200,
+    anchorPageIndex: 611,
+    isSinglePageView: false,
+    pinnedPageIndexes: [612],
+  });
+
+  assert.equal(isPageIndexInsideVisualWindow(611, jumpedWindow.start, jumpedWindow.end), true);
+  assert.equal(isPageIndexInsideVisualWindow(612, jumpedWindow.start, jumpedWindow.end), true);
+});
+
+await run("flipbook visual window expands for tts without degrading loaded pages", () => {
+  const expandedSpreadWindow = expandFlipbookVisualWindowForTts({
+    pageCount: 1200,
+    windowStart: 523,
+    windowEnd: 554,
+    visualAnchorPageIndex: 539,
+    ttsPageIndex: 553,
+    isSinglePageView: false,
+  });
+  assert.equal(isPageIndexInsideVisualWindow(555, expandedSpreadWindow.start, expandedSpreadWindow.end), true);
+  assert.equal(isPageIndexInsideVisualWindow(556, expandedSpreadWindow.start, expandedSpreadWindow.end), true);
+
+  const expandedSingleWindow = expandFlipbookVisualWindowForTts({
+    pageCount: 1200,
+    windowStart: 532,
+    windowEnd: 547,
+    visualAnchorPageIndex: 540,
+    ttsPageIndex: 547,
+    isSinglePageView: true,
+  });
+  assert.equal(isPageIndexInsideVisualWindow(548, expandedSingleWindow.start, expandedSingleWindow.end), true);
+});
+
+await run("flipbook adapter page signatures ignore runtime mode flags", () => {
+  const adapterSource = readFileSync(new URL("../components/flipbook/flip-animation-adapter.js", import.meta.url), "utf8");
+  const signatureMatch = adapterSource.match(/function buildPagesSignature\(pages = \[\]\) \{([\s\S]*?)\n\}/);
+
+  assert.ok(signatureMatch, "The adapter should expose a buildPagesSignature helper");
+  assert.doesNotMatch(signatureMatch[1], /runtimeMode/);
+  assert.doesNotMatch(signatureMatch[1], /isRuntimeSkeleton/);
+});
+
+await run("flipbook shell feeds the adapter directly from the rendered window pages", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.doesNotMatch(shellSource, /buildFlipbookRuntimePages/);
+  assert.match(shellSource, /renderPages\.slice\(/);
+});
+
+await run("flipbook window keys gate navigation until the requested adapter is ready", () => {
+  const requestedWindowKey = buildFlipbookVisualWindowKey({
+    mode: "spread",
+    start: 1487,
+    end: 1518,
+  });
+  const staleWindowKey = buildFlipbookVisualWindowKey({
+    mode: "spread",
+    start: 0,
+    end: 31,
+  });
+
+  assert.equal(
+    canFlipbookAdapterAcceptNavigation({
+      isSettling: true,
+      requestedWindowKey,
+      readyWindowKey: staleWindowKey,
+    }),
+    false
+  );
+  assert.equal(
+    shouldIgnoreFlipbookAdapterEvent({
+      eventWindowKey: staleWindowKey,
+      requestedWindowKey,
+    }),
+    true
+  );
+  assert.equal(
+    canFlipbookAdapterAcceptNavigation({
+      isSettling: false,
+      requestedWindowKey,
+      readyWindowKey: requestedWindowKey,
+    }),
+    true
+  );
+});
+
+await run("flipbook deep jumps keep their requested window and never fall back to cover", () => {
+  const deepJumpWindow = resolveFlipbookVisualWindow({
+    pageCount: 2600,
+    anchorPageIndex: 2000,
+    isSinglePageView: false,
+    pinnedPageIndexes: [2000, 2001],
+  });
+  const deepJumpWindowKey = buildFlipbookVisualWindowKey({
+    mode: "spread",
+    start: deepJumpWindow.start,
+    end: deepJumpWindow.end,
+  });
+
+  assert.equal(deepJumpWindow.start > 0, true);
+  assert.equal(
+    shouldIgnoreFlipbookAdapterEvent({
+      eventWindowKey: "spread:0:31",
+      requestedWindowKey: deepJumpWindowKey,
+    }),
+    true
+  );
+});
+
+await run("flipbook shell commits local navigation using the event window start", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.match(shellSource, /const commitNavigationFromLocal = useCallback\(/);
+  assert.match(shellSource, /const safeWindowStart = Math\.max\(0, Number\(windowStart\) \|\| 0\);/);
+  assert.match(shellSource, /localToGlobalPageIndex\(\s*safeLocalPageIndex,\s*safeWindowStart,/);
+  assert.doesNotMatch(
+    shellSource,
+    /localToGlobalPageIndex\(\s*localPageIndex,\s*visualWindowRef\.current\.start/
+  );
+});
+
+await run("flipbook chapter jumps use setPage and no longer depend on flip animation commits", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.match(shellSource, /adapterRef\.current\?\.setPage\?\.\(localTargetPageIndex\)/);
+  assert.match(shellSource, /globalToLocalPageIndex\(\s*pendingJump\.visualTargetPageIndex,\s*windowStart\s*\)/);
+  assert.match(shellSource, /const settledLocalPageIndex = Math\.max\(\s*0,\s*Number\(adapterRef\.current\?\.getCurrentPageIndex\?\.\(\) \?\? localPageIndex\) \|\| 0\s*\)/);
+  assert.match(shellSource, /if \(settledLocalPageIndex !== localTargetPageIndex\) \{/);
+  assert.match(shellSource, /pendingGoToPageRef\.current = \{\s*[\s\S]*windowStart: nextVisualWindow\.start,/);
+  assert.doesNotMatch(
+    shellSource,
+    /globalToLocalPageIndex\(\s*pendingJump\.visualTargetPageIndex,\s*visualWindowRef\.current\.start\s*\)/
+  );
+});
+
+await run("flipbook chapter jumps do not precommit the spread before the adapter resolves the target", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+  const handleGoToPageMatch = shellSource.match(/async function handleGoToPage\(pageIndex\) \{([\s\S]*?)\n  \}/);
+
+  assert.ok(handleGoToPageMatch, "handleGoToPage should exist");
+  assert.doesNotMatch(handleGoToPageMatch[1], /setSpreadPageIndex\(/);
+  assert.doesNotMatch(handleGoToPageMatch[1], /spreadAnchorPageIndexRef\.current\s*=/);
+});
+
+await run("flipbook shell routes flip and page-set events through the same commit path", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.match(shellSource, /const handleFlip = useCallback\(\s*\(payload = \{\}\) => \{\s*commitNavigationFromLocal\(payload\);/);
+  assert.match(shellSource, /const handlePageSet = useCallback\(\s*\(payload = \{\}\) => \{\s*commitNavigationFromLocal\(payload\);/);
+  assert.match(shellSource, /windowStart=\{visualWindow\.start\}/);
+  assert.match(shellSource, /onPageSet=\{handlePageSet\}/);
+});
+
+await run("flipbook ignores intermediate flip events while a pending chapter jump is still targeting another local page", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.match(shellSource, /const pendingJump = pendingGoToPageRef\.current;/);
+  assert.match(shellSource, /const pendingLocalTargetPageIndex = globalToLocalPageIndex\(\s*pendingJump\.visualTargetPageIndex,\s*safeWindowStart\s*\)/);
+  assert.match(shellSource, /if \(source === "flip" && safeLocalPageIndex !== pendingLocalTargetPageIndex\) \{\s*return false;\s*\}/);
+});
+
+await run("flipbook book frame forwards window context and page-set callbacks to the adapter", () => {
+  const frameSource = readFileSync(new URL("../components/flipbook/book-frame.js", import.meta.url), "utf8");
+
+  assert.match(frameSource, /windowStart = 0,/);
+  assert.match(frameSource, /onPageSet,/);
+  assert.match(frameSource, /windowStart=\{windowStart\}/);
+  assert.match(frameSource, /onPageSet=\{onPageSet\}/);
+  assert.match(frameSource, /pointerEvents: navigationLocked \? "none" : "auto"/);
+});
+
+await run("flipbook adapter config disables click to turn, corners, and preserves drag support", () => {
+  const adapterSource = readFileSync(new URL("../components/flipbook/flip-animation-adapter.js", import.meta.url), "utf8");
+  assert.match(adapterSource, /disableFlipByClick:\s*false/);
+  assert.match(adapterSource, /showPageCorners:\s*false/);
+});
+
+await run("flipbook shell clips the page-flip host and internal wrappers to avoid cross-page hit areas", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.match(shellSource, /\.flipbook-animation-host \{\s*margin: 0 auto;\s*overflow: hidden;\s*contain: paint;\s*clip-path: inset\(0\);/);
+  assert.match(shellSource, /\.flipbook-animation-host \{[\s\S]*user-select: none;[\s\S]*-webkit-user-select: none;/);
+  assert.match(shellSource, /\.stf__parent \{\s*position: relative;\s*width: 100%;\s*height: 100%;/);
+  assert.match(shellSource, /\.stf__parent,\s*\.stf__block,\s*\.stf__wrapper \{\s*overflow: hidden;\s*contain: paint;\s*clip-path: inset\(0\);\s*isolation: isolate;/);
+  assert.match(shellSource, /\.stf__wrapper \{\s*position: relative;\s*width: 100%;\s*height: 100%;/);
+  assert.match(shellSource, /\.stf__block \{\s*position: absolute;\s*inset: 0;\s*width: 100%;\s*height: 100%;/);
+  assert.match(shellSource, /\.stf__item \{\s*overflow: hidden;\s*user-select: none;\s*-webkit-user-select: none;/);
+});
+
+await run("flipbook adapter emits window-aware flip and page-set payloads", () => {
+  const adapterSource = readFileSync(new URL("../components/flipbook/flip-animation-adapter.js", import.meta.url), "utf8");
+
+  assert.match(adapterSource, /windowStartRef = useRef\(windowStart\)/);
+  assert.match(adapterSource, /windowStart:\s*windowStartRef\.current,\s*localPageIndex:\s*nextPageIndex,\s*source:\s*"flip"/);
+  assert.match(adapterSource, /onPageSetRef\.current\?\.\(\{\s*windowKey:\s*windowKeyRef\.current,\s*windowStart:\s*windowStartRef\.current,\s*localPageIndex:\s*stablePageIndexRef\.current,\s*source,/);
+  assert.match(adapterSource, /setPage\(pageIndex\)\s*\{/);
+});
+
+await run("flipbook adapter ready handshake keeps the requested local page on mount", () => {
+  const adapterSource = readFileSync(new URL("../components/flipbook/flip-animation-adapter.js", import.meta.url), "utf8");
+  assert.match(adapterSource, /startPage:\s*initialPageIndex,/);
+  assert.match(
+    adapterSource,
+    /const readyPageIndex =\s*pageFlipRef\.current\?\.getCurrentPageIndex\?\.\(\) \?\?\s*stablePageIndexRef\.current \?\?\s*initialPageIndex;/
+  );
+  assert.match(adapterSource, /windowStart:\s*windowStartRef\.current,\s*localPageIndex:\s*Math\.max\(0, Number\(readyPageIndex\) \|\| 0\),\s*source:\s*"ready"/);
+});
+
+await run("flipbook adapter mount listeners stay stable across start page changes", () => {
+  const adapterSource = readFileSync(new URL("../components/flipbook/flip-animation-adapter.js", import.meta.url), "utf8");
+  assert.doesNotMatch(adapterSource, /\[scheduleInstanceUpdate,\s*startPage\]/);
+});
+
+await run("flipbook paginator reserves extra space so dense pages split before the footer zone", () => {
+  const manifest = paginateFlipbookPublication({
+    normalizedPublication: {
+      metadata: {
+        title: "Dense Flipbook",
+        author: "QA",
+        coverUrl: "",
+      },
+      toc: [{ id: "chapter-1", label: "Chapter 1", href: "chapter-1.xhtml", depth: 0 }],
+      sections: [
+        {
+          chapterId: "chapter-1",
+          href: "chapter-1.xhtml",
+          blocks: [
+            {
+              html: '<section class="flipbook-block flipbook-block-p" data-block-id="a1"><p>First dense block.</p></section>',
+              textSegments: [],
+              anchors: ["a1"],
+              estimatedUnits: 38,
+            },
+            {
+              html: '<section class="flipbook-block flipbook-block-p" data-block-id="a2"><p>Second dense block.</p></section>',
+              textSegments: [],
+              anchors: ["a2"],
+              estimatedUnits: 38,
+            },
+          ],
+        },
+      ],
+    },
+    layoutProfile: DEFAULT_FLIPBOOK_LAYOUT_PROFILE,
+    manifestId: "manifest-dense",
+    layoutProfileId: "layout-1",
+    sourceFingerprint: "source-1",
+  });
+
+  assert.equal(manifest.pages.length, 3);
+  assert.match(manifest.pages[1].startLocator, /a1/);
+  assert.match(manifest.pages[2].startLocator, /a2/);
+});
+
+await run("flipbook page chrome skips cover and formats content pages", () => {
+  assert.equal(
+    buildFlipbookPageChrome({
+      page: {
+        pageIndex: 0,
+        flags: { isSyntheticCover: true },
+      },
+      bookTitle: "Test Flipbook",
+      chapterLabel: "Chapter One",
+    }),
+    null
+  );
+
+  assert.deepEqual(
+    buildFlipbookPageChrome({
+      page: {
+        pageIndex: 3,
+        flags: { isSyntheticCover: false },
+      },
+      bookTitle: "Test Flipbook",
+      chapterLabel: "",
+    }),
+    {
+      headerLeft: "Test Flipbook",
+      headerRight: "Test Flipbook",
+      footerLeft: "EnglishMate Library",
+      footerRight: "3",
+    }
+  );
+});
+
+await run("flipbook primary reading page prefers explicit and then right page in spreads", () => {
+  assert.equal(
+    resolvePrimaryReadingPage({
+      leftPageIndex: 10,
+      rightPageIndex: 11,
+      ttsActivePageIndex: null,
+      explicitSelectedPageIndex: null,
+      pageCount: 20,
+    }),
+    11
+  );
+  assert.equal(
+    resolvePrimaryReadingPage({
+      leftPageIndex: 10,
+      rightPageIndex: 11,
+      ttsActivePageIndex: 10,
+      explicitSelectedPageIndex: null,
+      pageCount: 20,
+    }),
+    10
+  );
+  assert.equal(
+    resolvePrimaryReadingPage({
+      leftPageIndex: 10,
+      rightPageIndex: 11,
+      ttsActivePageIndex: 11,
+      explicitSelectedPageIndex: 10,
+      pageCount: 20,
+    }),
+    10
+  );
+});
+
+await run("flipbook initial canonical page prioritizes query before saved state", () => {
+  assert.equal(
+    resolveInitialCanonicalPageIndex({
+      requestedPageIndex: 106,
+      savedPageIndex: 88,
+      currentPageIndex: 52,
+      pageCount: 400,
+    }),
+    106
+  );
+  assert.equal(
+    resolveInitialCanonicalPageIndex({
+      requestedPageIndex: null,
+      savedPageIndex: 88,
+      currentPageIndex: 52,
+      pageCount: 400,
+    }),
+    88
+  );
+});
+
+await run("flipbook intro visual state only appears on a fresh cover entry", () => {
+  assert.equal(
+    resolveFlipbookInitialVisualState({
+      initialPageIndex: 0,
+      requestedPageIndex: null,
+      savedPageIndex: null,
+      currentPageIndex: null,
+      startedReading: false,
+    }),
+    FLIPBOOK_VISUAL_STATE_CLOSED_BOOK
+  );
+  assert.equal(
+    resolveFlipbookInitialVisualState({
+      initialPageIndex: 0,
+      requestedPageIndex: 0,
+      savedPageIndex: null,
+      currentPageIndex: null,
+      startedReading: false,
+    }),
+    FLIPBOOK_VISUAL_STATE_READING
+  );
+  assert.equal(
+    resolveFlipbookInitialVisualState({
+      initialPageIndex: 0,
+      requestedPageIndex: null,
+      savedPageIndex: 18,
+      currentPageIndex: null,
+      startedReading: true,
+    }),
+    FLIPBOOK_VISUAL_STATE_READING
+  );
+});
+
+await run("flipbook presentation mode depends only on viewport width", () => {
+  assert.equal(
+    resolveFlipbookPresentationMode({
+      viewportWidth: 1320,
+    }),
+    "spread"
+  );
+  assert.equal(
+    resolveFlipbookPresentationMode({
+      viewportWidth: 999,
+    }),
+    "single"
+  );
+  assert.equal(
+    resolveFlipbookPresentationMode({
+      viewportWidth: 1000,
+    }),
+    "spread"
+  );
+  assert.equal(
+    resolveFlipbookPresentationMode({
+      viewportWidth: 640,
+    }),
+    "single"
+  );
+});
+
+await run("flipbook stage scale respects constrained height", () => {
+  assert.equal(
+    resolveFlipbookStageScale({
+      viewportWidth: 1800,
+      viewportHeight: 700,
+      presentationMode: "spread",
+    }),
+    700 / 1080
+  );
+  assert.equal(
+    resolveFlipbookStageScale({
+      viewportWidth: 540,
+      viewportHeight: 1300,
+      presentationMode: "single",
+    }),
+    540 / 720
+  );
+  assert.equal(
+    resolveFlipbookStageScale({
+      viewportWidth: 1800,
+      viewportHeight: 900,
+      presentationMode: "spread",
+      targetHeight: 680,
+    }),
+    680 / 1080
+  );
+});
+
+await run("flipbook resume page index preserves spread focus rules", () => {
+  assert.equal(
+    resolveResumePageIndex({
+      currentPageIndex: 6,
+      previousPresentationMode: "single",
+      nextPresentationMode: "spread",
+      ttsActivePageIndex: null,
+      pageCount: 12,
+    }),
+    5
+  );
+  assert.equal(
+    resolveResumePageIndex({
+      currentPageIndex: 5,
+      previousPresentationMode: "single",
+      nextPresentationMode: "spread",
+      ttsActivePageIndex: null,
+      pageCount: 12,
+    }),
+    5
+  );
+  assert.equal(
+    resolveResumePageIndex({
+      currentPageIndex: 5,
+      previousPresentationMode: "single",
+      nextPresentationMode: "spread",
+      ttsActivePageIndex: 6,
+      pageCount: 12,
+    }),
+    5
+  );
+  assert.equal(
+    resolveResumePageIndex({
+      currentPageIndex: 5,
+      previousPresentationMode: "spread",
+      nextPresentationMode: "single",
+      ttsActivePageIndex: 6,
+      pageCount: 12,
+    }),
+    6
+  );
+  assert.equal(
+    resolveResumePageIndex({
+      currentPageIndex: 3,
+      previousPresentationMode: "spread",
+      nextPresentationMode: "single",
+      ttsActivePageIndex: null,
+      pageCount: 12,
+    }),
+    3
+  );
+  assert.equal(
+    resolveResumePageIndex({
+      currentPageIndex: 5,
+      previousPresentationMode: "spread",
+      nextPresentationMode: "single",
+      ttsActivePageIndex: null,
+      pageCount: 12,
+    }),
+    5
+  );
+});
+
+await run("flipbook session tokens preserve short-lived reader context", () => {
+  process.env.FLIPBOOK_SESSION_SECRET = "flipbook-test-secret";
+  const token = createFlipbookSessionToken({
+    userId: "user-1",
+    libraryBookId: "book-1",
+    slug: "reader-book",
+    manifestId: "manifest-1",
+    layoutProfileId: "canonical-v1",
+    ttsEnabled: true,
+    maxAgeSeconds: 300,
+  });
+  const verified = verifyFlipbookSessionToken(token);
+  assert.equal(verified.valid, true);
+  assert.equal(verified.userId, "user-1");
+  assert.equal(verified.libraryBookId, "book-1");
+  assert.equal(verified.slug, "reader-book");
+  assert.equal(verified.manifestId, "manifest-1");
+  assert.equal(verified.ttsEnabled, true);
+});
+
 await run("epub visible page numbers preserve both pages in a spread", () => {
   assert.deepEqual(
     resolveLibraryEpubVisiblePageNumbers({
@@ -811,6 +1740,19 @@ await run("epub visible page numbers preserve both pages in a spread", () => {
       right: 53,
     }
   );
+  assert.deepEqual(
+    resolveLibraryEpubVisiblePageNumbers({
+      pageNumber: 59,
+      pageTotal: 2220,
+      displayMode: "spread",
+      spreadStartPageNumber: 58,
+      spreadEndPageNumber: 59,
+    }),
+    {
+      left: 58,
+      right: 59,
+    }
+  );
 });
 
 await run("manual upload keys are deterministic per entity", () => {
@@ -818,12 +1760,13 @@ await run("manual upload keys are deterministic per entity", () => {
     buildLibraryManualUploadKey({
       scope: "staging",
       entityKey: "020e41c0-1234",
+      fileName: "book.epub",
     }),
-    "library/manual-uploads/staging/020e41c0-1234/active.epub"
+    "library/manual-uploads/staging/020e41c0-1234/book.epub"
   );
   assert.equal(
-    buildCanonicalManualEpubCacheKey("020e41c0-1234"),
-    "library/books/020e41c0-1234/manual.epub"
+    buildCanonicalManualEpubCacheKey({ id: "020e41c0-1234", fileName: "book.epub" }),
+    "library/books/020e41c0-1234/book.epub"
   );
 });
 

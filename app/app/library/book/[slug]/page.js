@@ -37,6 +37,7 @@ export default async function LibraryBookDetailPage({ params: paramsPromise }) {
     (source) => source?.source_format === "epub"
   );
   const readHref = hasPreferredEpubSource ? `/app/library/epub/${book.slug}` : `/app/library/read/${book.slug}`;
+  const flipbookHref = hasPreferredEpubSource ? `/app/library/flipbook/${book.slug}` : "";
 
   const relatedBooks = await listRelatedLibraryBooks({
     db: supabase,
@@ -106,6 +107,14 @@ export default async function LibraryBookDetailPage({ params: paramsPromise }) {
             >
               {book.savedPageNumber || book.savedPageCode || book.startedReading ? "Continue Reading" : "Read now"}
             </Link>
+            {hasPreferredEpubSource ? (
+              <Link
+                href={flipbookHref}
+                className="inline-flex items-center justify-center rounded-xl border border-border bg-surface-2 px-5 py-3 text-sm font-semibold text-foreground transition hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
+              >
+                Open flipbook
+              </Link>
+            ) : null}
             <LibraryMyLibraryButton slug={book.slug} initialInMyLibrary={book.inMyLibrary} />
           </div>
           {book.savedPageNumber || book.savedPageCode ? (

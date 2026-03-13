@@ -17,8 +17,8 @@ Next.js + Supabase + Cloudflare R2 para un aula virtual privada: login instituci
 ## Modulo Duolingo-like
 ### Migracion SQL
 
-- Ejecuta `supabase/migrations/20260222_duolingo_module.sql`.
-- Ejecuta `supabase/migrations/20260222_template_session_exercises.sql` para enlazar ejercicios por clase (`exercise_id` en `template_session_items` y `session_items`).
+- Ejecuta `supabase/migrations/20260222000200_duolingo_module.sql`.
+- Ejecuta `supabase/migrations/20260222000300_template_session_exercises.sql` para enlazar ejercicios por clase (`exercise_id` en `template_session_items` y `session_items`).
 - La migracion agrega/extiende:
   - `profiles.id_document`, `profiles.xp_total`, `profiles.current_streak`.
   - `lesson_subjects`, `vocabulary`, `exercise_vocabulary`, `user_progress`, `audio_cache`.
@@ -135,5 +135,4 @@ npm run build && npm start
 5. Los alumnos solo pueden ver `/app`. Los admins mantienen cursos/audio en `/admin/panel` y pueden rellenar `/admin/seed` para datos demo.
 
 Respeta las claves privadas, manten las politicas RLS activas y usa `/admin/panel` para gestionar todo el aula.
-
 

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function ProfileLayout({ children }) {
-  const { user, displayName, avatarUrl, role } = await getShellUser();
+  const { user, displayName, avatarUrl, role, studyWithMeUnlocked, studyWithMeLockMessage } = await getShellUser();
 
   if (!user) {
     redirect("/");
@@ -16,6 +16,8 @@ export default async function ProfileLayout({ children }) {
     <AppShell
       pageTitle="Mi perfil"
       role={role}
+      studyWithMeUnlocked={studyWithMeUnlocked}
+      studyWithMeLockMessage={studyWithMeLockMessage}
       user={{ name: displayName, email: user.email, avatarUrl }}
     >
       {children}

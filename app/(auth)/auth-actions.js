@@ -97,16 +97,14 @@ async function fetchAdminProfileByEmail(identifier) {
   return adminProfile ? { ...adminProfile, role: "admin" } : null;
 }
 
-async function redirectByRole(supabase) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+async function redirectByRole(supabase, user) {
+  const resolvedUser = user || null;
 
-  if (!user) {
+  if (!resolvedUser) {
     redirect("/");
   }
 
-  const adminRecord = await selectAdminById(supabase, user.id, "id");
+  const adminRecord = await selectAdminById(supabase, resolvedUser.id, "id");
   if (adminRecord?.id) {
     redirect("/admin");
   }
@@ -114,10 +112,10 @@ async function redirectByRole(supabase) {
   let { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("status, role")
-    .eq("id", user.id)
+    .eq("id", resolvedUser.id)
     .maybeSingle();
   if (profileError && String(profileError.message || "").toLowerCase().includes("status")) {
-    const fallback = await supabase.from("profiles").select("id, role").eq("id", user.id).maybeSingle();
+    const fallback = await supabase.from("profiles").select("id, role").eq("id", resolvedUser.id).maybeSingle();
     profile = fallback.data;
     profileError = fallback.error;
   }
@@ -360,7 +358,10 @@ async function handlePasswordLogin(prevState, formData, context, requireOtp) {
   }
 
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
     return {
@@ -371,7 +372,7 @@ async function handlePasswordLogin(prevState, formData, context, requireOtp) {
     };
   }
 
-  await redirectByRole(supabase);
+  await redirectByRole(supabase, user);
 }
 
 async function handleSetPassword(prevState, formData, context, requireOtp) {
@@ -436,7 +437,10 @@ async function handleSetPassword(prevState, formData, context, requireOtp) {
   await service.from("profiles").update({ password_set: true, invited: true }).eq("id", profileId);
 
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
-  const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+  const {
+    data: { user },
+    error: signInError,
+  } = await supabase.auth.signInWithPassword({ email, password });
 
   if (signInError) {
     return {
@@ -449,7 +453,7 @@ async function handleSetPassword(prevState, formData, context, requireOtp) {
     };
   }
 
-  await redirectByRole(supabase);
+  await redirectByRole(supabase, user);
 }
 
 async function handleGoogleLogin(prevState, context, requireOtp) {

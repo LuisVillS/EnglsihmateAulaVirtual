@@ -1,6 +1,6 @@
-﻿import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import StudentForm from "@/components/student-form";
 import AdminStudentPasswordForm from "@/components/admin-student-password-form";
 
@@ -20,23 +20,7 @@ function formatHourLabel(hour) {
 
 export default async function StudentDetailPage({ params: paramsPromise }) {
   const params = await paramsPromise;
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/admin/login");
-  }
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (!adminRecord?.id) {
-    redirect("/admin/login");
-  }
+  const { supabase } = await requireAdminPageAccess();
 
   const { studentId } = params;
   let student = null;

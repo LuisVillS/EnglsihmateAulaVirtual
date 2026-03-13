@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
+import { USER_ROLES } from "@/lib/roles";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 
 function formatDate(value) {
@@ -27,25 +28,21 @@ export const metadata = {
 };
 
 export default async function RutaAcademicaPage() {
-  const supabase = await createSupabaseServerClient();
   await autoDeactivateExpiredCommissions();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, role } = await getRequestUserContext();
 
   if (!user) redirect("/login");
+  if (role !== USER_ROLES.STUDENT) {
+    redirect("/app/matricula?locked=1");
+  }
 
   const { data: profile } = await supabase
     .from("profiles")
     .select(
-      "role, status, commission_id, commission:course_commissions (id, course_level, commission_number, start_date, end_date, start_time, end_time, modality_key, status, is_active)"
+      "commission_id, commission:course_commissions (id, course_level, commission_number, start_date, end_date, start_time, end_time, modality_key, status, is_active)"
     )
     .eq("id", user.id)
     .maybeSingle();
-
-  if (profile?.role !== "student") {
-    redirect("/app/matricula?locked=1");
-  }
 
   const commission = profile?.commission || null;
   if (!commission?.id) {

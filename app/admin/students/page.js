@@ -1,28 +1,16 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { requireAdminPageAccess } from "@/lib/admin/access";
+import { ADMIN_STUDENTS_PAGE_SIZE, loadAdminStudentsPage } from "@/lib/admin-students";
 import { STUDENT_LEVELS } from "@/lib/student-constants";
 import StudentRowActions from "@/components/student-row-actions";
 import AdminStudentCreateModal from "@/components/admin-student-create-modal";
 import AdminStudentImportModal from "@/components/admin-student-import-modal";
-import { USER_ROLES, resolveProfileRole } from "@/lib/roles";
 
 export const metadata = {
   title: "Gestion de alumnos | Aula Virtual",
 };
 
 const HOUR_OPTIONS = Array.from({ length: ((1410 - 360) / 30) + 1 }, (_, idx) => 360 + idx * 30);
-const NON_APPROVED_PRE_ENROLLMENT_STATUSES = new Set([
-  "PENDING_EMAIL_VERIFICATION",
-  "EMAIL_VERIFIED",
-  "IN_PROGRESS",
-  "RESERVED",
-  "PAYMENT_SUBMITTED",
-  "PAID_AUTO",
-  "REJECTED",
-  "EXPIRED",
-  "ABANDONED",
-]);
 
 function formatHourLabel(hour) {
   const hours = Math.floor(hour / 60);
@@ -40,16 +28,19 @@ function formatCommissionLabel(commission) {
   return `${commission.course_level} - Comision ${commission.commission_number}`;
 }
 
-function getMissingColumnFromError(error) {
-  const message = String(error?.message || "");
-  const quotedMatch = message.match(/'([^']+)'/);
-  if (quotedMatch?.[1]) return quotedMatch[1];
-  const couldNotFindMatch = message.match(/could not find the '([^']+)' column/i);
-  if (couldNotFindMatch?.[1]) return couldNotFindMatch[1];
-  const relationMatch = message.match(/column\s+\w+\.([a-zA-Z0-9_]+)\s+does not exist/i);
-  if (relationMatch?.[1]) return relationMatch[1];
-  const plainMatch = message.match(/column\s+([a-zA-Z0-9_]+)\s+does not exist/i);
-  return plainMatch?.[1] || null;
+function parsePositiveInteger(value, fallback = 1) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function buildStudentsPageHref({ course = "", search = "", hour = null, page = 1 }) {
+  const params = new URLSearchParams();
+  if (course) params.set("course", course);
+  if (search) params.set("q", search);
+  if (hour != null) params.set("hour", String(hour));
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return `/admin/students${query ? `?${query}` : ""}`;
 }
 
 function FiltersBar({ course, search, hour }) {
@@ -115,7 +106,7 @@ function FiltersBar({ course, search, hour }) {
   );
 }
 
-function StudentsTable({ students }) {
+function StudentsTable({ students, totalCount, page, totalPages }) {
   return (
     <div className="rounded-3xl border border-border bg-surface p-6 text-foreground shadow-2xl">
       <div className="flex items-center justify-between">
@@ -123,7 +114,9 @@ function StudentsTable({ students }) {
           <p className="text-xs uppercase tracking-[0.4em] text-muted">Listado</p>
           <h3 className="text-xl font-semibold">Alumnos registrados</h3>
         </div>
-        <p className="text-sm text-muted">{students.length} registros</p>
+        <p className="text-sm text-muted">
+          Pagina {page} de {totalPages} · {students.length} visibles / {totalCount} registros
+        </p>
       </div>
       <div className="relative mt-4 overflow-visible">
         <div className="overflow-x-auto overflow-y-visible">
@@ -194,19 +187,7 @@ function StudentsTable({ students }) {
 
 export default async function StudentsPage({ searchParams: searchParamsPromise }) {
   const searchParams = (await searchParamsPromise) || {};
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/admin/login");
-  }
-
-  const { data: adminRecord } = await supabase.from("admin_profiles").select("id").eq("id", user.id).maybeSingle();
-  if (!adminRecord?.id) {
-    redirect("/admin/login");
-  }
+  const { supabase } = await requireAdminPageAccess();
 
   const rawCourse = typeof searchParams?.course === "string" ? searchParams.course : "";
   const courseFilter = STUDENT_LEVELS.includes(rawCourse) ? rawCourse : "";
@@ -216,161 +197,68 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
   const hourFilter = rawHour !== "" && Number.isFinite(parsedHour) && parsedHour >= 360 && parsedHour <= 1410
     ? parsedHour
     : null;
-
-  const baseColumns = [
-    "id",
-    "full_name",
-    "email",
-    "dni",
-    "phone",
-    "birth_date",
-    "email_verified_at",
-    "student_code",
-    "course_level",
-    "is_premium",
-    "start_month",
-    "enrollment_date",
-    "role",
-    "password_set",
-    "created_at",
-    "preferred_hour",
-    "status",
-    "commission_id",
-  ];
-  let selectColumns = [...baseColumns];
-  let hasStatusColumn = true;
-  let hasCommissionColumn = true;
-  let hasEmailVerifiedAtColumn = true;
-  let studentsData = null;
-  let studentsError = null;
-
-  const runStudentsQuery = async () => {
-    let query = supabase.from("profiles").select(selectColumns.join(","));
-
-    if (courseFilter) {
-      query = query.eq("course_level", courseFilter);
-    }
-    if (hourFilter != null) {
-      query = query.eq("preferred_hour", hourFilter);
-    }
-    if (searchTerm) {
-      const sanitized = searchTerm.replace(/%/g, "\\%").replace(/,/g, "\\,");
-      query = query.or(
-        `full_name.ilike.%${sanitized}%,email.ilike.%${sanitized}%,dni.ilike.%${sanitized}%,student_code.ilike.%${sanitized}%`
-      );
-    }
-    return query.order("created_at", { ascending: false });
-  };
-
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const result = await runStudentsQuery();
-    studentsData = result.data;
-    studentsError = result.error;
-    if (!studentsError) break;
-
-    const missingColumn = getMissingColumnFromError(studentsError);
-    if (!missingColumn) break;
-
-    if (missingColumn === "status") {
-      hasStatusColumn = false;
-      selectColumns = selectColumns.filter((col) => col !== "status");
-      continue;
-    }
-    if (missingColumn === "commission_id") {
-      hasCommissionColumn = false;
-      selectColumns = selectColumns.filter((col) => col !== "commission_id");
-      continue;
-    }
-    if (missingColumn === "email_verified_at") {
-      hasEmailVerifiedAtColumn = false;
-      selectColumns = selectColumns.filter((col) => col !== "email_verified_at");
-      continue;
-    }
-    break;
-  }
-
-  if (studentsError) {
-    console.error("No se pudo listar alumnos", studentsError);
-  }
-
-  const unresolvedStudents = studentsData || [];
-  const unresolvedUserIds = unresolvedStudents.map((student) => student.id).filter(Boolean);
-
-  let enrolledUserIds = new Set();
-  if (unresolvedUserIds.length) {
-    const { data: enrollmentsRows } = await supabase
-      .from("course_enrollments")
-      .select("user_id")
-      .in("user_id", unresolvedUserIds);
-    enrolledUserIds = new Set((enrollmentsRows || []).map((row) => row.user_id));
-  }
-
-  const latestPreEnrollmentStatusByUserId = new Map();
-  if (unresolvedUserIds.length) {
-    const preEnrollmentResult = await supabase
-      .from("pre_enrollments")
-      .select("user_id, status, created_at")
-      .in("user_id", unresolvedUserIds)
-      .order("created_at", { ascending: false });
-    if (!preEnrollmentResult.error) {
-      for (const row of preEnrollmentResult.data || []) {
-        if (!row?.user_id || latestPreEnrollmentStatusByUserId.has(row.user_id)) continue;
-        latestPreEnrollmentStatusByUserId.set(row.user_id, row.status || null);
-      }
-    }
-  }
-
-  const resolvedStudents = unresolvedStudents.filter((student) => {
-    const effectiveRole = resolveProfileRole({
-      role: student.role,
-      status: hasStatusColumn ? student.status : undefined,
-    });
-    if (effectiveRole === USER_ROLES.ADMIN) return false;
-
-    const hasEnrollment = enrolledUserIds.has(student.id);
-    const latestPreStatus = latestPreEnrollmentStatusByUserId.get(student.id) || null;
-    const hasActivePreEnrollment =
-      latestPreStatus &&
-      latestPreStatus !== "APPROVED" &&
-      NON_APPROVED_PRE_ENROLLMENT_STATUSES.has(latestPreStatus);
-    const hasStudentSignals =
-      effectiveRole === USER_ROLES.STUDENT ||
-      hasEnrollment ||
-      Boolean(student.commission_id) ||
-      Boolean(student.course_level) ||
-      latestPreStatus === "APPROVED";
-
-    if (hasStudentSignals) return true;
-    if (!hasStatusColumn) return !hasActivePreEnrollment;
-    if (hasActivePreEnrollment) return false;
-    return true;
-  });
-
-  const commissionIds = hasCommissionColumn
-    ? Array.from(new Set(resolvedStudents.map((student) => student.commission_id).filter(Boolean)))
-    : [];
-
-  let commissionsById = new Map();
-  if (commissionIds.length) {
-    const { data: linkedCommissions } = await supabase
+  const currentPage = parsePositiveInteger(
+    typeof searchParams?.page === "string" ? searchParams.page : "",
+    1
+  );
+  const [studentsResult, activeCommissionsResult] = await Promise.all([
+    loadAdminStudentsPage({
+      supabase,
+      courseFilter,
+      searchTerm,
+      hourFilter,
+      page: currentPage,
+      pageSize: ADMIN_STUDENTS_PAGE_SIZE,
+    }),
+    supabase
       .from("course_commissions")
-      .select("id, course_level, commission_number")
-      .in("id", commissionIds);
-    commissionsById = new Map((linkedCommissions || []).map((item) => [item.id, item]));
+      .select("id, course_level, commission_number, start_time, end_time, modality_key, days_of_week, is_active")
+      .eq("is_active", true)
+      .order("course_level", { ascending: true })
+      .order("commission_number", { ascending: true }),
+  ]);
+
+  let effectiveStudentsResult = studentsResult;
+  if (
+    currentPage > 1 &&
+    !studentsResult.error &&
+    studentsResult.students.length === 0 &&
+    studentsResult.totalCount === 0
+  ) {
+    effectiveStudentsResult = await loadAdminStudentsPage({
+      supabase,
+      courseFilter,
+      searchTerm,
+      hourFilter,
+      page: 1,
+      pageSize: ADMIN_STUDENTS_PAGE_SIZE,
+    });
   }
 
-  const hydratedStudents = resolvedStudents.map((student) => ({
-    ...student,
-    email_verified_at: hasEmailVerifiedAtColumn ? student.email_verified_at : null,
-    commission: student.commission_id ? commissionsById.get(student.commission_id) || null : null,
-  }));
+  if (effectiveStudentsResult.error) {
+    console.error("No se pudo listar alumnos", effectiveStudentsResult.error);
+  }
 
-  const { data: commissionsData } = await supabase
-    .from("course_commissions")
-    .select("id, course_level, commission_number, start_time, end_time, modality_key, days_of_week, is_active")
-    .eq("is_active", true)
-    .order("course_level", { ascending: true })
-    .order("commission_number", { ascending: true });
+  const totalStudents = effectiveStudentsResult.totalCount || 0;
+  const totalPages = Math.max(1, Math.ceil(totalStudents / ADMIN_STUDENTS_PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  let paginatedStudents = effectiveStudentsResult.students;
+
+  if (safeCurrentPage !== currentPage) {
+    const adjustedPageResult = await loadAdminStudentsPage({
+      supabase,
+      courseFilter,
+      searchTerm,
+      hourFilter,
+      page: safeCurrentPage,
+      pageSize: ADMIN_STUDENTS_PAGE_SIZE,
+    });
+    if (adjustedPageResult.error) {
+      console.error("No se pudo cargar pagina ajustada de alumnos", adjustedPageResult.error);
+    } else {
+      paginatedStudents = adjustedPageResult.students;
+    }
+  }
 
   const params = new URLSearchParams();
   if (courseFilter) params.set("course", courseFilter);
@@ -422,11 +310,61 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
           >
             Descargar plantilla CSV
           </a>
-          <AdminStudentImportModal />
-          <AdminStudentCreateModal commissions={commissionsData || []} />
+            <AdminStudentImportModal />
+          <AdminStudentCreateModal commissions={activeCommissionsResult.data || []} />
         </div>
 
-        <StudentsTable students={hydratedStudents} />
+        <StudentsTable
+          students={paginatedStudents}
+          totalCount={totalStudents}
+          page={safeCurrentPage}
+          totalPages={totalPages}
+        />
+
+        {totalPages > 1 ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-foreground shadow-sm">
+            <p className="text-muted">
+              Mostrando {paginatedStudents.length} alumnos en esta pagina.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={buildStudentsPageHref({
+                  course: courseFilter,
+                  search: searchTerm,
+                  hour: hourFilter,
+                  page: Math.max(1, safeCurrentPage - 1),
+                })}
+                aria-disabled={safeCurrentPage <= 1}
+                className={`rounded-xl border px-4 py-2 font-semibold transition ${
+                  safeCurrentPage <= 1
+                    ? "pointer-events-none border-border/60 text-muted/60"
+                    : "border-border text-foreground hover:border-primary hover:bg-surface-2"
+                }`}
+              >
+                Anterior
+              </Link>
+              <span className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
+                {safeCurrentPage} / {totalPages}
+              </span>
+              <Link
+                href={buildStudentsPageHref({
+                  course: courseFilter,
+                  search: searchTerm,
+                  hour: hourFilter,
+                  page: Math.min(totalPages, safeCurrentPage + 1),
+                })}
+                aria-disabled={safeCurrentPage >= totalPages}
+                className={`rounded-xl border px-4 py-2 font-semibold transition ${
+                  safeCurrentPage >= totalPages
+                    ? "pointer-events-none border-border/60 text-muted/60"
+                    : "border-border text-foreground hover:border-primary hover:bg-surface-2"
+                }`}
+              >
+                Siguiente
+              </Link>
+            </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );

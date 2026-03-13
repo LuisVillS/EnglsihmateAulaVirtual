@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
 import ProviderLinkButton from "@/components/provider-link-button";
 
 export const dynamic = "force-dynamic";
@@ -38,10 +38,7 @@ function isMissingDiscordColumnError(error) {
 
 export default async function DiscordPage({ searchParams: searchParamsPromise }) {
   const searchParams = (await searchParamsPromise) || {};
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user } = await getRequestUserContext();
 
   if (!user) {
     redirect("/");

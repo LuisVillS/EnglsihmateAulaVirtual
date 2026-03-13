@@ -1,5 +1,4 @@
-﻿import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 import TeacherDashboardStudentsTable from "@/components/teacher-dashboard-students-table";
 import { loadTeacherStudentsOverview } from "@/lib/student-skills";
@@ -40,25 +39,7 @@ export default async function TeacherDashboardPage({ searchParams: searchParamsP
   const level = cleanText(searchParams?.level).toUpperCase();
   const query = cleanText(searchParams?.q);
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/admin/login");
-  }
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (!adminRecord?.id) {
-    redirect("/admin/login");
-  }
-
+  const { supabase } = await requireAdminPageAccess();
   const db = hasServiceRoleClient() ? getServiceSupabaseClient() : supabase;
 
   const dashboard = await loadTeacherStudentsOverview({
@@ -133,4 +114,3 @@ export default async function TeacherDashboardPage({ searchParams: searchParamsP
     </section>
   );
 }
-

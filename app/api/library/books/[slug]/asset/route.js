@@ -8,7 +8,10 @@ import {
 } from "@/lib/library/source-manager";
 
 export async function GET(request, { params: paramsPromise }) {
-  const auth = await requireLibraryStudentRouteAccess();
+  const auth = await requireLibraryStudentRouteAccess({
+    allowAdmin: true,
+    allowGuest: true,
+  });
   if (auth.errorResponse) return auth.errorResponse;
 
   try {
@@ -16,7 +19,7 @@ export async function GET(request, { params: paramsPromise }) {
     const book = await getPublishedLibraryBookBySlug({
       db: auth.db,
       slug: params?.slug,
-      userId: auth.user.id,
+      userId: auth.user?.id || "",
     });
 
     if (!book?.id) {
@@ -42,7 +45,7 @@ export async function GET(request, { params: paramsPromise }) {
       headers: {
         "Content-Type": asset.contentType || "application/epub+zip",
         "Content-Disposition": `inline; filename="${book.slug || "book"}.epub"`,
-        "Cache-Control": "private, max-age=3600",
+        "Cache-Control": "public, max-age=3600",
       },
     });
   } catch (error) {

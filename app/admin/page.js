@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import {
   promoteStudentToAdmin,
   assignCourseToUser,
@@ -79,24 +78,7 @@ function UserCard({ profile, courses }) {
 }
 
 export default async function AdminPage({ searchParams }) {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/admin/login");
-  }
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (!adminRecord?.id) {
-    redirect("/admin/login");
-  }
+  const { supabase } = await requireAdminPageAccess();
 
   const { data: coursesData } = await supabase
     .from("courses")

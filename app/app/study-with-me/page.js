@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
 import {
   STUDY_WITH_ME_SESSION_MINUTES,
   STUDY_WITH_ME_WEEKLY_LIMIT,
@@ -36,10 +36,7 @@ function buildCalendlyUrl({ baseUrl, email, name }) {
 }
 
 export default async function StudyWithMePage() {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user } = await getRequestUserContext();
 
   if (!user) redirect("/login");
 

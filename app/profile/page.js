@@ -1,7 +1,8 @@
 ﻿import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
+import { loadViewerProfiles } from "@/lib/viewer-profiles";
 import ProviderLinkButton from "@/components/provider-link-button";
 
 export const dynamic = "force-dynamic";
@@ -11,30 +12,6 @@ const PROVIDERS = [
   { id: "google", label: "Google", icon: "G" },
   { id: "discord", label: "Discord", icon: "D" },
 ];
-const STUDENT_PROFILE_SELECT = `
-  id,
-  email,
-  role,
-  student_code,
-  full_name,
-  dni,
-  enrollment_date,
-  commission_assigned_at,
-  commission_id,
-  commission:course_commissions (
-    id,
-    course_level,
-    commission_number,
-    start_date,
-    end_date,
-    start_time,
-    end_time,
-    modality_key,
-    status,
-    is_active
-  )
-`;
-
 function formatRole(role) {
   return role === "admin" ? "Administrador" : "Estudiante";
 }
@@ -103,69 +80,31 @@ function isMissingDiscordColumnError(error) {
 
 export default async function ProfilePage({ searchParams: searchParamsPromise }) {
   const searchParams = (await searchParamsPromise) || {};
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, profile: contextProfile, isAdmin } = await getRequestUserContext();
 
   if (!user) {
     redirect("/");
   }
 
-  const { data: adminProfile } = await supabase
-    .from("admin_profiles")
-    .select("id, email, full_name, dni")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  const { data: studentProfile } = await supabase
-    .from("profiles")
-    .select(STUDENT_PROFILE_SELECT)
-    .eq("id", user.id)
-    .maybeSingle();
-
-  let resolvedAdmin = adminProfile;
-  let resolvedStudent = studentProfile;
-
-  const normalizedEmail = user.email?.toLowerCase();
-
-  if (hasServiceRoleClient()) {
-    const service = getServiceSupabaseClient();
-
-    const { data: studentByEmail } = normalizedEmail
-      ? await service
-          .from("profiles")
-          .select(STUDENT_PROFILE_SELECT)
-          .eq("email", normalizedEmail)
-          .maybeSingle()
-      : { data: null };
-
-    const { data: studentById } = await service
-      .from("profiles")
-      .select(STUDENT_PROFILE_SELECT)
-      .eq("id", user.id)
-      .maybeSingle();
-
-    const { data: adminByEmail } = normalizedEmail
-      ? await service
-          .from("admin_profiles")
-          .select("id, email, full_name, dni")
-          .eq("email", normalizedEmail)
-          .maybeSingle()
-      : { data: null };
-
-    const { data: adminById } = await service
-      .from("admin_profiles")
-      .select("id, email, full_name, dni")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    resolvedStudent = studentByEmail || studentById || resolvedStudent;
-    resolvedAdmin = adminByEmail || adminById || resolvedAdmin;
-  }
+  const { adminProfile: resolvedAdmin, studentProfile: resolvedStudent } = await loadViewerProfiles({
+    supabase,
+    user,
+    contextProfile,
+    isAdmin,
+    includeDiscord: true,
+  });
 
   const discordIdentity = getDiscordIdentity(user);
-  if (resolvedStudent?.id && discordIdentity?.id) {
+  const discordNeedsSync = Boolean(
+    resolvedStudent?.id &&
+      discordIdentity?.id &&
+      (
+        resolvedStudent.discord_user_id !== discordIdentity.id ||
+        (resolvedStudent.discord_username || null) !== (discordIdentity.username || null) ||
+        !resolvedStudent.discord_connected_at
+      )
+  );
+  if (discordNeedsSync) {
     const discordPayload = {
       discord_user_id: discordIdentity.id,
       discord_username: discordIdentity.username || null,
@@ -203,12 +142,6 @@ export default async function ProfilePage({ searchParams: searchParamsPromise })
     };
   const studentProfileId = resolvedStudent?.id || user.id;
 
-  const { data: enrollments } = await supabase
-    .from("course_enrollments")
-    .select("id, created_at, course:courses (id, title, level)")
-    .eq("user_id", studentProfileId)
-    .order("created_at", { ascending: false });
-
   const activeCommission = resolvedStudent?.commission?.id
     ? {
         ...resolvedStudent.commission,
@@ -216,6 +149,14 @@ export default async function ProfilePage({ searchParams: searchParamsPromise })
       }
     : null;
   const commissionCards = activeCommission ? [activeCommission] : [];
+  const shouldLoadEnrollments = !commissionCards.length && !resolvedAdmin;
+  const { data: enrollments } = shouldLoadEnrollments
+    ? await supabase
+        .from("course_enrollments")
+        .select("id, created_at, course:courses (id, title, level)")
+        .eq("user_id", studentProfileId)
+        .order("created_at", { ascending: false })
+    : { data: [] };
   const totalCourses = commissionCards.length || (enrollments || []).length;
 
   const connectedProviders = new Set(user.identities?.map((identity) => identity.provider));

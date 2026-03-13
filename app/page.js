@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { createSupabaseServerClient, getCurrentSession } from "@/lib/supabase-server";
 import { USER_ROLES, resolveProfileRole } from "@/lib/roles";
 
 function normalizeErrorMessage(rawValue) {
@@ -18,10 +18,8 @@ export default async function HomePage({ searchParams }) {
     typeof resolvedSearchParams.error === "string" ? resolvedSearchParams.error : ""
   );
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const session = await getCurrentSession();
+  const user = session?.user || null;
 
   if (!user) {
     if (errorMessage) {
@@ -55,6 +53,7 @@ export default async function HomePage({ searchParams }) {
     redirect("/login");
   }
 
+  const supabase = await createSupabaseServerClient();
   const { data: adminRecord } = await supabase
     .from("admin_profiles")
     .select("id")

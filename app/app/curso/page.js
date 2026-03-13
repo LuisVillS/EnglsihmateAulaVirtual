@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
+import { USER_ROLES } from "@/lib/roles";
 import {
   buildSessionDraftsFromCommission,
   buildFrequencySessionDrafts,
@@ -194,6 +195,271 @@ async function getApprovedBillingMonths(supabase, studentId) {
     .filter(Boolean);
 }
 
+async function loadSessionFlashcardsBySessionId(supabase, persistedSessionIds) {
+  let flashcardsBySessionId = {};
+  let flashcardColumns = [
+    "id",
+    "session_id",
+    "flashcard_id",
+    "word",
+    "meaning",
+    "image_url",
+    "card_order",
+    "accepted_answers",
+  ];
+
+  let nestedFlashcardsResult = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const selectColumns = flashcardColumns.includes("flashcard_id")
+      ? `
+        ${flashcardColumns.join(",")},
+        flashcard:flashcards (
+          id,
+          word,
+          meaning,
+          image_url,
+          accepted_answers,
+          audio_url,
+          audio_r2_key,
+          audio_provider,
+          voice_id,
+          elevenlabs_config
+        )
+      `
+      : flashcardColumns.join(",");
+
+    const result = await supabase
+      .from("session_flashcards")
+      .select(selectColumns)
+      .in("session_id", persistedSessionIds)
+      .order("card_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    nestedFlashcardsResult = result;
+    if (!result.error) break;
+    const missingColumn = getMissingColumnFromError(result.error);
+    if (!missingColumn) break;
+    if (!flashcardColumns.includes(missingColumn)) break;
+    flashcardColumns = flashcardColumns.filter((column) => column !== missingColumn);
+  }
+
+  if (!nestedFlashcardsResult?.error) {
+    const nestedRows = await Promise.all(
+      (nestedFlashcardsResult.data || []).map(async (row) => {
+        const flashcard = row?.flashcard
+          ? {
+              ...row.flashcard,
+              audio_url: await resolveFlashcardAudioUrl(row.flashcard),
+            }
+          : null;
+        return {
+          ...row,
+          ...(flashcard || {}),
+        };
+      })
+    );
+
+    flashcardsBySessionId = nestedRows.reduce((acc, row) => {
+      const sessionKey = String(row?.session_id || "").trim();
+      if (!sessionKey) return acc;
+      if (!acc[sessionKey]) acc[sessionKey] = [];
+      acc[sessionKey].push(resolveAssignedFlashcardRow(row, new Map(), acc[sessionKey].length + 1));
+      return acc;
+    }, {});
+
+    return { flashcardsBySessionId };
+  }
+
+  const missingTable = getMissingTableName(nestedFlashcardsResult?.error);
+  if (missingTable?.endsWith("session_flashcards")) {
+    return { flashcardsBySessionId };
+  }
+
+  let fallbackColumns = [...flashcardColumns];
+  let flashcardsResult = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await supabase
+      .from("session_flashcards")
+      .select(fallbackColumns.join(","))
+      .in("session_id", persistedSessionIds)
+      .order("card_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    flashcardsResult = result;
+    if (!result.error) break;
+    const missingColumn = getMissingColumnFromError(result.error);
+    if (!missingColumn || !fallbackColumns.includes(missingColumn)) break;
+    fallbackColumns = fallbackColumns.filter((column) => column !== missingColumn);
+  }
+
+  if (!flashcardsResult?.error) {
+    const flashcardIds = Array.from(
+      new Set(
+        (flashcardsResult.data || [])
+          .map((row) => String(row?.flashcard_id || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    let flashcardsById = new Map();
+    if (flashcardIds.length) {
+      const flashcardsLibraryResult = await supabase
+        .from("flashcards")
+        .select("id, word, meaning, image_url, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config")
+        .in("id", flashcardIds);
+      if (!flashcardsLibraryResult.error) {
+        const hydratedLibraryRows = await Promise.all(
+          (flashcardsLibraryResult.data || []).map(async (row) => ({
+            ...row,
+            audio_url: await resolveFlashcardAudioUrl(row),
+          }))
+        );
+        flashcardsById = buildFlashcardLibraryMap(hydratedLibraryRows);
+      } else {
+        console.error("No se pudo cargar la biblioteca de flashcards", flashcardsLibraryResult.error);
+      }
+    }
+
+    flashcardsBySessionId = (flashcardsResult.data || []).reduce((acc, row) => {
+      const sessionKey = String(row?.session_id || "").trim();
+      if (!sessionKey) return acc;
+      if (!acc[sessionKey]) acc[sessionKey] = [];
+      acc[sessionKey].push(resolveAssignedFlashcardRow(row, flashcardsById, acc[sessionKey].length + 1));
+      return acc;
+    }, {});
+
+    return { flashcardsBySessionId };
+  }
+
+  return { error: flashcardsResult?.error || nestedFlashcardsResult?.error, flashcardsBySessionId };
+}
+
+async function loadSessionItemsForCoursePage(supabase, persistedSessionIds) {
+  let itemColumns = [
+    "id",
+    "session_id",
+    "type",
+    "title",
+    "url",
+    "storage_key",
+    "note",
+    "exercise_id",
+  ];
+
+  let itemsResult = null;
+  let usedNestedExercises = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const selectColumns = itemColumns.includes("exercise_id")
+      ? `
+        ${itemColumns.join(",")},
+        exercise:exercises (
+          id,
+          lesson_id
+        )
+      `
+      : itemColumns.join(",");
+
+    const result = await supabase
+      .from("session_items")
+      .select(selectColumns)
+      .in("session_id", persistedSessionIds)
+      .order("created_at", { ascending: true });
+
+    itemsResult = result;
+    if (!result.error) {
+      usedNestedExercises = itemColumns.includes("exercise_id");
+      break;
+    }
+
+    const missingColumn = getMissingColumnFromError(result.error);
+    if (!missingColumn || !itemColumns.includes(missingColumn)) break;
+    itemColumns = itemColumns.filter((column) => column !== missingColumn);
+  }
+
+  if (itemsResult?.error) {
+    const fallbackItemsResult = await supabase
+      .from("session_items")
+      .select(itemColumns.join(","))
+      .in("session_id", persistedSessionIds)
+      .order("created_at", { ascending: true });
+
+    if (fallbackItemsResult.error) {
+      return { error: fallbackItemsResult.error, itemsBySession: {}, sessionItemRows: [] };
+    }
+
+    itemsResult = fallbackItemsResult;
+    usedNestedExercises = false;
+  }
+
+  const { flashcardsBySessionId, error: flashcardsError } = await loadSessionFlashcardsBySessionId(
+    supabase,
+    persistedSessionIds
+  );
+  if (flashcardsError) {
+    const missingTable = getMissingTableName(flashcardsError);
+    if (!missingTable?.endsWith("session_flashcards")) {
+      console.error("No se pudieron cargar flashcards de clase", flashcardsError);
+    }
+  }
+
+  const normalizedRows = (itemsResult.data || []).map((item) => ({
+    ...item,
+    flashcards:
+      String(item?.type || "").trim().toLowerCase() === "flashcards"
+        ? flashcardsBySessionId[String(item?.session_id || "").trim()] || []
+        : [],
+    lesson_id: null,
+  }));
+
+  let lessonIdByExerciseId = new Map();
+  if (!usedNestedExercises) {
+    const exerciseIds = Array.from(
+      new Set(
+        normalizedRows
+          .filter((item) => !extractLessonIdFromQuizUrl(item?.url))
+          .map((item) => String(item?.exercise_id || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (exerciseIds.length) {
+      const { data: exerciseRows, error: exercisesError } = await supabase
+        .from("exercises")
+        .select("id, lesson_id")
+        .in("id", exerciseIds);
+      if (!exercisesError) {
+        lessonIdByExerciseId = new Map(
+          (exerciseRows || []).map((exercise) => [String(exercise.id || "").trim(), exercise.lesson_id || null])
+        );
+      } else {
+        console.error("No se pudieron resolver lecciones de ejercicios", exercisesError);
+      }
+    }
+  }
+
+  const sessionItemRows = normalizedRows.map((item) => {
+    const fromUrl = extractLessonIdFromQuizUrl(item?.url) || null;
+    if (fromUrl) {
+      return { ...item, lesson_id: fromUrl };
+    }
+
+    const fromNestedExercise = item?.exercise?.lesson_id || null;
+    if (fromNestedExercise) {
+      return { ...item, lesson_id: fromNestedExercise };
+    }
+
+    const exerciseId = String(item?.exercise_id || "").trim();
+    const resolvedLessonId = lessonIdByExerciseId.get(exerciseId) || null;
+    return { ...item, lesson_id: resolvedLessonId };
+  });
+
+  const itemsBySession = sessionItemRows.reduce((acc, item) => {
+    if (!acc[item.session_id]) acc[item.session_id] = [];
+    acc[item.session_id].push(item);
+    return acc;
+  }, {});
+
+  return { itemsBySession, sessionItemRows };
+}
+
 function ProgressBar({ value = 0 }) {
   const safe = Math.max(0, Math.min(100, Number(value) || 0));
   return (
@@ -213,20 +479,16 @@ function LockIcon() {
 }
 
 export default async function CourseGatePage() {
-  const supabase = await createSupabaseServerClient();
   await autoDeactivateExpiredCommissions();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, role } = await getRequestUserContext();
   if (!user) redirect("/login");
+  if (role !== USER_ROLES.STUDENT) {
+    redirect("/app/matricula?locked=1");
+  }
 
   const { profile, error: profileError } = await getStudentProfile(supabase, user.id);
   if (profileError) {
     console.error("No se pudo cargar perfil de curso", profileError);
-  }
-
-  if (profile?.role !== "student") {
-    redirect("/app/matricula?locked=1");
   }
 
   const commission = profile?.commission || null;
@@ -353,129 +615,12 @@ export default async function CourseGatePage() {
   let itemsBySession = {};
   let sessionItemRows = [];
   if (persistedSessionIds.length) {
-    const { data: itemRows, error: itemsError } = await supabase
-      .from("session_items")
-      .select("id, session_id, type, title, url, storage_key, note, exercise_id")
-      .in("session_id", persistedSessionIds)
-      .order("created_at", { ascending: true });
+    const { itemsBySession: loadedItemsBySession, sessionItemRows: loadedSessionItemRows, error: itemsError } =
+      await loadSessionItemsForCoursePage(supabase, persistedSessionIds);
 
     if (!itemsError) {
-      let flashcardsBySessionId = {};
-      let flashcardColumns = [
-        "id",
-        "session_id",
-        "flashcard_id",
-        "word",
-        "meaning",
-        "image_url",
-        "card_order",
-        "accepted_answers",
-      ];
-      let flashcardsResult = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const result = await supabase
-          .from("session_flashcards")
-          .select(flashcardColumns.join(","))
-          .in("session_id", persistedSessionIds)
-          .order("card_order", { ascending: true })
-          .order("created_at", { ascending: true });
-        flashcardsResult = result;
-        if (!result.error) break;
-        const missingColumn = getMissingColumnFromError(result.error);
-        if (!missingColumn || !flashcardColumns.includes(missingColumn)) break;
-        flashcardColumns = flashcardColumns.filter((column) => column !== missingColumn);
-      }
-
-      if (!flashcardsResult?.error) {
-        const flashcardIds = Array.from(
-          new Set(
-            (flashcardsResult?.data || [])
-              .map((row) => String(row?.flashcard_id || "").trim())
-              .filter(Boolean)
-          )
-        );
-        let flashcardsById = new Map();
-        if (flashcardIds.length) {
-          const flashcardsLibraryResult = await supabase
-            .from("flashcards")
-            .select("id, word, meaning, image_url, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config")
-            .in("id", flashcardIds);
-          if (!flashcardsLibraryResult.error) {
-            const hydratedLibraryRows = await Promise.all(
-              (flashcardsLibraryResult.data || []).map(async (row) => ({
-                ...row,
-                audio_url: await resolveFlashcardAudioUrl(row),
-              }))
-            );
-            flashcardsById = buildFlashcardLibraryMap(hydratedLibraryRows);
-          } else {
-            console.error("No se pudo cargar la biblioteca de flashcards", flashcardsLibraryResult.error);
-          }
-        }
-
-        flashcardsBySessionId = (flashcardsResult.data || []).reduce((acc, row) => {
-          const sessionKey = String(row?.session_id || "").trim();
-          if (!sessionKey) return acc;
-          if (!acc[sessionKey]) acc[sessionKey] = [];
-          acc[sessionKey].push(resolveAssignedFlashcardRow(row, flashcardsById, acc[sessionKey].length + 1));
-          return acc;
-        }, {});
-      } else {
-        const missingTable = getMissingTableName(flashcardsResult.error);
-        if (!missingTable?.endsWith("session_flashcards")) {
-          console.error("No se pudieron cargar flashcards de clase", flashcardsResult.error);
-        }
-      }
-
-      const normalizedRows = (itemRows || []).map((item) => ({
-        ...item,
-        flashcards:
-          String(item?.type || "").trim().toLowerCase() === "flashcards"
-            ? flashcardsBySessionId[String(item?.session_id || "").trim()] || []
-            : [],
-        lesson_id: null,
-      }));
-
-      const exerciseIds = Array.from(
-        new Set(
-          normalizedRows
-            .filter((item) => !extractLessonIdFromQuizUrl(item?.url))
-            .map((item) => String(item?.exercise_id || "").trim())
-            .filter(Boolean)
-        )
-      );
-
-      let lessonIdByExerciseId = new Map();
-      if (exerciseIds.length) {
-        const { data: exerciseRows, error: exercisesError } = await supabase
-          .from("exercises")
-          .select("id, lesson_id")
-          .in("id", exerciseIds);
-        if (!exercisesError) {
-          lessonIdByExerciseId = new Map(
-            (exerciseRows || []).map((exercise) => [String(exercise.id || "").trim(), exercise.lesson_id || null])
-          );
-        } else {
-          console.error("No se pudieron resolver lecciones de ejercicios", exercisesError);
-        }
-      }
-
-      sessionItemRows = normalizedRows.map((item) => {
-        const fromUrl = extractLessonIdFromQuizUrl(item?.url) || null;
-        if (fromUrl) {
-          return { ...item, lesson_id: fromUrl };
-        }
-
-        const exerciseId = String(item?.exercise_id || "").trim();
-        const resolvedLessonId = lessonIdByExerciseId.get(exerciseId) || null;
-        return { ...item, lesson_id: resolvedLessonId };
-      });
-
-      itemsBySession = sessionItemRows.reduce((acc, item) => {
-        if (!acc[item.session_id]) acc[item.session_id] = [];
-        acc[item.session_id].push(item);
-        return acc;
-      }, {});
+      itemsBySession = loadedItemsBySession;
+      sessionItemRows = loadedSessionItemRows;
     } else {
       console.error("No se pudieron cargar items de sesion", itemsError);
     }

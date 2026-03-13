@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
+import { USER_ROLES } from "@/lib/roles";
 import {
   buildSessionDraftsFromCommission,
   buildLimaDateTimeIso,
@@ -153,20 +154,16 @@ async function getStudentProfile(supabase, userId) {
 export default async function RutaAcademicaDetailPage({ params: paramsPromise }) {
   const params = await paramsPromise;
   const commissionId = params?.commissionId?.toString();
-  const supabase = await createSupabaseServerClient();
   await autoDeactivateExpiredCommissions();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, role } = await getRequestUserContext();
   if (!user) redirect("/login");
+  if (role !== USER_ROLES.STUDENT) {
+    redirect("/app/matricula?locked=1");
+  }
 
   const { profile, error: profileError } = await getStudentProfile(supabase, user.id);
   if (profileError) {
     console.error("No se pudo cargar perfil de curso", profileError);
-  }
-
-  if (profile?.role !== "student") {
-    redirect("/app/matricula?locked=1");
   }
 
   const commission = profile?.commission || null;

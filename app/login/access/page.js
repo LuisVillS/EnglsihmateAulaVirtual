@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import PrivateLoginCard from "@/components/auth-form";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { createSupabaseServerClient, getCurrentSession } from "@/lib/supabase-server";
 import { USER_ROLES, resolveProfileRole } from "@/lib/roles";
 
 export const metadata = {
@@ -9,12 +9,11 @@ export const metadata = {
 };
 
 export default async function StudentAccessPage({ searchParams }) {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const session = await getCurrentSession();
+  const user = session?.user || null;
 
   if (user) {
+    const supabase = await createSupabaseServerClient();
     const { data: adminRecord } = await supabase
       .from("admin_profiles")
       .select("id")

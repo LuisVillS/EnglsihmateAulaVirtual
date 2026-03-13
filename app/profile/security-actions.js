@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { getAuthenticatedUser } from "@/lib/auth-monitor";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 
 export const profileActionInitialState = { status: null, message: null };
@@ -43,7 +44,7 @@ export async function changeStudentPasswordAction(prevState, formData) {
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await getAuthenticatedUser(supabase, { label: "profile-change-password" });
 
   if (!user?.email) {
     return formatError("Inicia sesion nuevamente para actualizar tu perfil.");
@@ -80,7 +81,7 @@ export async function changeStudentEmailAction(prevState, formData) {
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await getAuthenticatedUser(supabase, { label: "profile-change-email" });
 
   if (!user?.email) {
     return formatError("Inicia sesion nuevamente para actualizar tu correo.");

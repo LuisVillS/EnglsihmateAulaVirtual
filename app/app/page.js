@@ -1,7 +1,7 @@
 ﻿import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
-import { USER_ROLES, resolveProfileRole } from "@/lib/roles";
+import { getRequestUserContext } from "@/lib/request-user-context";
+import { USER_ROLES } from "@/lib/roles";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { buildFrequencySessionDrafts } from "@/lib/course-sessions";
 import { loadStudentAppSkillSnapshot, normalizeLevelCode } from "@/lib/student-skills";
@@ -248,36 +248,29 @@ function formatNextClass(date) {
 }
 
 export default async function StudentDashboard() {
-  const supabase = await createSupabaseServerClient();
   await autoDeactivateExpiredCommissions();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, isAdmin, role } = await getRequestUserContext();
 
   if (!user) {
     redirect("/");
   }
 
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (adminRecord?.id) {
+  if (isAdmin) {
     redirect("/admin/panel");
+  }
+  if (role === USER_ROLES.NON_STUDENT) {
+    redirect("/app/matricula?locked=1");
   }
 
   const { data: profile } = await supabase
     .from("profiles")
     .select(
-      "full_name, role, status, course_level, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_date, end_date, start_month, duration_months, modality_key, days_of_week, start_time, end_time, status, is_active)"
+      "full_name, course_level, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_date, end_date, start_month, duration_months, modality_key, days_of_week, start_time, end_time, status, is_active)"
     )
     .eq("id", user.id)
     .maybeSingle();
 
-  const effectiveRole = resolveProfileRole({ role: profile?.role, status: profile?.status });
-  const isNonStudent = effectiveRole === USER_ROLES.NON_STUDENT;
+  const isNonStudent = role === USER_ROLES.NON_STUDENT;
   if (isNonStudent) {
     redirect("/app/matricula?locked=1");
   }

@@ -30,6 +30,11 @@ import {
   isLibraryReaderFullscreen,
   toggleLibraryReaderFullscreen,
 } from "@/lib/library/reader-ui";
+import {
+  buildLibraryTtsPlaybackQueue,
+  LIBRARY_TTS_VOICE_OPTIONS,
+  resolveLibraryTtsVoice,
+} from "@/lib/library/tts";
 
 function ChevronLeftIcon() {
   return (
@@ -58,6 +63,17 @@ export default function LibraryReaderShell({
   const pageTurnTimeoutRef = useRef(null);
   const pageTurnAudioRef = useRef(null);
   const activityTimeoutRef = useRef(null);
+  const ttsAudioRef = useRef(null);
+  const ttsObjectUrlsRef = useRef(new Set());
+  const ttsAbortControllersRef = useRef(new Set());
+  const ttsRunTokenRef = useRef(0);
+  const ttsAutoAdvanceRef = useRef(false);
+  const epubReaderStateRef = useRef({
+    canGoNext: true,
+    canGoPrev: false,
+    currentHref: "",
+    pageNumber: null,
+  });
   const touchGestureRef = useRef({ x: 0, y: 0, active: false });
   const [payload, setPayload] = useState({
     book: initialBook,
@@ -71,6 +87,7 @@ export default function LibraryReaderShell({
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [showUnavailableHint, setShowUnavailableHint] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [isShortViewport, setIsShortViewport] = useState(false);
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [detectedReaderFragment, setDetectedReaderFragment] = useState("");
@@ -94,6 +111,13 @@ export default function LibraryReaderShell({
   const [epubTheme, setEpubTheme] = useState("sepia");
   const [epubSoundEnabled, setEpubSoundEnabled] = useState(false);
   const [pageTurnDirection, setPageTurnDirection] = useState("");
+  const [ttsVoiceId, setTtsVoiceId] = useState(LIBRARY_TTS_VOICE_OPTIONS[0].id);
+  const [ttsStatus, setTtsStatus] = useState("idle");
+  const [ttsMessage, setTtsMessage] = useState("");
+  const [ttsSelectionMode, setTtsSelectionMode] = useState(false);
+  const [ttsSelectedSegment, setTtsSelectedSegment] = useState(null);
+  const [ttsHighlightMode, setTtsHighlightMode] = useState("paragraph");
+  const [ttsControlsVisible, setTtsControlsVisible] = useState(false);
   const {
     readState,
     setReadState,
@@ -164,12 +188,16 @@ export default function LibraryReaderShell({
     try {
       const storedTheme = window.localStorage.getItem("library.epub.theme");
       const storedSound = window.localStorage.getItem("library.epub.sound");
+      const storedTtsVoice = window.localStorage.getItem("library.epub.tts.voice");
 
       if (storedTheme) {
         setEpubTheme(resolveLibraryEpubTheme(storedTheme).id);
       }
       if (storedSound) {
         setEpubSoundEnabled(storedSound === "1");
+      }
+      if (storedTtsVoice) {
+        setTtsVoiceId(resolveLibraryTtsVoice(storedTtsVoice).id);
       }
     } catch {
       return undefined;
@@ -183,18 +211,27 @@ export default function LibraryReaderShell({
       window.localStorage.removeItem("library.epub.zoom");
       window.localStorage.removeItem("library.epub.fontScale");
       window.localStorage.setItem("library.epub.sound", epubSoundEnabled ? "1" : "0");
+      window.localStorage.setItem("library.epub.tts.voice", ttsVoiceId);
     } catch {
       return undefined;
     }
     return undefined;
-  }, [epubSoundEnabled, epubTheme]);
+  }, [epubSoundEnabled, epubTheme, ttsVoiceId]);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(max-width: 767px)");
-    const syncViewport = () => setIsMobile(mediaQuery.matches);
+    const widthQuery = window.matchMedia("(max-width: 1000px)");
+    const heightQuery = window.matchMedia("(max-height: 860px)");
+    const syncViewport = () => {
+      setIsMobile(widthQuery.matches);
+      setIsShortViewport(heightQuery.matches);
+    };
     syncViewport();
-    mediaQuery.addEventListener("change", syncViewport);
-    return () => mediaQuery.removeEventListener("change", syncViewport);
+    widthQuery.addEventListener("change", syncViewport);
+    heightQuery.addEventListener("change", syncViewport);
+    return () => {
+      widthQuery.removeEventListener("change", syncViewport);
+      heightQuery.removeEventListener("change", syncViewport);
+    };
   }, []);
 
   useEffect(() => {
@@ -246,6 +283,18 @@ export default function LibraryReaderShell({
       if (activityTimeoutRef.current) {
         window.clearTimeout(activityTimeoutRef.current);
       }
+      if (ttsAudioRef.current) {
+        try {
+          ttsAudioRef.current.pause();
+          ttsAudioRef.current.currentTime = 0;
+        } catch {
+          // no-op
+        }
+      }
+      ttsAbortControllersRef.current.forEach((controller) => controller.abort());
+      ttsAbortControllersRef.current.clear();
+      ttsObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      ttsObjectUrlsRef.current.clear();
     };
   }, []);
 
@@ -267,6 +316,7 @@ export default function LibraryReaderShell({
   const relatedBooks = useMemo(() => payload?.relatedBooks || initialRelatedBooks, [initialRelatedBooks, payload]);
   const activeReader = usingFallbackReader && payload?.reader?.fallback ? payload.reader.fallback : payload?.reader;
   const isEpubReader = activeReader?.type === "epub";
+  const ttsEnabled = isEpubReader && activeReader?.sourceName === "manual_epub";
   const showBookmarkPanel = shouldShowLibraryBookmarkPanel(activeReader);
   const readerTheme = resolveLibraryEpubTheme(epubTheme);
   const pageMode = resolveLibraryReaderMode({ isMobile });
@@ -298,6 +348,7 @@ export default function LibraryReaderShell({
   }
   const leftVisiblePageNumber = epubReaderState.visiblePageNumbers?.left ?? epubReaderState.pageNumber ?? null;
   const rightVisiblePageNumber = epubReaderState.visiblePageNumbers?.right ?? null;
+  const effectiveReaderState = epubReaderState;
   const epubPageChrome = {
     leftHeader: epubReaderState.chapterLabel || book.title,
     rightHeader: book.title,
@@ -311,10 +362,13 @@ export default function LibraryReaderShell({
     singleFooterPage: leftVisiblePageNumber,
   };
   const showEpubPageChrome = !(
-    epubReaderState.displayMode === "single" &&
-    !epubReaderState.canGoPrev &&
-    (!epubReaderState.pageNumber || epubReaderState.pageNumber <= 1)
+    effectiveReaderState.displayMode === "single" &&
+    !effectiveReaderState.canGoPrev &&
+    (!effectiveReaderState.pageNumber || effectiveReaderState.pageNumber <= 1)
   );
+  const effectiveEpubDisplayMode = epubReaderState.displayMode;
+  const effectiveCanGoPrev = epubReaderState.canGoPrev;
+  const effectiveCanGoNext = epubReaderState.canGoNext;
 
   const registerReaderActivity = useCallback(({ immediate = false } = {}) => {
     if (!isEpubReader) return;
@@ -328,6 +382,241 @@ export default function LibraryReaderShell({
     }, immediate ? 3200 : 2400);
   }, [isEpubReader, isFullscreen]);
 
+  const stopTtsPlayback = useCallback(
+    ({ message = "", preserveSelection = true } = {}) => {
+      ttsRunTokenRef.current += 1;
+      ttsAutoAdvanceRef.current = false;
+
+      if (ttsAudioRef.current) {
+        try {
+          ttsAudioRef.current.pause();
+          ttsAudioRef.current.currentTime = 0;
+        } catch {
+          // no-op
+        }
+        ttsAudioRef.current = null;
+      }
+
+      ttsAbortControllersRef.current.forEach((controller) => controller.abort());
+      ttsAbortControllersRef.current.clear();
+      ttsObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      ttsObjectUrlsRef.current.clear();
+
+      epubReaderRef.current?.clearTtsHighlight?.();
+      if (!preserveSelection) {
+        setTtsSelectedSegment(null);
+      }
+      setTtsSelectionMode(false);
+      setTtsStatus("idle");
+      setTtsHighlightMode("paragraph");
+      setTtsMessage(message);
+    },
+    []
+  );
+
+  const fetchTtsAudioUrl = useCallback(async (text, voiceId, token) => {
+    const controller = new AbortController();
+    ttsAbortControllersRef.current.add(controller);
+    const response = await fetch(`/api/library/books/${book.slug}/tts`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        text,
+        voiceId,
+      }),
+    });
+    ttsAbortControllersRef.current.delete(controller);
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload?.error || "Read aloud is temporarily unavailable.");
+    }
+
+    const audioBlob = await response.blob();
+    if (!audioBlob.size) {
+      throw new Error("Read aloud returned an empty audio response.");
+    }
+
+    const objectUrl = URL.createObjectURL(audioBlob);
+    ttsObjectUrlsRef.current.add(objectUrl);
+
+    if (ttsRunTokenRef.current !== token) {
+      URL.revokeObjectURL(objectUrl);
+      ttsObjectUrlsRef.current.delete(objectUrl);
+      return null;
+    }
+
+    return {
+      url: objectUrl,
+      release() {
+        if (!objectUrl) return;
+        URL.revokeObjectURL(objectUrl);
+        ttsObjectUrlsRef.current.delete(objectUrl);
+      },
+    };
+  }, [book.slug]);
+
+  const playTtsAudioUrl = useCallback(async (audioChunk, token) => {
+    if (typeof window === "undefined") return;
+    if (!audioChunk?.url) return;
+    const audio = new window.Audio(audioChunk.url);
+    ttsAudioRef.current = audio;
+
+    await new Promise((resolve, reject) => {
+      let watchId = null;
+      const cleanup = () => {
+        if (watchId) {
+          window.clearInterval(watchId);
+        }
+      };
+
+      audio.onended = () => {
+        cleanup();
+        resolve();
+      };
+      audio.onerror = () => {
+        cleanup();
+        reject(new Error("Read aloud audio could not be played."));
+      };
+      audio
+        .play()
+        .then(() => {
+          if (ttsRunTokenRef.current !== token) {
+            audio.pause();
+            cleanup();
+            resolve();
+          } else {
+            setTtsStatus("playing");
+            watchId = window.setInterval(() => {
+              if (ttsRunTokenRef.current !== token) {
+                cleanup();
+                resolve();
+              }
+            }, 120);
+          }
+        })
+        .catch((error) => {
+          cleanup();
+          reject(new Error(error?.message || "Read aloud playback failed."));
+        });
+    });
+
+    if (ttsAudioRef.current === audio) {
+      ttsAudioRef.current = null;
+    }
+    audioChunk.release?.();
+  }, []);
+
+  const continueTtsPlayback = useCallback(async ({ startSegmentId = "" } = {}) => {
+    if (!ttsEnabled) {
+      setTtsMessage("Read aloud is available only for uploaded EPUB books.");
+      return;
+    }
+
+    stopTtsPlayback({ message: "", preserveSelection: true });
+    const voice = resolveLibraryTtsVoice(ttsVoiceId);
+    const token = ttsRunTokenRef.current + 1;
+    ttsRunTokenRef.current = token;
+    setTtsControlsVisible(true);
+    setTtsStatus("loading");
+    setTtsMessage("");
+
+    let nextStartSegmentId = startSegmentId;
+
+    while (ttsRunTokenRef.current === token) {
+      const visibleSegments = epubReaderRef.current?.getVisibleTtsSegments?.({
+        startSegmentId: nextStartSegmentId,
+      });
+      nextStartSegmentId = "";
+
+      if (!visibleSegments?.length) {
+        stopTtsPlayback({
+          message: "No readable text was found on this page.",
+          preserveSelection: true,
+        });
+        return;
+      }
+
+      const queue = buildLibraryTtsPlaybackQueue(visibleSegments);
+      if (!queue.length) {
+        stopTtsPlayback({
+          message: "No readable text was found on this page.",
+          preserveSelection: true,
+        });
+        return;
+      }
+
+      let currentAudioChunk = null;
+      let nextAudioPromise = null;
+
+      for (let index = 0; index < queue.length; index += 1) {
+        const item = queue[index];
+        if (ttsRunTokenRef.current !== token) return;
+
+        const highlightResult = epubReaderRef.current?.highlightTtsChunk?.({
+          segmentId: item.segmentId,
+          text: "",
+        });
+        setTtsHighlightMode(highlightResult?.mode || "paragraph");
+        setTtsStatus("loading");
+
+        if (!currentAudioChunk) {
+          try {
+            currentAudioChunk = await fetchTtsAudioUrl(item.text, voice.id, token);
+          } catch (error) {
+            if (ttsRunTokenRef.current !== token) return;
+            setTtsMessage(error?.message || "One paragraph could not be read aloud.");
+            continue;
+          }
+        }
+
+        if (ttsRunTokenRef.current !== token) return;
+        if (!currentAudioChunk) {
+          continue;
+        }
+
+        if (index + 1 < queue.length) {
+          nextAudioPromise = fetchTtsAudioUrl(queue[index + 1].text, voice.id, token).catch((error) => {
+            if (ttsRunTokenRef.current !== token) return null;
+            setTtsMessage(error?.message || "One paragraph could not be read aloud.");
+            return null;
+          });
+        } else {
+          nextAudioPromise = null;
+        }
+
+        await playTtsAudioUrl(currentAudioChunk, token);
+        currentAudioChunk = nextAudioPromise ? await nextAudioPromise : null;
+      }
+
+      if (ttsRunTokenRef.current !== token) return;
+      if (!epubReaderStateRef.current.canGoNext) {
+        stopTtsPlayback({
+          message: `Reached the end of ${book.title}.`,
+          preserveSelection: true,
+        });
+        return;
+      }
+
+      ttsAutoAdvanceRef.current = true;
+      setTtsStatus("loading");
+      const turned = await epubReaderRef.current?.goNextPage?.();
+      ttsAutoAdvanceRef.current = false;
+      if (!turned) {
+        stopTtsPlayback({
+          message: `Reached the end of ${book.title}.`,
+          preserveSelection: true,
+        });
+        return;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
+    }
+  }, [book.title, epubReaderState.canGoNext, fetchTtsAudioUrl, playTtsAudioUrl, stopTtsPlayback, ttsEnabled, ttsVoiceId]);
+
   useEffect(() => {
     if (!isEpubReader || !isFullscreen) {
       if (activityTimeoutRef.current) {
@@ -340,10 +629,28 @@ export default function LibraryReaderShell({
     registerReaderActivity({ immediate: true });
   }, [isEpubReader, isFullscreen, registerReaderActivity]);
 
+  useEffect(() => {
+    if (!ttsEnabled) {
+      stopTtsPlayback({ message: "", preserveSelection: false });
+      setTtsControlsVisible(false);
+    }
+  }, [stopTtsPlayback, ttsEnabled]);
+
+  useEffect(() => {
+    if (!ttsEnabled || !ttsSelectionMode) return;
+    setTtsMessage("Click a paragraph to start reading from there.");
+  }, [ttsEnabled, ttsSelectionMode]);
+
   async function handleEpubTurn(direction) {
     if (!isEpubReader || loading || error) return;
     if (direction === "previous" && !epubReaderState.canGoPrev) return;
     if (direction === "next" && !epubReaderState.canGoNext) return;
+    if (["playing", "paused", "loading"].includes(ttsStatus) && !ttsAutoAdvanceRef.current) {
+      stopTtsPlayback({
+        message: "Read aloud stopped because the page changed.",
+        preserveSelection: true,
+      });
+    }
     registerReaderActivity();
 
     try {
@@ -457,11 +764,15 @@ export default function LibraryReaderShell({
   }
 
   function handleEpubReaderStateChange(nextState = {}) {
-    setEpubReaderState((previous) => ({
-      ...previous,
-      ...nextState,
-      toc: Array.isArray(nextState.toc) ? nextState.toc : previous.toc,
-    }));
+    setEpubReaderState((previous) => {
+      const mergedState = {
+        ...previous,
+        ...nextState,
+        toc: Array.isArray(nextState.toc) ? nextState.toc : previous.toc,
+      };
+      epubReaderStateRef.current = mergedState;
+      return mergedState;
+    });
   }
 
   function handleEpubProgressSaved(nextState) {
@@ -504,6 +815,12 @@ export default function LibraryReaderShell({
 
   async function handleGoToChapter(href) {
     if (!href) return;
+    if (["playing", "paused", "loading"].includes(ttsStatus)) {
+      stopTtsPlayback({
+        message: "Read aloud stopped because the chapter changed.",
+        preserveSelection: true,
+      });
+    }
     registerReaderActivity();
     try {
       await epubReaderRef.current?.goToTarget?.(href);
@@ -511,6 +828,62 @@ export default function LibraryReaderShell({
       return undefined;
     }
     return undefined;
+  }
+
+  async function handleTtsParagraphSelect(segment) {
+    if (!segment?.id || !segment?.text) return;
+    setTtsControlsVisible(true);
+    const nextSelection = {
+      id: segment.id,
+      text: segment.text,
+      label: segment.text.slice(0, 88),
+    };
+    setTtsSelectedSegment(nextSelection);
+    setTtsSelectionMode(false);
+    try {
+      await continueTtsPlayback({ startSegmentId: segment.id });
+    } catch (error) {
+      stopTtsPlayback({
+        message: error?.message || "Read aloud is temporarily unavailable.",
+        preserveSelection: true,
+      });
+    }
+  }
+
+  async function handleTtsPlay() {
+    registerReaderActivity();
+    setTtsControlsVisible(true);
+    setTtsSelectedSegment(null);
+    try {
+      await continueTtsPlayback();
+    } catch (error) {
+      stopTtsPlayback({
+        message: error?.message || "Read aloud is temporarily unavailable.",
+        preserveSelection: true,
+      });
+    }
+  }
+
+  function handleTtsPause() {
+    if (!ttsAudioRef.current) return;
+    try {
+      ttsAudioRef.current.pause();
+      setTtsStatus("paused");
+      setTtsMessage("Read aloud paused.");
+    } catch {
+      return;
+    }
+  }
+
+  async function handleTtsResume() {
+    if (!ttsAudioRef.current) return;
+    try {
+      await ttsAudioRef.current.play();
+      setTtsStatus("playing");
+      setTtsMessage("");
+    } catch (error) {
+      setTtsMessage(error?.message || "Read aloud could not resume.");
+    }
   }
 
   function handleTouchStart(event) {
@@ -550,6 +923,51 @@ export default function LibraryReaderShell({
     "--reader-paper-shadow": readerTheme.paperShadow,
     "--reader-stage-glow": readerTheme.stageGlow,
   };
+  const epubToolbarNode = (
+    <LibraryEpubToolbar
+      readerState={effectiveReaderState}
+      theme={epubTheme}
+      soundEnabled={epubSoundEnabled}
+      isMobile={isMobile}
+      fullscreenSupported={fullscreenSupported}
+      isFullscreen={isFullscreen}
+      chromeVisible={epubChromeVisible || !isFullscreen}
+      onGoToHref={handleGoToChapter}
+      onThemeChange={(value) => setEpubTheme(resolveLibraryEpubTheme(value).id)}
+      onToggleSound={() => setEpubSoundEnabled((previous) => !previous)}
+      onToggleFullscreen={handleToggleFullscreen}
+      ttsEnabled={ttsEnabled}
+      tts={{
+        voices: LIBRARY_TTS_VOICE_OPTIONS,
+        voiceId: ttsVoiceId,
+        voiceLabel: resolveLibraryTtsVoice(ttsVoiceId).label,
+        status: ttsStatus,
+        selectionMode: ttsSelectionMode,
+        selectedSegmentLabel: ttsSelectedSegment?.label || "",
+        message: ttsMessage,
+        highlightMode: ttsHighlightMode,
+        showControls: ttsControlsVisible,
+      }}
+      onTtsVoiceChange={(voiceId) => {
+        setTtsControlsVisible(true);
+        setTtsVoiceId(resolveLibraryTtsVoice(voiceId).id);
+        if (["playing", "paused", "loading"].includes(ttsStatus)) {
+          stopTtsPlayback({
+            message: "Voice updated. Press play to continue with the new voice.",
+            preserveSelection: true,
+          });
+        }
+      }}
+      onTtsPlay={handleTtsPlay}
+      onTtsPause={handleTtsPause}
+      onTtsResume={handleTtsResume}
+      onTtsStop={() => {
+        setTtsControlsVisible(false);
+        stopTtsPlayback({ message: "Read aloud stopped.", preserveSelection: true });
+      }}
+      onTtsToggleSelectionMode={() => setTtsSelectionMode((previous) => !previous)}
+    />
+  );
 
   return (
     <section className="space-y-8 text-foreground">
@@ -591,7 +1009,15 @@ export default function LibraryReaderShell({
             </div>
 
             <div
-              className={`relative ${isFullscreen ? "min-h-screen px-2 pb-3 pt-12 sm:px-5 sm:pb-5 sm:pt-14" : "px-2 pb-3 pt-12 sm:px-5 sm:pb-5 sm:pt-14 lg:pt-[4.1rem]"}`}
+              className={`relative ${
+                isFullscreen
+                  ? isShortViewport
+                    ? "min-h-screen px-2 pb-10 pt-10 sm:px-5 sm:pb-14 sm:pt-11"
+                    : "min-h-screen px-2 pb-14 pt-10 sm:px-5 sm:pb-20 sm:pt-12"
+                  : isShortViewport
+                    ? "px-2 pb-10 pt-10 sm:px-5 sm:pb-14 sm:pt-11 lg:pt-[3.35rem]"
+                    : "px-2 pb-14 pt-10 sm:px-5 sm:pb-20 sm:pt-12 lg:pt-[3.7rem]"
+              }`}
               onTouchStart={handleTouchStart}
               onTouchEnd={handleTouchEnd}
             >
@@ -605,7 +1031,7 @@ export default function LibraryReaderShell({
                   <button
                     type="button"
                     onClick={() => handleEpubTurn("previous")}
-                    disabled={!epubReaderState.canGoPrev}
+                    disabled={!effectiveCanGoPrev}
                     className={`reader-stage-arrow hidden lg:inline-flex ${
                       epubChromeVisible || !isFullscreen ? "opacity-100" : "opacity-0"
                     }`}
@@ -617,20 +1043,20 @@ export default function LibraryReaderShell({
 
                 <div
                   className={`relative ${
-                    !isMobile && epubReaderState.displayMode === "single"
-                      ? "mx-auto w-full max-w-[560px]"
-                      : "w-full max-w-[1180px] flex-1"
+                    !isMobile && effectiveEpubDisplayMode === "single"
+                      ? "mx-auto w-[560px] max-w-full"
+                      : "mx-auto w-[1120px] max-w-full"
                   }`}
                 >
                   <div
-                    className={`epub-book-shell ${epubReaderState.displayMode === "single" ? "single-leaf" : "spread-leaf"} ${
+                    className={`epub-book-shell ${effectiveEpubDisplayMode === "single" ? "single-leaf" : "spread-leaf"} ${
                       pageTurnDirection ? `turning-${pageTurnDirection}` : ""
                     }`}
                   >
-                    {!isMobile && epubReaderState.displayMode !== "single" ? (
+                    {!isMobile && effectiveEpubDisplayMode !== "single" ? (
                       <div className="epub-book-spine" aria-hidden="true" />
                     ) : null}
-                    {showEpubPageChrome && epubReaderState.displayMode === "single" ? (
+                    {showEpubPageChrome && effectiveEpubDisplayMode === "single" ? (
                       <div className="epub-page-meta single" aria-hidden="true">
                         <div className="epub-page-meta-line top" />
                         <div className="epub-page-meta-row top single">
@@ -671,14 +1097,16 @@ export default function LibraryReaderShell({
                       onClick={() => handleEpubTurn("previous")}
                       className="epub-tap-zone left"
                       aria-label="Previous page"
-                      disabled={!epubReaderState.canGoPrev}
+                      disabled={!effectiveCanGoPrev}
+                      style={ttsSelectionMode ? { pointerEvents: "none" } : undefined}
                     />
                     <button
                       type="button"
                       onClick={() => handleEpubTurn("next")}
                       className="epub-tap-zone right"
                       aria-label="Next page"
-                      disabled={!epubReaderState.canGoNext}
+                      disabled={!effectiveCanGoNext}
+                      style={ttsSelectionMode ? { pointerEvents: "none" } : undefined}
                     />
 
                     <LibraryEpubReader
@@ -688,6 +1116,8 @@ export default function LibraryReaderShell({
                       assetUrl={activeReader?.assetUrl}
                       sourceFingerprint={activeReader?.assetFingerprint || activeReader?.sourceId || ""}
                       title={book.title}
+                      authorDisplay={book.authorDisplay || ""}
+                      coverUrl={book.coverUrl || ""}
                       initialLocation={epubResumeLocation}
                       initialPageNumber={readState?.lastPageNumber ?? null}
                       initialLocationUpdatedAt={readState?.updatedAt || readState?.lastOpenedAt || ""}
@@ -697,6 +1127,8 @@ export default function LibraryReaderShell({
                       onReaderStateChange={handleEpubReaderStateChange}
                       onFatalError={handleEpubFatalError}
                       isFullscreen={isFullscreen}
+                      ttsSelectionMode={ttsSelectionMode}
+                      onTtsParagraphSelect={handleTtsParagraphSelect}
                     />
 
                     {pageTurnDirection ? <div className={`epub-page-turn-overlay ${pageTurnDirection}`} /> : null}
@@ -707,7 +1139,7 @@ export default function LibraryReaderShell({
                   <button
                     type="button"
                     onClick={() => handleEpubTurn("next")}
-                    disabled={!epubReaderState.canGoNext}
+                    disabled={!effectiveCanGoNext}
                     className={`reader-stage-arrow hidden lg:inline-flex ${
                       epubChromeVisible || !isFullscreen ? "opacity-100" : "opacity-0"
                     }`}
@@ -718,19 +1150,7 @@ export default function LibraryReaderShell({
                 ) : null}
               </div>
 
-              <LibraryEpubToolbar
-                readerState={epubReaderState}
-                theme={epubTheme}
-                soundEnabled={epubSoundEnabled}
-                isMobile={isMobile}
-                fullscreenSupported={fullscreenSupported}
-                isFullscreen={isFullscreen}
-                chromeVisible={epubChromeVisible || !isFullscreen}
-                onGoToHref={handleGoToChapter}
-                onThemeChange={(value) => setEpubTheme(resolveLibraryEpubTheme(value).id)}
-                onToggleSound={() => setEpubSoundEnabled((previous) => !previous)}
-                onToggleFullscreen={handleToggleFullscreen}
-              />
+              {epubToolbarNode}
             </div>
           </div>
         ) : (
@@ -1104,7 +1524,7 @@ export default function LibraryReaderShell({
           }
         }
 
-        @media (max-width: 767px) {
+        @media (max-width: 1000px) {
           .epub-tap-zone {
             width: 50%;
           }

@@ -13,7 +13,8 @@ import {
   normalizeAttemptRow,
 } from "@/lib/lesson-quiz";
 import { extractLessonIdFromQuizUrl, loadLessonQuizAssignments, parseLessonMarker } from "@/lib/lesson-quiz-assignments";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
+import { USER_ROLES } from "@/lib/roles";
 import { restartLessonQuizAttempt, startLessonQuizAttempt } from "./actions";
 
 function ArrowLeftIcon() {
@@ -442,18 +443,18 @@ export default async function LessonQuizPage({ params: paramsPromise, searchPara
   const lessonId = String(params?.lessonId || "").trim();
   if (!lessonId) notFound();
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, role } = await getRequestUserContext();
   if (!user) redirect("/login");
+  if (role !== USER_ROLES.STUDENT) {
+    redirect("/app/matricula?locked=1");
+  }
 
   const { data: profile } = await supabase
     .from("profiles")
     .select("id, role, status, commission_id")
     .eq("id", user.id)
     .maybeSingle();
-  if (!profile?.id || profile.role !== "student") {
+  if (!profile?.id) {
     redirect("/app/matricula?locked=1");
   }
 

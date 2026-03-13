@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
+import { USER_ROLES } from "@/lib/roles";
 import {
   LESSON_QUIZ_STATUS,
   getLessonQuizProgressPercent,
@@ -168,18 +169,18 @@ export default async function LessonQuizPlayPage({ params: paramsPromise, search
   const lessonId = String(params?.lessonId || "").trim();
   if (!lessonId) notFound();
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, role } = await getRequestUserContext();
   if (!user) redirect("/login");
+  if (role !== USER_ROLES.STUDENT) {
+    redirect("/app/matricula?locked=1");
+  }
 
   const { data: profile } = await supabase
     .from("profiles")
     .select("id, role")
     .eq("id", user.id)
     .maybeSingle();
-  if (!profile?.id || profile.role !== "student") {
+  if (!profile?.id) {
     redirect("/app/matricula?locked=1");
   }
 

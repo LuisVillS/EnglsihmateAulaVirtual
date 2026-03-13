@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { getAuthenticatedUser } from "@/lib/auth-monitor";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 
@@ -21,7 +22,7 @@ export async function updateProfileAction(prevState, formData) {
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await getAuthenticatedUser(supabase, { label: "profile-update-action" });
 
   if (!user) {
     return { status: "error", message: "Inicia sesión nuevamente." };
@@ -131,4 +132,3 @@ export async function startLinkProviderAction(formData) {
 
   redirect(data.url);
 }
-

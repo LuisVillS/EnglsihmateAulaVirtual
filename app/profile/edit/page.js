@@ -1,7 +1,8 @@
 ﻿import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
+import { loadViewerProfiles } from "@/lib/viewer-profiles";
 import { updateProfileAction } from "@/app/profile/actions";
 import ProfileSecurityCard from "@/components/profile-security-card";
 
@@ -9,65 +10,20 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function ProfileEditPage() {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, profile: contextProfile, isAdmin } = await getRequestUserContext();
 
   if (!user) {
     redirect("/");
   }
 
-  const { data: adminProfile } = await supabase
-    .from("admin_profiles")
-    .select("full_name, email, dni")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  const { data: studentProfile } = await supabase
-    .from("profiles")
-    .select("full_name, email, role, student_code, dni")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  let resolvedAdmin = adminProfile;
-  let resolvedStudent = studentProfile;
+  let { adminProfile: resolvedAdmin, studentProfile: resolvedStudent } = await loadViewerProfiles({
+    supabase,
+    user,
+    contextProfile,
+    isAdmin,
+    minimalStudent: true,
+  });
   const normalizedEmail = user.email?.toLowerCase();
-
-  if (hasServiceRoleClient()) {
-    const service = getServiceSupabaseClient();
-
-    const { data: studentByEmail } = normalizedEmail
-      ? await service
-          .from("profiles")
-          .select("full_name, email, role, student_code, dni")
-          .eq("email", normalizedEmail)
-          .maybeSingle()
-      : { data: null };
-
-    const { data: studentById } = await service
-      .from("profiles")
-      .select("full_name, email, role, student_code, dni")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    const { data: adminByEmail } = normalizedEmail
-      ? await service
-          .from("admin_profiles")
-          .select("full_name, email, dni")
-          .eq("email", normalizedEmail)
-          .maybeSingle()
-      : { data: null };
-
-    const { data: adminById } = await service
-      .from("admin_profiles")
-      .select("full_name, email, dni")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    resolvedStudent = studentByEmail || studentById || resolvedStudent;
-    resolvedAdmin = adminByEmail || adminById || resolvedAdmin;
-  }
 
   let profile = resolvedStudent || resolvedAdmin;
 

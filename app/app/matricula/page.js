@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import MatriculaPage from "@/app/matricula/page";
 import MonthlyPaymentCard from "@/components/monthly-payment-card";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { getRequestUserContext } from "@/lib/request-user-context";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import {
   resolveCourseRenewalContext,
@@ -115,10 +115,7 @@ async function getCommissionSessionsForRenewal(service, commissionId) {
 export default async function AppMatriculaPage({ searchParams }) {
   const resolvedSearchParams = (await searchParams) || {};
   const showLockedNotice = String(resolvedSearchParams.locked || "") === "1";
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { user } = await getRequestUserContext();
 
   if (!user) {
     redirect("/login");
