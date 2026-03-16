@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { requireLibraryStudentRouteAccess } from "@/lib/library/auth";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { getPublishedLibraryBookBySlug } from "@/lib/library/repository";
 import { saveFlipbookProgress } from "@/lib/flipbook-services/progress-store";
 import { verifyFlipbookSessionToken } from "@/lib/flipbook-services/session-token";
@@ -8,13 +7,19 @@ import { verifyFlipbookSessionToken } from "@/lib/flipbook-services/session-toke
 export async function POST(request, { params: paramsPromise }) {
   try {
     const params = await paramsPromise;
+    const auth = await requireLibraryStudentRouteAccess();
+    if (auth.errorResponse) return auth.errorResponse;
     const body = await request.json().catch(() => ({}));
     const session = verifyFlipbookSessionToken(body?.sessionToken);
 
-    if (session.valid && session.slug === params?.slug && session.manifestId === body?.manifestId) {
-      const db = await createSupabaseServerClient();
+    if (
+      session.valid &&
+      session.slug === params?.slug &&
+      session.manifestId === body?.manifestId &&
+      session.userId === auth.user?.id
+    ) {
       const state = await saveFlipbookProgress({
-        db,
+        db: auth.db,
         userId: session.userId,
         libraryBookId: session.libraryBookId,
         layoutProfileId: body?.layoutProfileId || session.layoutProfileId,
@@ -30,19 +35,6 @@ export async function POST(request, { params: paramsPromise }) {
       return NextResponse.json({
         slug: params?.slug,
         state,
-      });
-    }
-
-    const auth = await requireLibraryStudentRouteAccess({
-      allowAdmin: true,
-      allowGuest: true,
-    });
-    if (auth.errorResponse) return auth.errorResponse;
-    if (!auth.user?.id || auth.isGuest) {
-      return NextResponse.json({
-        slug: params?.slug,
-        state: null,
-        guest: true,
       });
     }
 

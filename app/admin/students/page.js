@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { requireAdminPageAccess } from "@/lib/admin/access";
-import { ADMIN_STUDENTS_PAGE_SIZE, loadAdminStudentsPage } from "@/lib/admin-students";
-import { STUDENT_LEVELS } from "@/lib/student-constants";
-import StudentRowActions from "@/components/student-row-actions";
+import { AdminBadge, AdminCard, AdminPage, AdminPageHeader, AdminSectionHeader } from "@/components/admin-page";
 import AdminStudentCreateModal from "@/components/admin-student-create-modal";
 import AdminStudentImportModal from "@/components/admin-student-import-modal";
+import AdminStudentsRoster from "@/components/admin-students-roster";
+import { ADMIN_STUDENTS_PAGE_SIZE, loadAdminStudentsPage } from "@/lib/admin-students";
+import { STUDENT_LEVELS } from "@/lib/student-constants";
 
 export const metadata = {
   title: "Gestion de alumnos | Aula Virtual",
@@ -16,16 +17,6 @@ function formatHourLabel(hour) {
   const hours = Math.floor(hour / 60);
   const minutes = hour % 60;
   return `${hours.toString().padStart(2, "0")}:${minutes === 0 ? "00" : "30"}`;
-}
-
-function formatHourRange(hour) {
-  if (hour == null) return "Sin horario";
-  return formatHourLabel(hour);
-}
-
-function formatCommissionLabel(commission) {
-  if (!commission) return "Sin comision";
-  return `${commission.course_level} - Comision ${commission.commission_number}`;
 }
 
 function parsePositiveInteger(value, fallback = 1) {
@@ -43,16 +34,48 @@ function buildStudentsPageHref({ course = "", search = "", hour = null, page = 1
   return `/admin/students${query ? `?${query}` : ""}`;
 }
 
-function FiltersBar({ course, search, hour }) {
+function FiltersBar({ course, search, hour, downloadHref, commissions }) {
+  const activeFilters = [
+    course ? `Curso: ${course}` : null,
+    hour ? `Horario: ${formatHourLabel(Number(hour))}` : null,
+    search ? `Busqueda: ${search}` : null,
+  ].filter(Boolean);
+
   return (
-    <form className="rounded-2xl border border-border bg-surface p-4 text-foreground shadow-sm" method="get">
-      <div className="grid gap-3 md:grid-cols-3">
+    <AdminCard className="sticky top-3 z-10 space-y-4 border-[rgba(16,52,116,0.1)] bg-[rgba(255,255,255,0.94)] backdrop-blur">
+      <AdminSectionHeader
+        eyebrow="Filtro operativo"
+        title="Buscar y accionar"
+        description="Mantiene los mismos filtros, importacion, exportacion y creacion de alumnos en una sola franja de trabajo."
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={downloadHref}
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+            >
+              Exportar lista
+            </a>
+            <a
+              href="/api/admin/students/template"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+            >
+              Plantilla CSV
+            </a>
+            <AdminStudentImportModal />
+            <AdminStudentCreateModal commissions={commissions} />
+          </div>
+        }
+      />
+
+      <form className="grid gap-3 lg:grid-cols-[0.95fr_0.85fr_1.2fr_auto]" method="get">
         <div className="space-y-1">
-          <label className="text-xs font-semibold uppercase tracking-wide text-muted">Curso</label>
+          <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Curso</label>
           <select
             name="course"
             defaultValue={course}
-            className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
           >
             <option value="">Todos</option>
             {STUDENT_LEVELS.map((option) => (
@@ -62,12 +85,13 @@ function FiltersBar({ course, search, hour }) {
             ))}
           </select>
         </div>
+
         <div className="space-y-1">
-          <label className="text-xs font-semibold uppercase tracking-wide text-muted">Horario</label>
+          <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Horario</label>
           <select
             name="hour"
             defaultValue={hour}
-            className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
           >
             <option value="">Todos</option>
             {HOUR_OPTIONS.map((option) => (
@@ -77,111 +101,46 @@ function FiltersBar({ course, search, hour }) {
             ))}
           </select>
         </div>
+
         <div className="space-y-1">
-          <label className="text-xs font-semibold uppercase tracking-wide text-muted">Buscar</label>
+          <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Busqueda</label>
           <input
             type="search"
             name="q"
             defaultValue={search}
             placeholder="Nombre, email, DNI o codigo"
-            className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
           />
         </div>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
-        <button
-          type="submit"
-          className="rounded-xl bg-primary px-4 py-2 font-semibold text-primary-foreground transition hover:bg-primary-2"
-        >
-          Aplicar filtros
-        </button>
-        <Link
-          href="/admin/students"
-          className="rounded-xl border border-border px-4 py-2 font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-        >
-          Limpiar
-        </Link>
-      </div>
-    </form>
-  );
-}
 
-function StudentsTable({ students, totalCount, page, totalPages }) {
-  return (
-    <div className="rounded-3xl border border-border bg-surface p-6 text-foreground shadow-2xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.4em] text-muted">Listado</p>
-          <h3 className="text-xl font-semibold">Alumnos registrados</h3>
+        <div className="flex flex-col justify-end gap-2">
+          <button
+            type="submit"
+            className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#103474] px-4 text-sm font-semibold text-white transition hover:bg-[#0c295a]"
+          >
+            Aplicar filtros
+          </button>
+          <Link
+            href="/admin/students"
+            className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+          >
+            Limpiar
+          </Link>
         </div>
-        <p className="text-sm text-muted">
-          Pagina {page} de {totalPages} · {students.length} visibles / {totalCount} registros
-        </p>
-      </div>
-      <div className="relative mt-4 overflow-visible">
-        <div className="overflow-x-auto overflow-y-visible">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-muted">
-                <th className="px-3 py-2">Codigo</th>
-                <th className="px-3 py-2">Nombre</th>
-                <th className="px-3 py-2">Email</th>
-                <th className="px-3 py-2">Celular</th>
-                <th className="px-3 py-2">Email verificado</th>
-                <th className="px-3 py-2">Curso</th>
-                <th className="px-3 py-2">Tipo</th>
-                <th className="px-3 py-2">Horario</th>
-                <th className="px-3 py-2 text-right">
-                  <span className="sr-only">Acciones</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {students.map((student) => (
-                <tr key={student.id} className="border-t border-border text-foreground">
-                  <td className="px-3 py-2 font-semibold">{student.student_code || ""}</td>
-                  <td className="px-3 py-2">{student.full_name || ""}</td>
-                  <td className="px-3 py-2">{student.email}</td>
-                  <td className="px-3 py-2">
-                    {student.phone || <span className="rounded-full bg-danger/12 px-2 py-0.5 text-xs text-danger">Falta</span>}
-                  </td>
-                  <td className="px-3 py-2">
-                    {student.email_verified_at ? (
-                      <span className="rounded-full bg-success/12 px-2 py-0.5 text-xs text-success">Verificado</span>
-                    ) : (
-                      <span className="rounded-full bg-danger/12 px-2 py-0.5 text-xs text-danger">Falta</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    {student.commission ? formatCommissionLabel(student.commission) : student.course_level || "Sin curso"}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        student.is_premium ? "bg-accent/15 text-accent" : "bg-surface-2 text-muted"
-                      }`}
-                    >
-                      {student.is_premium ? "Premium" : "Regular"}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-muted">{formatHourRange(student.preferred_hour)}</td>
-                  <td className="px-3 py-2">
-                    <StudentRowActions studentId={student.id} />
-                  </td>
-                </tr>
-              ))}
-              {!students.length ? (
-                <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-muted">
-                    Aun no hay alumnos registrados.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+      </form>
+
+      {activeFilters.length ? (
+        <div className="flex flex-wrap gap-2">
+          {activeFilters.map((item) => (
+            <AdminBadge key={item} tone="accent">
+              {item}
+            </AdminBadge>
+          ))}
         </div>
-      </div>
-    </div>
+      ) : (
+        <p className="text-xs text-[#64748b]">Sin filtros activos. La lista completa de alumnos esta visible.</p>
+      )}
+    </AdminCard>
   );
 }
 
@@ -197,10 +156,8 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
   const hourFilter = rawHour !== "" && Number.isFinite(parsedHour) && parsedHour >= 360 && parsedHour <= 1410
     ? parsedHour
     : null;
-  const currentPage = parsePositiveInteger(
-    typeof searchParams?.page === "string" ? searchParams.page : "",
-    1
-  );
+  const currentPage = parsePositiveInteger(typeof searchParams?.page === "string" ? searchParams.page : "", 1);
+
   const [studentsResult, activeCommissionsResult] = await Promise.all([
     loadAdminStudentsPage({
       supabase,
@@ -267,105 +224,78 @@ export default async function StudentsPage({ searchParams: searchParamsPromise }
   const downloadHref = `/api/admin/students/export${params.toString() ? `?${params.toString()}` : ""}`;
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-10 left-12 h-72 w-72 rounded-full bg-primary/25 blur-[140px]" />
-        <div className="absolute bottom-0 right-16 h-80 w-80 rounded-full bg-accent/15 blur-[160px]" />
-      </div>
-      <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-8 text-foreground">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.4em] text-muted">Panel admin</p>
-            <h1 className="text-3xl font-semibold">Gestion de alumnos</h1>
-            <p className="text-sm text-muted">Registra, importa y edita alumnos desde un unico tablero.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <a
-              href={downloadHref}
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-            >
-              Descargar lista
-            </a>
+    <AdminPage className="space-y-4">
+      <AdminPageHeader
+        eyebrow="Gestion de alumnos"
+        title="Alumnos"
+        description="Busca, filtra, importa y revisa alumnos con una vista mas rapida para la operacion diaria, sin cambiar el flujo existente."
+        actions={
+          <Link
+            href="/admin"
+            className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+          >
+            Volver al panel
+          </Link>
+        }
+      />
+
+      <FiltersBar
+        course={courseFilter}
+        search={searchTerm}
+        hour={hourFilter != null ? String(hourFilter) : ""}
+        downloadHref={downloadHref}
+        commissions={activeCommissionsResult.data || []}
+      />
+
+      <AdminStudentsRoster
+        students={paginatedStudents}
+        totalCount={totalStudents}
+        page={safeCurrentPage}
+        totalPages={totalPages}
+      />
+
+      {totalPages > 1 ? (
+        <AdminCard className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
+          <p className="text-[#64748b]">Mostrando {paginatedStudents.length} alumnos en esta pagina.</p>
+          <div className="flex flex-wrap items-center gap-2">
             <Link
-              href="/admin"
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              href={buildStudentsPageHref({
+                course: courseFilter,
+                search: searchTerm,
+                hour: hourFilter,
+                page: Math.max(1, safeCurrentPage - 1),
+              })}
+              aria-disabled={safeCurrentPage <= 1}
+              className={`inline-flex min-h-10 items-center justify-center rounded-2xl border px-4 text-sm font-semibold transition ${
+                safeCurrentPage <= 1
+                  ? "pointer-events-none border-[rgba(15,23,42,0.08)] text-[#cbd5e1]"
+                  : "border-[rgba(15,23,42,0.1)] bg-white text-[#0f172a] hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+              }`}
             >
-              Volver al panel
+              Anterior
+            </Link>
+            <AdminBadge tone="neutral">
+              {safeCurrentPage} / {totalPages}
+            </AdminBadge>
+            <Link
+              href={buildStudentsPageHref({
+                course: courseFilter,
+                search: searchTerm,
+                hour: hourFilter,
+                page: Math.min(totalPages, safeCurrentPage + 1),
+              })}
+              aria-disabled={safeCurrentPage >= totalPages}
+              className={`inline-flex min-h-10 items-center justify-center rounded-2xl border px-4 text-sm font-semibold transition ${
+                safeCurrentPage >= totalPages
+                  ? "pointer-events-none border-[rgba(15,23,42,0.08)] text-[#cbd5e1]"
+                  : "border-[rgba(15,23,42,0.1)] bg-white text-[#0f172a] hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+              }`}
+            >
+              Siguiente
             </Link>
           </div>
-        </div>
-
-        <FiltersBar
-          course={courseFilter}
-          search={searchTerm}
-          hour={hourFilter != null ? String(hourFilter) : ""}
-        />
-
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <a
-            className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-            href="/api/admin/students/template"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Descargar plantilla CSV
-          </a>
-            <AdminStudentImportModal />
-          <AdminStudentCreateModal commissions={activeCommissionsResult.data || []} />
-        </div>
-
-        <StudentsTable
-          students={paginatedStudents}
-          totalCount={totalStudents}
-          page={safeCurrentPage}
-          totalPages={totalPages}
-        />
-
-        {totalPages > 1 ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-foreground shadow-sm">
-            <p className="text-muted">
-              Mostrando {paginatedStudents.length} alumnos en esta pagina.
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Link
-                href={buildStudentsPageHref({
-                  course: courseFilter,
-                  search: searchTerm,
-                  hour: hourFilter,
-                  page: Math.max(1, safeCurrentPage - 1),
-                })}
-                aria-disabled={safeCurrentPage <= 1}
-                className={`rounded-xl border px-4 py-2 font-semibold transition ${
-                  safeCurrentPage <= 1
-                    ? "pointer-events-none border-border/60 text-muted/60"
-                    : "border-border text-foreground hover:border-primary hover:bg-surface-2"
-                }`}
-              >
-                Anterior
-              </Link>
-              <span className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
-                {safeCurrentPage} / {totalPages}
-              </span>
-              <Link
-                href={buildStudentsPageHref({
-                  course: courseFilter,
-                  search: searchTerm,
-                  hour: hourFilter,
-                  page: Math.min(totalPages, safeCurrentPage + 1),
-                })}
-                aria-disabled={safeCurrentPage >= totalPages}
-                className={`rounded-xl border px-4 py-2 font-semibold transition ${
-                  safeCurrentPage >= totalPages
-                    ? "pointer-events-none border-border/60 text-muted/60"
-                    : "border-border text-foreground hover:border-primary hover:bg-surface-2"
-                }`}
-              >
-                Siguiente
-              </Link>
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </section>
+        </AdminCard>
+      ) : null}
+    </AdminPage>
   );
 }

@@ -56,12 +56,12 @@ function ChevronRightIcon() {
 }
 
 const CSV_TEMPLATE_TYPES = [
-  { value: "cloze", label: "Fill in the Blanks" },
-  { value: "scramble", label: "Scrambled Sentence" },
-  { value: "pairs", label: "Pairs Game" },
-  { value: "image_match", label: "Image-Word Association" },
-  { value: "audio_match", label: "Audio Match" },
-  { value: "reading_exercise", label: "Reading" },
+  { value: "cloze", label: "Completar espacios" },
+  { value: "scramble", label: "Ordenar oracion" },
+  { value: "pairs", label: "Juego de pares" },
+  { value: "image_match", label: "Imagen y palabra" },
+  { value: "audio_match", label: "Match de audio" },
+  { value: "reading_exercise", label: "Lectura" },
 ];
 
 const CSV_TEMPLATE_FILES = {
@@ -388,9 +388,11 @@ export default function ExerciseLibraryManager({
     if (!initialEditId || didAutoOpen) return;
     const target = exercises.find((exercise) => String(exercise?.id || "").trim() === String(initialEditId).trim());
     if (!target) return;
-    setEditingExercise(target);
-    setEditorOpen(true);
-    setDidAutoOpen(true);
+    queueMicrotask(() => {
+      setEditingExercise(target);
+      setEditorOpen(true);
+      setDidAutoOpen(true);
+    });
   }, [didAutoOpen, exercises, initialEditId]);
 
   const queryMatches = useMemo(
@@ -740,7 +742,7 @@ export default function ExerciseLibraryManager({
             />
           </div>
           <p className="text-sm text-muted">
-            La biblioteca ahora se navega como carpetas: Skill, luego CEFR, luego Categoria y despues los ejercicios.
+            La biblioteca se navega por carpetas: habilidad, nivel CEFR, categoria y despues ejercicios.
           </p>
         </div>
 
@@ -761,7 +763,7 @@ export default function ExerciseLibraryManager({
               onClick={openCsvMenu}
               className="inline-flex w-full justify-center rounded-2xl border border-border px-4 py-3 text-sm font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
             >
-              CSV (Plantillas)
+              Importar CSV
             </button>
           </div>
         </div>
@@ -833,9 +835,9 @@ export default function ExerciseLibraryManager({
 
         <p className="text-sm text-muted">
           {atSkillRoot
-            ? "Abre una carpeta de Skill."
+            ? "Abre una carpeta de habilidad."
             : atLevelRoot
-            ? "Abre un nivel CEFR dentro de esta Skill."
+            ? "Abre un nivel CEFR dentro de esta habilidad."
             : atCategoryRoot
             ? "Abre una categoria para ver los ejercicios guardados."
             : "Estos son los ejercicios guardados dentro de esta categoria."}
@@ -913,7 +915,7 @@ export default function ExerciseLibraryManager({
             <div className="rounded-3xl border border-dashed border-border bg-surface-2 p-8 text-center">
               <p className="text-lg font-semibold text-foreground">No hay categorias en esta carpeta</p>
               <p className="mt-2 text-sm text-muted">
-                Crea el primer ejercicio dentro de esta Skill y nivel para generar categorias.
+                Crea el primer ejercicio dentro de esta habilidad y nivel para generar categorias.
               </p>
             </div>
           )
@@ -992,7 +994,7 @@ export default function ExerciseLibraryManager({
       <AppModal
         open={csvOpen}
         onClose={() => setCsvOpen(false)}
-        title="CSV (Plantillas)"
+        title="Importar ejercicios por CSV"
         widthClass="max-w-5xl"
       >
         <div className="space-y-4">
@@ -1067,7 +1069,7 @@ export default function ExerciseLibraryManager({
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                      Preview de filas ({csvPreviewRows.length})
+                      Vista previa de filas ({csvPreviewRows.length})
                     </p>
                     <button
                       type="button"

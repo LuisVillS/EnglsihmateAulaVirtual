@@ -1,10 +1,11 @@
 import { requireAdminPageAccess } from "@/lib/admin/access";
+import { AdminPage, AdminPageHeader, AdminStatCard, AdminStatsGrid, AdminToolbar } from "@/components/admin-page";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 import TeacherDashboardStudentsTable from "@/components/teacher-dashboard-students-table";
 import { loadTeacherStudentsOverview } from "@/lib/student-skills";
 
 export const metadata = {
-  title: "Teacher Dashboard | Admin",
+  title: "Dashboard docente | Admin",
 };
 
 const LEVEL_OPTIONS = ["A1", "A2", "B1", "B2", "C1", "C2"];
@@ -24,13 +25,7 @@ function average(values = []) {
 }
 
 function MetricCard({ label, value, hint }) {
-  return (
-    <article className="rounded-2xl border border-border bg-surface p-4">
-      <p className="text-xs uppercase tracking-[0.22em] text-muted">{label}</p>
-      <p className="mt-2 text-3xl font-semibold text-foreground">{value}</p>
-      {hint ? <p className="mt-1 text-xs text-muted">{hint}</p> : null}
-    </article>
-  );
+  return <AdminStatCard label={label} value={value} hint={hint} />;
 }
 
 export default async function TeacherDashboardPage({ searchParams: searchParamsPromise }) {
@@ -51,66 +46,68 @@ export default async function TeacherDashboardPage({ searchParams: searchParamsP
   const activeCount = students.filter((student) => student.status === "active").length;
   const inactiveCount = Math.max(0, students.length - activeCount);
   const courseAverage = average(students.map((student) => student.course_average));
+  const lowAverageCount = students.filter((student) => Number(student.course_average) > 0 && Number(student.course_average) < 70).length;
 
   return (
-    <section className="mx-auto w-full max-w-7xl space-y-6 px-6 py-8 text-foreground">
-      <header className="rounded-3xl border border-border bg-surface p-6">
-        <p className="text-xs uppercase tracking-[0.3em] text-muted">Teacher Dashboard</p>
-        <h1 className="mt-2 text-3xl font-semibold">Seguimiento de alumnos</h1>
-        <p className="mt-2 text-sm text-muted">
-          Vista rápida por estudiante con filtros por comisión y nivel. Desde aquí puedes abrir perfil y editar nota.
-        </p>
-      </header>
+    <AdminPage>
+      <AdminPageHeader
+        eyebrow="Seguimiento academico"
+        title="Dashboard docente"
+        description="Prioriza riesgo academico, seguimiento de comisiones y revision rapida de calificaciones con la misma logica actual."
+      />
 
-      <form className="grid gap-3 rounded-2xl border border-border bg-surface p-4 md:grid-cols-[1.2fr_0.8fr_1fr_auto]">
-        <select
-          name="commission"
-          defaultValue={commissionId}
-          className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
-        >
-          <option value="">Todas las comisiones</option>
-          {(dashboard.commissions || []).map((commission) => (
-            <option key={commission.id} value={commission.id}>
-              {commission.course_level} - #{commission.commission_number}
-            </option>
-          ))}
-        </select>
-        <select
-          name="level"
-          defaultValue={level}
-          className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
-        >
-          <option value="">Todos los niveles</option>
-          {LEVEL_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-        <input
-          type="search"
-          name="q"
-          defaultValue={query}
-          placeholder="Buscar por nombre o código"
-          className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
-        />
-        <button type="submit" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
-          Filtrar
-        </button>
-      </form>
+      <AdminToolbar>
+        <form className="grid gap-3 md:grid-cols-[1.15fr_0.75fr_1fr_auto]">
+          <select
+            name="commission"
+            defaultValue={commissionId}
+            className="rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a]"
+          >
+            <option value="">Todas las comisiones</option>
+            {(dashboard.commissions || []).map((commission) => (
+              <option key={commission.id} value={commission.id}>
+                {commission.course_level} - #{commission.commission_number}
+              </option>
+            ))}
+          </select>
+          <select
+            name="level"
+            defaultValue={level}
+            className="rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a]"
+          >
+            <option value="">Todos los niveles</option>
+            {LEVEL_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          <input
+            type="search"
+            name="q"
+            defaultValue={query}
+            placeholder="Buscar por nombre o codigo"
+            className="rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a]"
+          />
+          <button type="submit" className="rounded-2xl bg-[#103474] px-4 py-2 text-sm font-semibold text-white">
+            Filtrar
+          </button>
+        </form>
+      </AdminToolbar>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <AdminStatsGrid className="xl:grid-cols-5">
         <MetricCard label="Alumnos" value={students.length} />
         <MetricCard label="Activos" value={activeCount} />
         <MetricCard label="Inactivos" value={inactiveCount} />
+        <MetricCard label="Bajo promedio" value={lowAverageCount} hint="Menor a 70%" />
         <MetricCard
           label="Promedio curso"
           value={courseAverage == null ? "--" : `${courseAverage}%`}
           hint="Componente de nota actual del alumno"
         />
-      </div>
+      </AdminStatsGrid>
 
       <TeacherDashboardStudentsTable students={students} />
-    </section>
+    </AdminPage>
   );
 }

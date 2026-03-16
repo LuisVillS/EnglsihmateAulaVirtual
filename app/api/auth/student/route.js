@@ -1,5 +1,6 @@
 ﻿import { NextResponse } from "next/server";
 import { getDbClient } from "@/lib/duolingo/api-auth";
+import { ensureGamificationProfile } from "@/lib/gamification/profile";
 import { resolveStudentIdentity } from "@/lib/duolingo/student-upsert";
 
 export async function POST(request) {
@@ -27,6 +28,11 @@ export async function POST(request) {
       );
     }
 
+    const gamification = await ensureGamificationProfile(db, {
+      userId: profile.id,
+      legacyXpTotal: profile.xp_total,
+    });
+
     return NextResponse.json({
       student: {
         id: profile.id,
@@ -34,9 +40,10 @@ export async function POST(request) {
         id_document: profile.id_document || profile.dni || null,
         full_name: profile.full_name,
         email: profile.email,
-        xp_total: Number(profile.xp_total || 0) || 0,
+        xp_total: gamification.lifetimeXp,
         current_streak: Number(profile.current_streak || 0) || 0,
       },
+      gamification,
       source: user?.id ? "session-or-code" : "student_code",
     });
   } catch (error) {
@@ -47,4 +54,3 @@ export async function POST(request) {
     );
   }
 }
-

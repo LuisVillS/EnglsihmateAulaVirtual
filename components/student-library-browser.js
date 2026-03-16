@@ -19,10 +19,10 @@ function HorizontalBookRow({ title, books = [], subtitle = "" }) {
     <section className="space-y-4">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.26em] text-muted">{subtitle || "Curated row"}</p>
+          <p className="text-xs uppercase tracking-[0.26em] text-muted">{subtitle || "Fila sugerida"}</p>
           <h2 className="mt-2 text-2xl font-semibold text-foreground">{title}</h2>
         </div>
-        <p className="text-sm text-muted">{books.length} books</p>
+        <p className="text-sm text-muted">{books.length} libros</p>
       </div>
 
       <div className="-mx-1 overflow-x-auto pb-2">
@@ -40,7 +40,7 @@ function HorizontalBookRow({ title, books = [], subtitle = "" }) {
 
 function EmptyPanel({ title, description }) {
   return (
-    <div className="rounded-2xl border border-dashed border-border bg-surface px-6 py-10 text-center">
+    <div className="student-empty-panel px-6 py-10 text-center">
       <p className="text-lg font-semibold text-foreground">{title}</p>
       <p className="mt-2 text-sm text-muted">{description}</p>
     </div>
@@ -131,34 +131,34 @@ export default function StudentLibraryBrowser({ homePayload, studentLevel = "" }
 
   return (
     <section className="space-y-8 text-foreground">
-      <header className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+      <header className="student-panel overflow-hidden">
         <div className="grid gap-6 px-6 py-7 lg:grid-cols-[1.05fr_0.95fr] lg:px-8">
           <div className="space-y-4">
-            <p className="text-xs uppercase tracking-[0.35em] text-muted">EnglishMate Library</p>
+            <p className="text-xs uppercase tracking-[0.35em] text-muted">Biblioteca</p>
             <div className="space-y-2">
               <h1 className="max-w-2xl text-3xl font-semibold leading-tight sm:text-4xl">
-                Search first, then continue reading where you left off
+                Encuentra lecturas y retoma lo que dejaste pendiente
               </h1>
               <p className="max-w-2xl text-sm text-muted sm:text-base">
-                Every title here is already approved, English-only, and readable inside EnglishMate.
+                Todos los títulos disponibles ya están aprobados y listos para leerse dentro de EnglishMate.
               </p>
             </div>
             <div className="flex flex-wrap gap-3 text-xs uppercase tracking-[0.24em] text-muted">
-              <span>My Library: {myLibraryCount}</span>
-              <span>{studentLevel || "All levels"} default view</span>
-              <span>Internal catalog only</span>
+              <span>Mi biblioteca: {myLibraryCount}</span>
+              <span>{studentLevel || "Todos los niveles"} por defecto</span>
+              <span>Catálogo interno</span>
             </div>
           </div>
 
-          <div className="rounded-xl border border-border bg-surface-2 p-5">
+          <div className="student-panel-soft p-5">
             <div className="grid gap-4">
               <div>
-                <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Search</label>
+                <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Buscar</label>
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  className="mt-2 w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-foreground"
-                  placeholder="Title, author, tag"
+                  className="mt-2 w-full rounded-[12px] border border-border bg-surface px-4 py-3 text-sm text-foreground"
+                  placeholder="Título, autor o tag"
                 />
               </div>
 
@@ -168,9 +168,9 @@ export default function StudentLibraryBrowser({ homePayload, studentLevel = "" }
                   <select
                     value={cefrLevel}
                     onChange={(event) => setCefrLevel(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-foreground"
+                    className="mt-2 w-full rounded-[12px] border border-border bg-surface px-4 py-3 text-sm text-foreground"
                   >
-                    <option value="">All levels</option>
+                    <option value="">Todos los niveles</option>
                     {filters.cefrOptions.map((option) => (
                       <option key={option} value={option}>
                         {option}
@@ -180,13 +180,13 @@ export default function StudentLibraryBrowser({ homePayload, studentLevel = "" }
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Category</label>
+                  <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Categoría</label>
                   <select
                     value={category}
                     onChange={(event) => setCategory(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-foreground"
+                    className="mt-2 w-full rounded-[12px] border border-border bg-surface px-4 py-3 text-sm text-foreground"
                   >
-                    <option value="">All categories</option>
+                    <option value="">Todas las categorías</option>
                     {filters.categoryOptions.map((option) => (
                       <option key={option} value={option}>
                         {option}
@@ -200,9 +200,9 @@ export default function StudentLibraryBrowser({ homePayload, studentLevel = "" }
                   <select
                     value={tag}
                     onChange={(event) => setTag(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-foreground"
+                    className="mt-2 w-full rounded-[12px] border border-border bg-surface px-4 py-3 text-sm text-foreground"
                   >
-                    <option value="">All tags</option>
+                    <option value="">Todos los tags</option>
                     {filters.tagOptions.map((option) => (
                       <option key={option} value={option}>
                         {option}
@@ -222,7 +222,7 @@ export default function StudentLibraryBrowser({ homePayload, studentLevel = "" }
             <div>
               <p className="text-xs uppercase tracking-[0.26em] text-muted">Search results</p>
               <h2 className="mt-2 text-2xl font-semibold text-foreground">
-                {loading ? "Searching library..." : `${results.length} result${results.length === 1 ? "" : "s"}`}
+                {loading ? "Buscando en biblioteca..." : `${results.length} resultado${results.length === 1 ? "" : "s"}`}
               </h2>
             </div>
             {error ? <p className="text-sm text-danger">{error}</p> : null}
@@ -235,50 +235,50 @@ export default function StudentLibraryBrowser({ homePayload, studentLevel = "" }
               ))}
             </div>
           ) : loading ? (
-            <EmptyPanel title="Searching the catalog" description="Reading the internal library catalog only." />
+            <EmptyPanel title="Buscando en el catálogo" description="Se consultará solo el catálogo interno del campus." />
           ) : (
-            <EmptyPanel title="No books match these filters" description="Try a broader search or clear one of the filters." />
+            <EmptyPanel title="No hay libros con esos filtros" description="Prueba una búsqueda más amplia o limpia uno de los filtros." />
           )}
         </section>
       ) : (
         <>
           <section className="space-y-5">
             <div>
-              <p className="text-xs uppercase tracking-[0.26em] text-muted">My Library</p>
-              <h2 className="mt-2 text-2xl font-semibold text-foreground">Your reading collection</h2>
+              <p className="text-xs uppercase tracking-[0.26em] text-muted">Mi biblioteca</p>
+              <h2 className="mt-2 text-2xl font-semibold text-foreground">Tu colección de lectura</h2>
             </div>
 
             {myLibraryCount ? (
               <div className="space-y-8">
                 <HorizontalBookRow
-                  title="Currently Reading"
-                  subtitle="Resume from your latest page"
+                  title="Leyendo ahora"
+                  subtitle="Retoma desde tu último avance"
                   books={myLibrary.currentlyReading || []}
                 />
                 <HorizontalBookRow
-                  title="Saved for Later"
-                  subtitle="Books you added to My Library"
+                  title="Guardados"
+                  subtitle="Libros que apartaste para después"
                   books={myLibrary.saved || []}
                 />
                 <HorizontalBookRow
-                  title="Completed"
-                  subtitle="Books you already finished"
+                  title="Completados"
+                  subtitle="Libros que ya terminaste"
                   books={myLibrary.completed || []}
                 />
               </div>
             ) : (
               <EmptyPanel
-                title="Your library is empty"
-                description="Add a book to My Library or open a book to start building your personal shelf."
+                title="Tu biblioteca está vacía"
+                description="Agrega un libro a tu biblioteca o abre una lectura para empezar tu estantería."
               />
             )}
           </section>
 
           <section className="space-y-6">
             <div>
-              <p className="text-xs uppercase tracking-[0.26em] text-muted">Level-matched rows</p>
+              <p className="text-xs uppercase tracking-[0.26em] text-muted">Filas sugeridas</p>
               <h2 className="mt-2 text-2xl font-semibold text-foreground">
-                {studentLevel ? `${studentLevel} category rows` : "Browse by category"}
+                {studentLevel ? `Categorías para ${studentLevel}` : "Explorar por categoría"}
               </h2>
             </div>
 
@@ -288,15 +288,15 @@ export default function StudentLibraryBrowser({ homePayload, studentLevel = "" }
                   <HorizontalBookRow
                     key={row.category}
                     title={row.category}
-                    subtitle={studentLevel ? `${studentLevel} level match` : "Curated category"}
+                    subtitle={studentLevel ? `Coincidencia por nivel ${studentLevel}` : "Categoría sugerida"}
                     books={row.books}
                   />
                 ))}
               </div>
             ) : (
               <EmptyPanel
-                title="No personalized rows yet"
-                description="Assign CEFR and category data to more books to populate the default library view."
+                title="Aún no hay filas personalizadas"
+                description="Completa más datos de nivel y categoría para enriquecer esta vista."
               />
             )}
           </section>

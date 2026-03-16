@@ -1,12 +1,12 @@
-﻿"use client";
+"use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ListeningPlaybackControl from "@/components/listening-playback-control";
+import { splitClozeSentenceSegments } from "@/lib/cloze-blanks";
 import { evaluateExerciseAnswer } from "@/lib/duolingo/evaluate";
 import {
-  getListeningEndTime,
   buildListeningQuestionsFromContent,
+  getListeningEndTime,
   getListeningMaxPlays,
   getListeningPrompt,
   getListeningQuestionCorrectAnswerText,
@@ -17,104 +17,191 @@ import {
 
 function shuffle(list) {
   const copy = [...list];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
   }
   return copy;
 }
 
+function normalizeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function formatTimer(value) {
+  const safe = Math.max(0, Number(value || 0) || 0);
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function SectionCard({ children }) {
-  return <div className="rounded-3xl border border-border bg-surface p-5 shadow-sm">{children}</div>;
+  return <section className="student-panel px-5 py-5 sm:px-6">{children}</section>;
 }
 
-function normalizeArray(input) {
-  return Array.isArray(input) ? input : [];
-}
-
-function ExerciseBadge({ mode }) {
-  if (!mode) return null;
+function Badge({ label, tone = "default" }) {
+  const toneClass =
+    tone === "accent"
+      ? "border-[rgba(16,52,116,0.12)] bg-[rgba(16,52,116,0.08)] text-[#103474]"
+      : tone === "danger"
+      ? "border-danger/30 bg-danger/10 text-danger"
+      : "border-border bg-surface-2 text-muted";
   return (
-    <span
-      className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-        mode === "review" ? "bg-accent/20 text-accent" : "bg-primary/20 text-primary"
-      }`}
-    >
-      {mode}
+    <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${toneClass}`}>
+      {label}
     </span>
   );
 }
 
-export default function StudentPracticeSession() {
-  const searchParams = useSearchParams();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [session, setSession] = useState(null);
-  const [student, setStudent] = useState(null);
+function QuestionBlock({ question, questionId, questionAnswer, result, showResult, disabled, onPatch }) {
+  const isCorrectQuestion = Boolean(result?.isCorrect);
+  const wasAnswered = Boolean(result?.answered);
+
+  return (
+    <div
+      className={`rounded-2xl border p-4 ${
+        showResult
+          ? isCorrectQuestion
+            ? "border-success/30 bg-success/10"
+            : "border-danger/30 bg-danger/10"
+          : "border-border bg-surface-2"
+      }`}
+    >
+      <p className="text-sm font-semibold text-foreground">{question.prompt}</p>
+
+      {question.type === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
+        <div className="mt-3 grid gap-2">
+          {question.options.map((option, optionIndex) => {
+            const selected = Number(questionAnswer.selected_index) === optionIndex;
+            const correctOption = Number(question.correct_index) === optionIndex;
+            return (
+              <button
+                key={`${questionId}-${optionIndex}`}
+                type="button"
+                className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                  showResult && correctOption
+                    ? "border-success/30 bg-success/10"
+                    : showResult && selected && !correctOption
+                    ? "border-danger/30 bg-danger/10"
+                    : selected
+                    ? "border-primary bg-primary/10"
+                    : "border-border bg-white"
+                }`}
+                disabled={disabled}
+                onClick={() => onPatch({ selected_index: optionIndex })}
+              >
+                {option || `Option ${optionIndex + 1}`}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {question.type === LISTENING_QUESTION_TYPES.WRITTEN ? (
+        <input
+          value={questionAnswer.text || ""}
+          onChange={(event) => onPatch({ text: event.target.value })}
+          disabled={disabled}
+          className="mt-3 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm"
+          placeholder="Write your answer"
+        />
+      ) : null}
+
+      {question.type === LISTENING_QUESTION_TYPES.TRUE_FALSE ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {["True", "False"].map((label, optionIndex) => {
+            const value = optionIndex === 0;
+            const selected = questionAnswer.value === value;
+            const correctOption = Boolean(question.correct_boolean) === value;
+            return (
+              <button
+                key={`${questionId}-${label}`}
+                type="button"
+                className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                  showResult && correctOption
+                    ? "border-success/30 bg-success/10"
+                    : showResult && selected && !correctOption
+                    ? "border-danger/30 bg-danger/10"
+                    : selected
+                    ? "border-primary bg-primary/10"
+                    : "border-border bg-white"
+                }`}
+                disabled={disabled}
+                onClick={() => onPatch({ value })}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {showResult && (!wasAnswered || !isCorrectQuestion) ? (
+        <p className="mt-3 text-xs font-semibold text-danger">
+          Correct answer: {getListeningQuestionCorrectAnswerText(question)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function updateQuestionAnswer(setAnswer, questionId, nextPatch) {
+  setAnswer((previous) => ({
+    ...previous,
+    questions: {
+      ...(previous.questions || {}),
+      [questionId]: nextPatch,
+    },
+  }));
+}
+
+function upsertResult(list, nextResult) {
+  const key = String(nextResult?.exercise_id || "");
+  return [...(Array.isArray(list) ? list : []).filter((entry) => String(entry?.exercise_id || "") !== key), nextResult];
+}
+
+export default function StudentPracticeSession({ session, gamification, onGamificationChange, onCompleted, onExit }) {
+  const items = useMemo(() => session?.items || [], [session?.items]);
+  const startedAtRef = useRef(Date.now());
+  const completionRef = useRef(false);
   const [index, setIndex] = useState(0);
   const [attempts, setAttempts] = useState(1);
   const [answer, setAnswer] = useState({});
   const [feedback, setFeedback] = useState("");
   const [isFinalized, setIsFinalized] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [completing, setCompleting] = useState(false);
+  const [results, setResults] = useState([]);
   const [pairsState, setPairsState] = useState({ cards: [], selected: [], matched: [] });
-  const [listeningPlaybackState, setListeningPlaybackState] = useState({
-    isPlaying: false,
-    playsUsed: 0,
-    remainingPlays: 0,
-    canPlay: false,
-  });
+  const [listeningPlaybackState, setListeningPlaybackState] = useState({ isPlaying: false, playsUsed: 0, remainingPlays: 0, canPlay: false });
+  const [remainingTimeSec, setRemainingTimeSec] = useState(Number(session?.time_limit_sec || 0) || 0);
 
-  const items = session?.items || [];
   const current = items[index] || null;
 
-  const progressPercent = useMemo(() => {
-    if (!items.length) return 0;
-    return Math.round((index / items.length) * 100);
-  }, [items.length, index]);
-
-  const sessionRequestUrl = useMemo(() => {
-    const query = searchParams?.toString() || "";
-    return query ? `/api/session?${query}` : "/api/session";
-  }, [searchParams]);
-
-  const fetchSession = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const response = await fetch(sessionRequestUrl, { method: "GET", cache: "no-store" });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.error || "No se pudo cargar sesión.");
-      }
-      setSession(data.session);
-      setStudent(data.student);
-      setIndex(0);
-      setAttempts(1);
-      setAnswer({});
-      setFeedback("");
-      setIsFinalized(false);
-    } catch (err) {
-      setError(err.message || "No se pudo cargar sesión.");
-    } finally {
-      setLoading(false);
-    }
-  }, [sessionRequestUrl]);
-
   useEffect(() => {
-    fetchSession();
-  }, [fetchSession]);
+    startedAtRef.current = Date.now();
+    completionRef.current = false;
+    setIndex(0);
+    setAttempts(1);
+    setAnswer({});
+    setFeedback("");
+    setIsFinalized(false);
+    setSaving(false);
+    setCompleting(false);
+    setResults([]);
+    setPairsState({ cards: [], selected: [], matched: [] });
+    setRemainingTimeSec(Number(session?.time_limit_sec || 0) || 0);
+  }, [session?.id, session?.time_limit_sec]);
 
   useEffect(() => {
     if (!current || current.type !== "pairs") {
       setPairsState({ cards: [], selected: [], matched: [] });
       return;
     }
-    const pairs = normalizeArray(current.content_json?.pairs);
     const cards = shuffle(
-      pairs.flatMap((pair, idx) => [
-        { id: `${idx}-native`, pairIndex: idx, side: "native", text: pair.native || "" },
-        { id: `${idx}-target`, pairIndex: idx, side: "target", text: pair.target || "" },
+      normalizeArray(current.content_json?.pairs).flatMap((pair, pairIndex) => [
+        { id: `${pairIndex}-native`, pairIndex, side: "native", text: pair.native || "" },
+        { id: `${pairIndex}-target`, pairIndex, side: "target", text: pair.target || "" },
       ])
     );
     setPairsState({ cards, selected: [], matched: [] });
@@ -123,15 +210,9 @@ export default function StudentPracticeSession() {
   useEffect(() => {
     const content = current?.content_json || {};
     if (!current || current.type !== "audio_match") {
-      setListeningPlaybackState({
-        isPlaying: false,
-        playsUsed: 0,
-        remainingPlays: 0,
-        canPlay: false,
-      });
+      setListeningPlaybackState({ isPlaying: false, playsUsed: 0, remainingPlays: 0, canPlay: false });
       return;
     }
-
     setListeningPlaybackState({
       isPlaying: false,
       playsUsed: 0,
@@ -140,253 +221,186 @@ export default function StudentPracticeSession() {
     });
   }, [current]);
 
-  function nextExercise() {
-    setFeedback("");
-    setIsFinalized(false);
-    setAttempts(1);
-    setAnswer({});
-    if (index + 1 >= items.length) {
-      fetchSession();
-      return;
-    }
-    setIndex((prev) => prev + 1);
-  }
+  const finishSession = useCallback(async ({ timedOut = false } = {}) => {
+    if (!session?.id || completionRef.current) return;
+    completionRef.current = true;
+    setCompleting(true);
+    setFeedback(timedOut ? "Time is over. Preparing your summary..." : "Preparing your summary...");
 
-  async function submitProgress({ isCorrect, finalAttempts }) {
-    if (!current?.id || !student?.student_code) return;
+    const timeSpentSec = session?.time_limit_sec
+      ? Math.max(0, Number(session.time_limit_sec || 0) - Number(remainingTimeSec || 0))
+      : Math.round((Date.now() - startedAtRef.current) / 1000);
+
+    try {
+      const response = await fetch("/api/progress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          practice_session_id: session.id,
+          mode: session.mode,
+          complete_session: true,
+          time_spent_sec: timeSpentSec,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || "No se pudo completar la sesion.");
+
+      if (data?.gamification) onGamificationChange?.(data.gamification);
+
+      const correctItems = results.filter((entry) => entry.is_correct).length;
+      const accuracyPercent = items.length ? Math.round((correctItems / items.length) * 100) : 0;
+      const xpEarned = results.reduce((sum, entry) => sum + Math.max(0, Number(entry.xp_gain || 0) || 0), 0) + Math.max(0, Number(data?.session?.xpBonus || 0) || 0);
+
+      onCompleted?.({
+        mode: session.mode,
+        request: session.request,
+        items,
+        results,
+        totalItems: items.length,
+        correctItems,
+        accuracyPercent,
+        xpEarned,
+        recommendedNextMode: data?.session?.recommendedNextMode || "quick",
+        competition: data?.competition || null,
+        timedOut,
+      });
+    } catch (error) {
+      completionRef.current = false;
+      setFeedback(error.message || "No se pudo completar la sesion.");
+      setCompleting(false);
+    }
+  }, [items, onCompleted, onGamificationChange, remainingTimeSec, results, session]);
+
+  useEffect(() => {
+    if (!session?.time_limit_sec || completing) return undefined;
+    if (remainingTimeSec <= 0) {
+      finishSession({ timedOut: true });
+      return undefined;
+    }
+    const timerId = window.setInterval(() => {
+      setRemainingTimeSec((currentSeconds) => Math.max(0, currentSeconds - 1));
+    }, 1000);
+    return () => window.clearInterval(timerId);
+  }, [completing, finishSession, remainingTimeSec, session?.time_limit_sec]);
+
+  const progressPercent = useMemo(() => (items.length ? Math.round((index / items.length) * 100) : 0), [index, items.length]);
+  const content = current?.content_json || {};
+  const questionAnswers = answer?.questions && typeof answer.questions === "object" ? answer.questions : {};
+  const questions = current && ["audio_match", "reading_exercise"].includes(current.type) ? buildListeningQuestionsFromContent(content) : [];
+  const questionSummary = questions.length ? summarizeListeningQuestionResults(questions, questionAnswers) : { results: [] };
+  const questionResults = new Map(normalizeArray(questionSummary.results).map((row) => [String(row?.id || ""), row]));
+  const clozeBlankKeys = normalizeArray(content.blanks).map((blank, blankIndex) => String(blank?.id || blank?.key || `blank_${blankIndex + 1}`));
+  const clozeSegments = current?.type === "cloze" ? splitClozeSentenceSegments(content.sentence || "", clozeBlankKeys).segments : [];
+  const clozeSelections = answer?.selected_by_blank && typeof answer.selected_by_blank === "object" ? answer.selected_by_blank : {};
+
+  async function submitCurrentResult(isCorrect) {
+    if (!current?.id || !session?.id) return null;
     setSaving(true);
     try {
       const response = await fetch("/api/progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          student_code: student.student_code,
-          results: [
-            {
-              exercise_id: current.id,
-              is_correct: isCorrect,
-              attempts: finalAttempts,
-            },
-          ],
+          practice_session_id: session.id,
+          mode: session.mode,
+          results: [{
+            exercise_id: current.id,
+            is_correct: isCorrect,
+            attempts,
+            practice_item_id: current.practice_item_id,
+            practice_session_id: session.id,
+            mode: session.mode,
+            answer_snapshot: answer,
+          }],
         }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.error || "No se pudo guardar progreso.");
-      }
-      if (data?.student) {
-        setStudent((prev) => ({
-          ...(prev || {}),
-          xp_total: data.student.xp_total,
-          current_streak: data.student.current_streak,
-        }));
-      }
-    } catch (err) {
-      setError(err.message || "No se pudo guardar progreso.");
+      if (!response.ok) throw new Error(data?.error || "No se pudo guardar progreso.");
+      if (data?.gamification) onGamificationChange?.(data.gamification);
+      return data?.results?.[0] || null;
     } finally {
       setSaving(false);
     }
   }
 
   async function finalizeAttempt(isCorrect) {
-    await submitProgress({ isCorrect, finalAttempts: attempts });
-    setFeedback(isCorrect ? "Correcto" : "Incorrecto");
+    const result = await submitCurrentResult(isCorrect);
+    setResults((previous) => upsertResult(previous, {
+      exercise_id: current.id,
+      is_correct: isCorrect,
+      xp_gain: Math.max(0, Number(result?.xp_gain || 0) || 0),
+      source_reason: current.source_reason || current.mode || "practice",
+      type: current.type,
+    }));
+    setFeedback(`${isCorrect ? "Correct" : "Incorrect"}${Number(result?.xp_gain || 0) ? ` · +${result.xp_gain} XP` : ""}`);
     setIsFinalized(true);
   }
 
   async function checkAnswer() {
-    if (!current || isFinalized || saving) return;
-
-    if (current.type === "audio_match") {
-      const content = current.content_json || {};
-      const hasPlaybackSource = Boolean(content.youtube_url || content.audio_url);
-      if (hasPlaybackSource && listeningPlaybackState.playsUsed < 1) {
-        setFeedback("Reproduce el audio antes de responder.");
-        return;
-      }
-    }
-
-    const isCorrect = evaluateExerciseAnswer({
-      type: current.type,
-      content: current.content_json || {},
-      answer,
-    });
-
-    if (isCorrect) {
-      await finalizeAttempt(true);
+    if (!current || isFinalized || saving || completing) return;
+    if (current.type === "audio_match" && (content.youtube_url || content.audio_url) && listeningPlaybackState.playsUsed < 1) {
+      setFeedback("Play the audio before answering.");
       return;
     }
 
+    const isCorrect = evaluateExerciseAnswer({ type: current.type, content, answer });
+    if (isCorrect) return finalizeAttempt(true);
     if (attempts < 3) {
-      setAttempts((prev) => prev + 1);
-      setFeedback(`Incorrecto. Intento ${attempts + 1} de 3.`);
+      setAttempts((currentAttempts) => currentAttempts + 1);
+      setFeedback(`Incorrect. Attempt ${attempts + 1} of 3.`);
       return;
     }
-
-    await finalizeAttempt(false);
+    return finalizeAttempt(false);
   }
 
-  async function markAsIncorrect() {
-    if (isFinalized || saving) return;
-    await finalizeAttempt(false);
-  }
-
-  function onPairCardClick(card) {
-    if (isFinalized || !current || current.type !== "pairs") return;
-    if (pairsState.matched.includes(card.pairIndex)) return;
-    if (pairsState.selected.includes(card.id)) return;
-
-    if (!pairsState.selected.length) {
-      setPairsState((prev) => ({ ...prev, selected: [card.id] }));
+  function nextItem() {
+    if (index + 1 >= items.length) {
+      finishSession();
       return;
     }
-
-    const firstId = pairsState.selected[0];
-    const first = pairsState.cards.find((item) => item.id === firstId);
-    if (!first) {
-      setPairsState((prev) => ({ ...prev, selected: [card.id] }));
-      return;
-    }
-
-    if (first.pairIndex === card.pairIndex && first.side !== card.side) {
-      const matched = [...pairsState.matched, card.pairIndex];
-      setPairsState((prev) => ({ ...prev, selected: [], matched }));
-      const totalPairs = normalizeArray(current.content_json?.pairs).length;
-      if (matched.length >= totalPairs) {
-        setAnswer({ matched_pairs: matched.length });
-        finalizeAttempt(true);
-      }
-      return;
-    }
-
-    setPairsState((prev) => ({ ...prev, selected: [first.id, card.id] }));
-    window.setTimeout(() => {
-      setPairsState((prev) => ({ ...prev, selected: [] }));
-    }, 500);
-  }
-
-  if (loading) {
-    return <SectionCard><p className="text-sm text-muted">Cargando sesion...</p></SectionCard>;
-  }
-
-  if (error) {
-    return (
-      <SectionCard>
-        <p className="text-sm text-danger">{error}</p>
-        <button type="button" onClick={fetchSession} className="mt-3 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
-          Reintentar
-        </button>
-      </SectionCard>
-    );
+    setIndex((currentIndex) => currentIndex + 1);
+    setAttempts(1);
+    setAnswer({});
+    setFeedback("");
+    setIsFinalized(false);
   }
 
   if (!current) {
-    return (
-      <SectionCard>
-        <p className="text-sm text-muted">No hay ejercicios disponibles por ahora.</p>
-        <button type="button" onClick={fetchSession} className="mt-3 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
-          Recargar
-        </button>
-      </SectionCard>
-    );
+    return <SectionCard><p className="text-sm text-muted">This practice session has no items.</p></SectionCard>;
   }
-
-  const content = current.content_json || {};
-  const scrambleWords = normalizeArray(content.target_words);
-  const selectedOrder = normalizeArray(answer.selected_order);
-  const availableIndexes = scrambleWords.map((_, idx) => idx).filter((idx) => !selectedOrder.includes(idx));
-  const isQuestionExercise = current.type === "audio_match" || current.type === "reading_exercise";
-  const listeningQuestions = isQuestionExercise ? buildListeningQuestionsFromContent(content) : [];
-  const listeningAnswers =
-    answer?.questions && typeof answer.questions === "object"
-      ? answer.questions
-      : {};
-  const listeningSummary = isQuestionExercise
-    ? summarizeListeningQuestionResults(listeningQuestions, listeningAnswers)
-    : { total: 0, answeredCount: 0, correctCount: 0, complete: false, results: [] };
-  const listeningResultById = new Map(
-    normalizeArray(listeningSummary.results).map((row) => [String(row?.id || "").trim(), row])
-  );
-  const hasListeningPlaybackSource = Boolean(content.youtube_url || content.audio_url);
-  const canAnswerListening =
-    current.type === "audio_match"
-      ? (!hasListeningPlaybackSource || listeningPlaybackState.playsUsed > 0)
-      : true;
-  const currentTypeLabel = current.type === "audio_match"
-    ? "Listening Exercise"
-    : current.type === "reading_exercise"
-    ? "Reading Exercise"
-    : current.type;
 
   return (
     <div className="space-y-5">
       <SectionCard>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-muted">Practice Lab</p>
-            <h2 className="text-2xl font-semibold">sesion inteligente</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge label={session.label || "Practice"} tone="accent" />
+              <Badge label={String(current.source_reason || current.mode || "practice").replace(/_/g, " ")} />
+              {session?.time_limit_sec ? <Badge label={formatTimer(remainingTimeSec)} tone={remainingTimeSec <= 30 ? "danger" : "accent"} /> : null}
+            </div>
+            <h2 className="mt-3 text-2xl font-semibold text-foreground">{current.type.replace(/_/g, " ")}</h2>
+            <p className="mt-2 text-sm text-muted">Item {index + 1} of {items.length} · Level {Number(gamification?.level || 1)} · {Number(gamification?.lifetimeXp || 0)} XP</p>
           </div>
-          <div className="text-right">
-            <p className="text-sm text-muted">XP: {Number(student?.xp_total || 0)}</p>
-            <p className="text-sm text-muted">Streak: {Number(student?.current_streak || 0)}</p>
-          </div>
+          <button type="button" onClick={onExit} disabled={completing} className="student-button-secondary px-4 py-2.5 text-sm disabled:opacity-60">Leave session</button>
         </div>
-        <div className="mt-3 h-2 w-full rounded-full bg-surface-2">
-          <div className="h-full rounded-full bg-primary" style={{ width: `${progressPercent}%` }} />
-        </div>
-        <p className="mt-2 text-xs text-muted">
-          Ejercicio {index + 1} de {items.length}
-        </p>
+        <div className="mt-5 h-3 w-full rounded-full bg-surface-2"><div className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent" style={{ width: `${progressPercent}%` }} /></div>
       </SectionCard>
 
       <SectionCard>
-        <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-semibold uppercase tracking-wide text-muted">{currentTypeLabel}</p>
-          <ExerciseBadge mode={current.mode} />
-        </div>
-
         {current.type === "scramble" ? (
           <div className="space-y-4">
-            <p className="text-lg font-semibold">{content.prompt_native}</p>
-            <div className="rounded-xl border border-border bg-surface-2 p-3">
-              <p className="mb-2 text-xs uppercase tracking-wide text-muted">Tu oracion</p>
+            <p className="text-lg font-semibold text-foreground">{content.prompt_native}</p>
+            <div className="rounded-2xl border border-border bg-surface-2 p-4">
               <div className="flex min-h-10 flex-wrap gap-2">
-                {selectedOrder.length ? (
-                  selectedOrder.map((idx) => (
-                    <button
-                      key={`selected-${idx}`}
-                      type="button"
-                      className="rounded-full border border-border px-3 py-1 text-sm"
-                      onClick={() =>
-                        setAnswer((prev) => ({
-                          ...prev,
-                          selected_order: normalizeArray(prev.selected_order).filter((item) => item !== idx),
-                        }))
-                      }
-                    >
-                      {scrambleWords[idx]}
-                    </button>
-                  ))
-                ) : (
-                  <span className="text-sm text-muted">Selecciona palabras</span>
-                )}
+                {normalizeArray(answer.selected_order).map((wordIndex) => (
+                  <button key={wordIndex} type="button" className="rounded-full border border-border bg-white px-3 py-1.5 text-sm" onClick={() => setAnswer((previous) => ({ ...previous, selected_order: normalizeArray(previous.selected_order).filter((value) => value !== wordIndex) }))}>{normalizeArray(content.target_words)[wordIndex]}</button>
+                ))}
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              {availableIndexes.map((idx) => (
-                <button
-                  key={`available-${idx}`}
-                  type="button"
-                  className="rounded-full border border-border px-3 py-1 text-sm"
-                  onClick={() =>
-                    setAnswer((prev) => ({
-                      ...prev,
-                      selected_order: [...normalizeArray(prev.selected_order), idx],
-                    }))
-                  }
-                >
-                  {scrambleWords[idx]}
-                </button>
+              {normalizeArray(content.target_words).map((word, wordIndex) => normalizeArray(answer.selected_order).includes(wordIndex) ? null : (
+                <button key={wordIndex} type="button" className="rounded-full border border-border bg-white px-3 py-1.5 text-sm" onClick={() => setAnswer((previous) => ({ ...previous, selected_order: [...normalizeArray(previous.selected_order), wordIndex] }))}>{word}</button>
               ))}
             </div>
           </div>
@@ -396,7 +410,7 @@ export default function StudentPracticeSession() {
           <div className="space-y-4">
             <p className="text-sm text-muted">{getListeningPrompt(content)}</p>
             <ListeningPlaybackControl
-              key={`practice-listening-${current.id || index}-${content.youtube_url || content.audio_url || "none"}-${getListeningMaxPlays(content, 1)}-${getListeningStartTime(content, 0)}-${getListeningEndTime(content, null) ?? "end"}`}
+              key={`practice-listening-${current.id}`}
               youtubeUrl={content.youtube_url || ""}
               audioUrl={content.audio_url || ""}
               maxPlays={getListeningMaxPlays(content, 1)}
@@ -404,135 +418,20 @@ export default function StudentPracticeSession() {
               endTime={getListeningEndTime(content, null)}
               onStatusChange={setListeningPlaybackState}
             />
-            {!canAnswerListening ? (
-              <p className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
-                Reproduce el audio antes de responder.
-              </p>
-            ) : listeningPlaybackState.isPlaying ? (
-              <p className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-semibold text-muted">
-                Puedes responder mientras el audio sigue sonando.
-              </p>
-            ) : null}
             <div className="space-y-3">
-              {listeningQuestions.map((question, questionIndex) => {
+              {questions.map((question, questionIndex) => {
                 const questionId = String(question?.id || `q_${questionIndex + 1}`).trim();
-                const questionAnswer = listeningAnswers[questionId] || {};
-                const result = listeningResultById.get(questionId) || null;
-                const showResult = isFinalized;
-                const isCorrectQuestion = Boolean(result?.isCorrect);
-                const wasAnswered = Boolean(result?.answered);
-
                 return (
-                  <div
-                    key={`${questionId}-${questionIndex}`}
-                    className={`rounded-xl border p-3 ${
-                      showResult
-                        ? isCorrectQuestion
-                          ? "border-success bg-success/10"
-                          : "border-danger/10"
-                        : "border-border bg-surface-2"
-                    }`}
-                  >
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Question {questionIndex + 1}</p>
-                    <p className="mt-1 text-sm font-semibold">{question.prompt}</p>
-
-                    {question.type === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
-                      <div className="mt-3 grid gap-2">
-                        {question.options.map((option, optionIndex) => {
-                          const selected = Number(questionAnswer.selected_index) === optionIndex;
-                          const correctOption = Number(question.correct_index) === optionIndex;
-                          return (
-                            <button
-                              key={`${questionId}-${optionIndex}`}
-                              type="button"
-                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
-                                showResult && correctOption
-                                  ? "border-success bg-success/10"
-                                  : showResult && selected && !correctOption
-                                  ? "border-danger/10"
-                                  : selected
-                                  ? "border-primary bg-primary/10"
-                                  : "border-border"
-                              }`}
-                              disabled={isFinalized || !canAnswerListening}
-                              onClick={() =>
-                                setAnswer((prev) => ({
-                                  ...prev,
-                                  questions: {
-                                    ...(prev.questions || {}),
-                                    [questionId]: { selected_index: optionIndex },
-                                  },
-                                }))
-                              }
-                            >
-                              {option || `Option ${optionIndex + 1}`}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-
-                    {question.type === LISTENING_QUESTION_TYPES.WRITTEN ? (
-                      <input
-                        value={questionAnswer.text || ""}
-                        onChange={(event) =>
-                          setAnswer((prev) => ({
-                            ...prev,
-                            questions: {
-                              ...(prev.questions || {}),
-                              [questionId]: { text: event.target.value },
-                            },
-                          }))
-                        }
-                        disabled={isFinalized || !canAnswerListening}
-                        className="mt-3 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm"
-                        placeholder="Write your answer"
-                      />
-                    ) : null}
-
-                    {question.type === LISTENING_QUESTION_TYPES.TRUE_FALSE ? (
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        {["True", "False"].map((label, optionIndex) => {
-                          const value = optionIndex === 0;
-                          const selected = questionAnswer.value === value;
-                          const correctOption = Boolean(question.correct_boolean) === value;
-                          return (
-                            <button
-                              key={`${questionId}-${label}`}
-                              type="button"
-                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
-                                showResult && correctOption
-                                  ? "border-success bg-success/10"
-                                  : showResult && selected && !correctOption
-                                  ? "border-danger/10"
-                                  : selected
-                                  ? "border-primary bg-primary/10"
-                                  : "border-border"
-                              }`}
-                              disabled={isFinalized || !canAnswerListening}
-                              onClick={() =>
-                                setAnswer((prev) => ({
-                                  ...prev,
-                                  questions: {
-                                    ...(prev.questions || {}),
-                                    [questionId]: { value },
-                                  },
-                                }))
-                              }
-                            >
-                              {label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-
-                    {showResult && (!wasAnswered || !isCorrectQuestion) ? (
-                      <p className="mt-3 text-xs font-semibold text-danger">
-                        Correct answer: {getListeningQuestionCorrectAnswerText(question)}
-                      </p>
-                    ) : null}
-                  </div>
+                  <QuestionBlock
+                    key={questionId}
+                    question={question}
+                    questionId={questionId}
+                    questionAnswer={questionAnswers[questionId] || {}}
+                    result={questionResults.get(questionId) || null}
+                    showResult={isFinalized}
+                    disabled={isFinalized || (content.youtube_url || content.audio_url) && listeningPlaybackState.playsUsed < 1}
+                    onPatch={(patch) => updateQuestionAnswer(setAnswer, questionId, patch)}
+                  />
                 );
               })}
             </div>
@@ -542,143 +441,23 @@ export default function StudentPracticeSession() {
         {current.type === "reading_exercise" ? (
           <div className="space-y-4">
             <div className="rounded-2xl border border-border bg-surface-2 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Reading</p>
-              <h3 className="mt-1 text-xl font-semibold">
-                {content.title || "Reading Exercise"}
-              </h3>
-              {content.image_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={content.image_url}
-                  alt={content.title || "Reading image"}
-                  className="mt-4 h-52 w-full rounded-2xl object-cover"
-                />
-              ) : null}
-              <div className="mt-4 whitespace-pre-wrap text-sm leading-7 text-foreground">
-                {content.text || ""}
-              </div>
+              <h3 className="text-xl font-semibold text-foreground">{content.title || "Reading Exercise"}</h3>
+              <div className="mt-4 whitespace-pre-wrap text-sm leading-7 text-foreground">{content.text || ""}</div>
             </div>
-
             <div className="space-y-3">
-              {listeningQuestions.map((question, questionIndex) => {
+              {questions.map((question, questionIndex) => {
                 const questionId = String(question?.id || `q_${questionIndex + 1}`).trim();
-                const questionAnswer = listeningAnswers[questionId] || {};
-                const result = listeningResultById.get(questionId) || null;
-                const showResult = isFinalized;
-                const isCorrectQuestion = Boolean(result?.isCorrect);
-                const wasAnswered = Boolean(result?.answered);
-
                 return (
-                  <div
-                    key={`reading-${questionId}-${questionIndex}`}
-                    className={`rounded-xl border p-3 ${
-                      showResult
-                        ? isCorrectQuestion
-                          ? "border-success bg-success/10"
-                          : "border-danger/10"
-                        : "border-border bg-surface-2"
-                    }`}
-                  >
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Question {questionIndex + 1}</p>
-                    <p className="mt-1 text-sm font-semibold">{question.prompt}</p>
-
-                    {question.type === LISTENING_QUESTION_TYPES.MULTIPLE_CHOICE ? (
-                      <div className="mt-3 grid gap-2">
-                        {question.options.map((option, optionIndex) => {
-                          const selected = Number(questionAnswer.selected_index) === optionIndex;
-                          const correctOption = Number(question.correct_index) === optionIndex;
-                          return (
-                            <button
-                              key={`${questionId}-${optionIndex}`}
-                              type="button"
-                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
-                                showResult && correctOption
-                                  ? "border-success bg-success/10"
-                                  : showResult && selected && !correctOption
-                                  ? "border-danger/10"
-                                  : selected
-                                  ? "border-primary bg-primary/10"
-                                  : "border-border"
-                              }`}
-                              disabled={isFinalized}
-                              onClick={() =>
-                                setAnswer((prev) => ({
-                                  ...prev,
-                                  questions: {
-                                    ...(prev.questions || {}),
-                                    [questionId]: { selected_index: optionIndex },
-                                  },
-                                }))
-                              }
-                            >
-                              {option || `Option ${optionIndex + 1}`}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-
-                    {question.type === LISTENING_QUESTION_TYPES.WRITTEN ? (
-                      <input
-                        value={questionAnswer.text || ""}
-                        onChange={(event) =>
-                          setAnswer((prev) => ({
-                            ...prev,
-                            questions: {
-                              ...(prev.questions || {}),
-                              [questionId]: { text: event.target.value },
-                            },
-                          }))
-                        }
-                        disabled={isFinalized}
-                        className="mt-3 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm"
-                        placeholder="Write your answer"
-                      />
-                    ) : null}
-
-                    {question.type === LISTENING_QUESTION_TYPES.TRUE_FALSE ? (
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        {["True", "False"].map((label, optionIndex) => {
-                          const value = optionIndex === 0;
-                          const selected = questionAnswer.value === value;
-                          const correctOption = Boolean(question.correct_boolean) === value;
-                          return (
-                            <button
-                              key={`${questionId}-${label}`}
-                              type="button"
-                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
-                                showResult && correctOption
-                                  ? "border-success bg-success/10"
-                                  : showResult && selected && !correctOption
-                                  ? "border-danger/10"
-                                  : selected
-                                  ? "border-primary bg-primary/10"
-                                  : "border-border"
-                              }`}
-                              disabled={isFinalized}
-                              onClick={() =>
-                                setAnswer((prev) => ({
-                                  ...prev,
-                                  questions: {
-                                    ...(prev.questions || {}),
-                                    [questionId]: { value },
-                                  },
-                                }))
-                              }
-                            >
-                              {label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-
-                    {showResult && (!wasAnswered || !isCorrectQuestion) ? (
-                      <p className="mt-3 text-xs font-semibold text-danger">
-                        Correct answer: {getListeningQuestionCorrectAnswerText(question)}
-                      </p>
-                    ) : null}
-                  </div>
+                  <QuestionBlock
+                    key={questionId}
+                    question={question}
+                    questionId={questionId}
+                    questionAnswer={questionAnswers[questionId] || {}}
+                    result={questionResults.get(questionId) || null}
+                    showResult={isFinalized}
+                    disabled={isFinalized}
+                    onPatch={(patch) => updateQuestionAnswer(setAnswer, questionId, patch)}
+                  />
                 );
               })}
             </div>
@@ -687,31 +466,20 @@ export default function StudentPracticeSession() {
 
         {current.type === "image_match" ? (
           <div className="space-y-4">
-            <p className="text-lg font-semibold">{content.question_native}</p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {normalizeArray(content.options).map((option, idx) => (
+            <p className="text-lg font-semibold text-foreground">{content.question_native}</p>
+            {content.image_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={content.image_url} alt="Image prompt" className="h-56 w-full rounded-2xl object-cover" />
+            ) : null}
+            <div className="grid gap-2">
+              {normalizeArray(content.options).map((option, optionIndex) => (
                 <button
-                  key={idx}
+                  key={optionIndex}
                   type="button"
-                  className={`rounded-xl border p-2 ${
-                    Number(answer.selected_index) === idx ? "border-primary bg-primary/10" : "border-border"
-                  }`}
-                  onClick={() =>
-                    setAnswer((prev) => ({
-                      ...prev,
-                      selected_index: idx,
-                      selected_vocab_id: option.vocab_id || null,
-                    }))
-                  }
+                  className={`rounded-xl border px-3 py-2 text-left text-sm ${Number(answer.selected_index) === optionIndex ? "border-primary bg-primary/10" : "border-border bg-white"}`}
+                  onClick={() => setAnswer({ selected_index: optionIndex, selected_vocab_id: option.vocab_id || null })}
                 >
-                  {option.image_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={option.image_url} alt={`option-${idx}`} className="h-32 w-full rounded-lg object-cover" />
-                  ) : (
-                    <div className="flex h-32 items-center justify-center rounded-lg bg-background text-xs text-muted">
-                      Sin imagen
-                    </div>
-                  )}
+                  {option.label || `Option ${optionIndex + 1}`}
                 </button>
               ))}
             </div>
@@ -719,90 +487,94 @@ export default function StudentPracticeSession() {
         ) : null}
 
         {current.type === "pairs" ? (
-          <div className="space-y-4">
-            <p className="text-sm text-muted">Empareja los pares correctos.</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {pairsState.cards.map((card) => {
-                const isMatched = pairsState.matched.includes(card.pairIndex);
-                const isSelected = pairsState.selected.includes(card.id);
-                return (
-                  <button
-                    key={card.id}
-                    type="button"
-                    onClick={() => onPairCardClick(card)}
-                    className={`rounded-xl border px-3 py-3 text-left text-sm ${
-                      isMatched ? "border-success bg-success/10" : isSelected ? "border-primary bg-primary/10" : "border-border"
-                    }`}
-                  >
-                    {card.text}
-                  </button>
-                );
-              })}
-            </div>
-            <p className="text-xs text-muted">
-              Aciertos: {pairsState.matched.length}/{normalizeArray(content.pairs).length}
-            </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {pairsState.cards.map((card) => {
+              const isMatched = pairsState.matched.includes(card.pairIndex);
+              const isSelected = pairsState.selected.includes(card.id);
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  className={`rounded-xl border px-3 py-3 text-left text-sm ${isMatched ? "border-success/30 bg-success/10" : isSelected ? "border-primary bg-primary/10" : "border-border bg-white"}`}
+                  onClick={() => {
+                    if (isMatched || isSelected || isFinalized) return;
+                    if (!pairsState.selected.length) return setPairsState((previous) => ({ ...previous, selected: [card.id] }));
+                    const first = pairsState.cards.find((entry) => entry.id === pairsState.selected[0]);
+                    if (!first) return setPairsState((previous) => ({ ...previous, selected: [card.id] }));
+                    if (first.pairIndex === card.pairIndex && first.side !== card.side) {
+                      const matched = [...pairsState.matched, card.pairIndex];
+                      setPairsState((previous) => ({ ...previous, selected: [], matched }));
+                      if (matched.length >= normalizeArray(content.pairs).length) {
+                        setAnswer({ matched_pairs: matched.length });
+                        finalizeAttempt(true);
+                      }
+                      return;
+                    }
+                    setPairsState((previous) => ({ ...previous, selected: [first.id, card.id] }));
+                    window.setTimeout(() => setPairsState((previous) => ({ ...previous, selected: [] })), 500);
+                  }}
+                >
+                  {card.text}
+                </button>
+              );
+            })}
           </div>
         ) : null}
 
         {current.type === "cloze" ? (
-          <div className="space-y-4">
-            <p className="text-lg font-semibold">{content.sentence}</p>
-            {normalizeArray(content.options).length ? (
-              <div className="grid gap-2">
-                {content.options.map((option, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    className={`rounded-xl border px-3 py-2 text-left text-sm ${
-                      Number(answer.selected_index) === idx ? "border-primary bg-primary/10" : "border-border"
-                    }`}
-                    onClick={() => setAnswer((prev) => ({ ...prev, selected_index: idx }))}
+          normalizeArray(content.blanks).length ? (
+            <div className="space-y-4">
+              <p className="text-lg font-semibold text-foreground">Fill in each blank.</p>
+              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-surface-2 p-4 text-sm leading-7 text-foreground">
+                {clozeSegments.map((segment, segmentIndex) => segment.kind === "blank" ? (
+                  <select
+                    key={`${segment.key}-${segmentIndex}`}
+                    value={clozeSelections[segment.key] || ""}
+                    onChange={(event) =>
+                      setAnswer((previous) => ({
+                        ...previous,
+                        selected_by_blank: {
+                          ...(previous.selected_by_blank || {}),
+                          [segment.key]: event.target.value,
+                        },
+                      }))
+                    }
+                    className="min-w-[140px] rounded-xl border border-border bg-white px-3 py-2 text-sm"
                   >
-                    {option}
-                  </button>
+                    <option value="">Select</option>
+                    {normalizeArray(content.options_pool).map((option, optionIndex) => (
+                      <option key={`${segment.key}-option-${optionIndex}`} value={String(option?.id || option?.text || "")}>
+                        {option?.text || `Option ${optionIndex + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span key={`text-${segmentIndex}`}>{segment.value}</span>
                 ))}
               </div>
-            ) : (
-              <input
-                value={answer.text || ""}
-                onChange={(event) => setAnswer((prev) => ({ ...prev, text: event.target.value }))}
-                className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm"
-                placeholder="Completa el espacio"
-              />
-            )}
-          </div>
+            </div>
+          ) : normalizeArray(content.options).length ? (
+            <div className="grid gap-2">
+              {content.options.map((option, optionIndex) => (
+                <button key={optionIndex} type="button" className={`rounded-xl border px-3 py-2 text-left text-sm ${Number(answer.selected_index) === optionIndex ? "border-primary bg-primary/10" : "border-border bg-white"}`} onClick={() => setAnswer({ selected_index: optionIndex })}>{option}</button>
+              ))}
+            </div>
+          ) : (
+            <input value={answer.text || ""} onChange={(event) => setAnswer({ text: event.target.value })} className="w-full rounded-xl border border-border bg-white px-3 py-2 text-sm" placeholder="Complete the blank" />
+          )
         ) : null}
 
-        {feedback ? (
-          <p className={`mt-4 text-sm font-semibold ${feedback === "Correcto" ? "text-success" : "text-danger"}`}>{feedback}</p>
-        ) : null}
+        {feedback ? <p className={`mt-5 text-sm font-semibold ${feedback.startsWith("Correct") ? "text-success" : feedback.includes("Preparing") ? "text-muted" : "text-danger"}`}>{feedback}</p> : null}
 
-        <div className="mt-5 flex flex-wrap gap-2">
+        <div className="mt-6 flex flex-wrap items-center gap-2">
           {!isFinalized ? (
             <>
-              <button
-                type="button"
-                onClick={checkAnswer}
-                disabled={saving}
-                className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
-              >
-                {saving ? "Guardando..." : "Comprobar"}
-              </button>
-              <button
-                type="button"
-                onClick={markAsIncorrect}
-                disabled={saving}
-                className="rounded-xl border border-border px-4 py-2 text-sm"
-              >
-                No lo se
-              </button>
-              <span className="self-center text-xs text-muted">Intento {attempts} de 3</span>
+              <button type="button" onClick={checkAnswer} disabled={saving || completing} className="student-button-primary px-4 py-3 text-sm disabled:opacity-60">{saving ? "Saving..." : "Check answer"}</button>
+              <button type="button" onClick={() => finalizeAttempt(false)} disabled={saving || completing} className="student-button-secondary px-4 py-3 text-sm disabled:opacity-60">I don&apos;t know</button>
+              <span className="text-xs text-muted">Attempt {attempts} of 3</span>
             </>
           ) : (
-            <button type="button" onClick={nextExercise} className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
-              Continuar
-            </button>
+            <button type="button" onClick={nextItem} disabled={completing} className="student-button-primary px-4 py-3 text-sm disabled:opacity-60">{index + 1 >= items.length ? (completing ? "Finishing..." : "See summary") : "Continue"}</button>
           )}
         </div>
       </SectionCard>

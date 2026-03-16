@@ -114,11 +114,37 @@ function CloseIcon() {
   );
 }
 
-function MouseIcon() {
+function HandSelectIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4">
-      <rect x="6" y="2.75" width="8" height="14.5" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M10 2.75v5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path
+        d="M8.2 9.2V4.8a1.1 1.1 0 1 1 2.2 0v3.6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10.4 8.1V4.2a1.05 1.05 0 1 1 2.1 0V8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12.5 8.7V5.3a1 1 0 1 1 2 0v5.1c0 2.9-1.9 5.2-4.6 5.2-1.9 0-3.2-1-4-2.8l-1.1-2.5a1.15 1.15 0 0 1 2.05-.99l.95 1.8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7 9.4V6.2a1.05 1.05 0 1 1 2.1 0v3.2"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -136,8 +162,8 @@ function MoreIcon() {
 function buttonBaseClass(active = false, compact = false) {
   return `inline-flex items-center justify-center gap-2 border font-semibold uppercase tracking-[0.18em] transition ${
     active
-      ? "border-white/20 bg-white/10 text-white"
-      : "border-white/10 bg-white/[0.04] text-white/72 hover:border-white/18 hover:bg-white/[0.08] hover:text-white"
+      ? "border-white/12 bg-white/[0.08] text-white"
+      : "border-transparent bg-transparent text-white/72 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white"
   } ${compact ? "h-9 w-9 text-[10px]" : "h-10 w-10 text-[11px]"}`;
 }
 
@@ -148,7 +174,7 @@ function ActionButton({ active = false, compact = false, className = "", ...prop
       data-reader-ignore-keys="true"
       {...props}
       className={`${buttonBaseClass(active, compact)} ${className}`.trim()}
-      style={{ borderRadius: "14px", ...(props.style || {}) }}
+      style={{ borderRadius: "12px", ...(props.style || {}) }}
     />
   );
 }
@@ -175,7 +201,7 @@ export default function FlipbookControlsBar({
   onTtsPlay,
   onTtsPause,
   onTtsResume,
-  onTtsStop,
+  onTtsClosePanel,
   onTtsToggleSelectionMode,
 }) {
   const [openPanel, setOpenPanel] = useState("");
@@ -237,11 +263,11 @@ export default function FlipbookControlsBar({
 
   const panelShellStyle = useMemo(
     () => ({
-      background: "var(--flipbook-toolbar-bg)",
-      borderColor: "var(--flipbook-toolbar-border)",
+      background: "rgba(7, 8, 10, 0.72)",
+      borderColor: "rgba(255, 255, 255, 0.08)",
       color: "var(--flipbook-toolbar-text)",
-      boxShadow: "0 22px 60px rgba(0, 0, 0, 0.42)",
-      backdropFilter: "blur(18px)",
+      boxShadow: "0 14px 34px rgba(0, 0, 0, 0.24)",
+      backdropFilter: "blur(14px)",
     }),
     []
   );
@@ -249,15 +275,15 @@ export default function FlipbookControlsBar({
   return (
     <div
       ref={rootRef}
-      className={`pointer-events-none absolute inset-x-2 bottom-2 z-20 transition duration-300 sm:inset-x-4 sm:bottom-4 ${
+      className={`pointer-events-none relative z-20 w-full transition duration-300 ${
         chromeVisible ? "translate-y-0 opacity-100" : "translate-y-6 opacity-0"
       }`}
       aria-hidden={!chromeVisible}
     >
-      <div className={`pointer-events-auto mx-auto w-full ${isMobile ? "max-w-[96vw]" : "max-w-[860px]"}`}>
+      <div className="pointer-events-auto mx-auto w-full">
         {openPanel === "toc" ? (
           <div
-            className={`mb-2 overflow-hidden rounded-[18px] border ${isMobile ? "max-h-[38vh] w-full" : "w-[22rem]"}`}
+            className={`mb-2 overflow-hidden rounded-[14px] border ${isMobile ? "max-h-[38vh] w-full" : "w-[24rem]"}`}
             style={panelShellStyle}
           >
             <div className={`${isMobile ? "px-3 py-2.5" : "px-4 py-3"} border-b border-white/10`}>
@@ -277,7 +303,7 @@ export default function FlipbookControlsBar({
                         setOpenPanel("");
                       }}
                       className={`flex w-full items-start gap-3 px-3 py-2.5 text-left text-sm transition ${
-                        active ? "bg-white/10 text-white" : "text-white/72 hover:bg-white/6 hover:text-white"
+                        active ? "bg-white/[0.08] text-white" : "text-white/72 hover:bg-white/[0.04] hover:text-white"
                       }`}
                       style={{ paddingLeft: `${0.9 + Math.min(Number(item.depth) || 0, 4) * 0.85}rem`, borderRadius: "12px" }}
                     >
@@ -295,7 +321,7 @@ export default function FlipbookControlsBar({
 
         {openPanel === "themes" ? (
           <div
-            className={`mb-2 overflow-hidden rounded-[18px] border ${isMobile ? "w-full" : "ml-auto w-[19rem]"}`}
+            className={`mb-2 overflow-hidden rounded-[14px] border ${isMobile ? "w-full" : "ml-auto w-[19rem]"}`}
             style={panelShellStyle}
           >
             <div className={`${isMobile ? "px-3 py-2.5" : "px-4 py-3"} border-b border-white/10`}>
@@ -311,9 +337,9 @@ export default function FlipbookControlsBar({
                     type="button"
                     onClick={() => onThemeChange?.(option.id)}
                     className={`border px-3 py-2 text-xs font-semibold transition ${
-                      active ? "border-white/18 bg-white/12 text-white" : "border-white/10 bg-white/5 text-white/72 hover:bg-white/9 hover:text-white"
+                      active ? "border-white/12 bg-white/[0.08] text-white" : "border-white/[0.06] bg-white/[0.03] text-white/72 hover:bg-white/[0.06] hover:text-white"
                     }`}
-                    style={{ borderRadius: "12px" }}
+                      style={{ borderRadius: "12px" }}
                   >
                     {option.label}
                   </button>
@@ -325,7 +351,7 @@ export default function FlipbookControlsBar({
 
         {openPanel === "more" && isCompactToolbar ? (
           <div
-            className="mb-2 w-full overflow-hidden rounded-[18px] border"
+            className="mb-2 w-full overflow-hidden rounded-[14px] border"
             style={panelShellStyle}
           >
             <div className="border-b border-white/10 px-3 py-2.5">
@@ -338,7 +364,7 @@ export default function FlipbookControlsBar({
                 onClick={() => {
                   setOpenPanel("themes");
                 }}
-                className="inline-flex min-h-11 items-center justify-between gap-3 rounded-[12px] border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/82 transition hover:bg-white/10"
+                className="inline-flex min-h-11 items-center justify-between gap-3 rounded-[12px] border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-sm font-semibold text-white/82 transition hover:bg-white/[0.06]"
               >
                 <span>Themes</span>
                 <ThemeIcon />
@@ -346,7 +372,7 @@ export default function FlipbookControlsBar({
               <button
                 type="button"
                 onClick={onToggleSound}
-                className="inline-flex min-h-11 items-center justify-between gap-3 rounded-[12px] border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/82 transition hover:bg-white/10"
+                className="inline-flex min-h-11 items-center justify-between gap-3 rounded-[12px] border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-sm font-semibold text-white/82 transition hover:bg-white/[0.06]"
               >
                 <span>Page sound</span>
                 <span className="inline-flex items-center gap-2">
@@ -358,7 +384,7 @@ export default function FlipbookControlsBar({
                 <button
                   type="button"
                   onClick={onToggleFullscreen}
-                  className="inline-flex min-h-11 items-center justify-between gap-3 rounded-[12px] border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/82 transition hover:bg-white/10"
+                  className="inline-flex min-h-11 items-center justify-between gap-3 rounded-[12px] border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-sm font-semibold text-white/82 transition hover:bg-white/[0.06]"
                 >
                   <span>Fullscreen</span>
                   <span className="inline-flex items-center gap-2">
@@ -373,7 +399,7 @@ export default function FlipbookControlsBar({
 
         {openPanel === "tts" && ttsEnabled ? (
           <div
-            className={`mb-2 overflow-hidden rounded-[18px] border ${isMobile ? "w-full" : "ml-auto w-[17rem]"}`}
+            className={`mb-2 overflow-hidden rounded-[14px] border ${isMobile ? "w-full" : "ml-auto w-[17rem]"}`}
             style={panelShellStyle}
           >
             <div className={`${isMobile ? "px-3 py-2.5" : "px-4 py-3"} border-b border-white/10`}>
@@ -381,7 +407,7 @@ export default function FlipbookControlsBar({
               <p className={`mt-1 text-white/78 ${isMobile ? "text-xs" : "text-sm"}`}>Choose a voice for read aloud.</p>
             </div>
             <div className={`${isMobile ? "px-3 py-3" : "px-4 py-4"} space-y-2`}>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 gap-2">
                 {ttsVoices.map((voice) => {
                   const active = voice.id === tts?.voiceId;
                   return (
@@ -392,12 +418,12 @@ export default function FlipbookControlsBar({
                         onTtsVoiceChange?.(voice.id);
                         setOpenPanel("");
                       }}
-                      className={`border px-3 py-2 text-xs font-semibold transition ${
-                        active ? "border-white/18 bg-white/12 text-white" : "border-white/10 bg-white/5 text-white/72 hover:bg-white/9 hover:text-white"
+                      className={`border px-3 py-2 text-left text-xs font-semibold transition ${
+                        active ? "border-white/12 bg-white/[0.08] text-white" : "border-white/[0.06] bg-white/[0.03] text-white/72 hover:bg-white/[0.06] hover:text-white"
                       }`}
                       style={{ borderRadius: "12px" }}
                     >
-                      {voice.label}
+                      {voice.displayLabel || voice.label}
                     </button>
                   );
                 })}
@@ -409,13 +435,13 @@ export default function FlipbookControlsBar({
         {showTtsControls ? (
           <div className="mb-2 flex justify-center">
             <div
-              className={`pointer-events-auto inline-flex items-center gap-2 border px-2 py-2 ${isMobile ? "max-w-[92vw]" : ""}`}
-              style={{ ...panelShellStyle, borderRadius: "16px" }}
+              className={`pointer-events-auto inline-flex items-center gap-2 border px-2 py-2 ${isMobile ? "max-w-full" : ""}`}
+              style={{ ...panelShellStyle, borderRadius: "14px" }}
             >
               <button
                 type="button"
                 onClick={canResumeTts ? onTtsResume : canPauseTts ? onTtsPause : onTtsPlay}
-                className="inline-flex h-9 w-9 items-center justify-center border border-white/10 bg-white/5 text-white/82 transition hover:bg-white/10"
+                className="inline-flex h-9 w-9 items-center justify-center border border-white/[0.06] bg-white/[0.03] text-white/82 transition hover:bg-white/[0.06]"
                 style={{ borderRadius: "12px" }}
                 aria-label={canResumeTts ? "Resume read aloud" : canPauseTts ? "Pause read aloud" : "Play read aloud"}
               >
@@ -426,20 +452,24 @@ export default function FlipbookControlsBar({
                 onClick={onTtsToggleSelectionMode}
                 className={`inline-flex h-9 w-9 items-center justify-center border transition ${
                   ttsSelectionMode
-                    ? "border-white/18 bg-white/12 text-white"
-                    : "border-white/10 bg-white/5 text-white/82 hover:bg-white/10"
+                    ? "border-white/12 bg-white/[0.08] text-white"
+                    : "border-white/[0.06] bg-white/[0.03] text-white/82 hover:bg-white/[0.06]"
                 }`}
                 style={{ borderRadius: "12px" }}
-                aria-label="Pick paragraph to read aloud"
+                aria-label="Toggle paragraph tap mode"
+                title={ttsSelectionMode ? "Paragraph tap mode enabled" : "Enable paragraph tap mode"}
               >
-                <MouseIcon />
+                <HandSelectIcon />
               </button>
               <button
                 type="button"
-                onClick={onTtsStop}
-                className="inline-flex h-9 w-9 items-center justify-center border border-white/10 bg-white/5 text-white/82 transition hover:bg-white/10"
+                onClick={() => {
+                  setOpenPanel("");
+                  onTtsClosePanel?.();
+                }}
+                className="inline-flex h-9 w-9 items-center justify-center border border-white/[0.06] bg-white/[0.03] text-white/82 transition hover:bg-white/[0.06]"
                 style={{ borderRadius: "12px" }}
-                aria-label="Stop read aloud"
+                aria-label="Close read aloud controls"
               >
                 <CloseIcon />
               </button>
@@ -448,13 +478,13 @@ export default function FlipbookControlsBar({
         ) : null}
 
         <div
-          className={`flex items-center gap-2 rounded-[20px] border px-2 py-2 ${isMobile ? "pl-2 pr-2" : "pl-2.5 pr-2.5"}`}
+          className={`flex items-center gap-2 rounded-[14px] border px-2 py-2 ${isMobile ? "pl-2 pr-2" : "pl-2.5 pr-2.5"}`}
           style={{
-            background: "var(--flipbook-toolbar-bg)",
-            borderColor: "var(--flipbook-toolbar-border)",
+            background: "transparent",
+            borderColor: "transparent",
             color: "var(--flipbook-toolbar-text)",
-            boxShadow: "0 16px 44px rgba(0, 0, 0, 0.32)",
-            backdropFilter: "blur(18px)",
+            boxShadow: "none",
+            backdropFilter: "none",
           }}
         >
           <div className="flex items-center gap-2">
@@ -468,8 +498,8 @@ export default function FlipbookControlsBar({
               <span className="truncate">{visiblePageNumber == null ? "Cover" : isMobile ? "Reading" : "Book progress"}</span>
               <span>{pageProgressLabel}</span>
             </div>
-            <div className={`overflow-hidden bg-white/10 ${isMobile ? "mt-1 h-[5px]" : "mt-1.5 h-1.5"}`} style={{ borderRadius: "999px" }}>
-              <div className="h-full bg-white/85 transition-[width] duration-300 ease-out" style={{ width: `${Math.max(0, Math.min(100, Number(progressPercent) || 0))}%`, borderRadius: "999px" }} />
+            <div className={`overflow-hidden bg-white/[0.08] ${isMobile ? "mt-1 h-[5px]" : "mt-1.5 h-1.5"}`} style={{ borderRadius: "999px" }}>
+              <div className="h-full bg-white/80 transition-[width] duration-300 ease-out" style={{ width: `${Math.max(0, Math.min(100, Number(progressPercent) || 0))}%`, borderRadius: "999px" }} />
             </div>
           </div>
 

@@ -26,26 +26,26 @@ function normalizeCourseLevel(raw) {
 
 function parseCourseLevel(raw) {
   const normalized = normalizeCourseLevel(raw);
-  if (!normalized) return { tier: "Avanzado", code: "C1", normalized: null };
+  if (!normalized) return { tier: "Advanced", code: "C1", normalized: null };
 
   const codeMatch = normalized.match(/[ABC]\d/);
   const code = codeMatch ? codeMatch[0] : null;
-  let tier = "Avanzado";
+  let tier = "Advanced";
 
   if (normalized.includes("BASICO")) {
-    tier = "Basico";
+    tier = "Basic";
   } else if (normalized.includes("INTERMEDIO")) {
-    tier = "Intermedio";
+    tier = "Intermediate";
   }
 
   return { tier, code, normalized };
 }
 
 function formatMonthYear(value) {
-  if (!value) return "Por definir";
+  if (!value) return "TBD";
   const date = value instanceof Date ? value : parseDateOnly(value) || new Date(value);
-  if (Number.isNaN(date.getTime())) return "Por definir";
-  return new Intl.DateTimeFormat("es", {
+  if (Number.isNaN(date.getTime())) return "TBD";
+  return new Intl.DateTimeFormat("en-US", {
     month: "short",
     year: "numeric",
     timeZone: LIMA_TIME_ZONE,
@@ -85,15 +85,15 @@ function limaPartsToUtcDate({ year, month, day, hour = 0, minute = 0 }) {
 }
 
 function formatDaysFull(days) {
-  if (!Array.isArray(days) || !days.length) return "Dias por definir";
+  if (!Array.isArray(days) || !days.length) return "Days TBD";
   const map = {
-    1: "Lunes",
-    2: "Martes",
-    3: "Miercoles",
-    4: "Jueves",
-    5: "Viernes",
-    6: "Sabado",
-    7: "Domingo",
+    1: "Monday",
+    2: "Tuesday",
+    3: "Wednesday",
+    4: "Thursday",
+    5: "Friday",
+    6: "Saturday",
+    7: "Sunday",
   };
   return days.map((day) => map[day] || day).join(", ");
 }
@@ -232,14 +232,14 @@ function computeProgressFromSchedule({ startDate, endDate, daysOfWeek, startTime
 }
 
 function formatNextClass(date) {
-  if (!date) return "Por definir";
-  const dateLabel = new Intl.DateTimeFormat("es", {
+  if (!date) return "TBD";
+  const dateLabel = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     day: "2-digit",
     month: "short",
     timeZone: LIMA_TIME_ZONE,
   }).format(date);
-  const timeLabel = new Intl.DateTimeFormat("es", {
+  const timeLabel = new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     timeZone: LIMA_TIME_ZONE,
@@ -270,12 +270,7 @@ export default async function StudentDashboard() {
     .eq("id", user.id)
     .maybeSingle();
 
-  const isNonStudent = role === USER_ROLES.NON_STUDENT;
-  if (isNonStudent) {
-    redirect("/app/matricula?locked=1");
-  }
-
-  const name = profile?.full_name || user.user_metadata?.full_name || user.email || "Estudiante";
+  const name = profile?.full_name || user.user_metadata?.full_name || user.email || "Student";
   const commission = profile?.commission || null;
   const todayIso = getLimaTodayISO();
   const commissionStatus = commission ? resolveCommissionStatus(commission, todayIso) : "inactive";
@@ -346,8 +341,9 @@ export default async function StudentDashboard() {
   ];
   const levelInfo = parseCourseLevel(resolvedCourseLevel);
   const courseTitle = hasActiveEnrollment && resolvedCourseLevel
-    ? `English ${levelInfo.code || "C1"} (Nivel ${levelInfo.tier})`
-    : "Sin curso asignado";
+    ? `English ${levelInfo.code || "C1"}`
+    : "No active course assigned";
+  const courseStageLabel = hasActiveEnrollment ? resolvedCourseLevel || `${levelInfo.tier} track` : "Enrollment required";
 
   const courseProgress = hasActiveEnrollment
     ? computeProgressFromSchedule({
@@ -360,14 +356,14 @@ export default async function StudentDashboard() {
   const globalProgress = courseProgress;
   const remainingProgress = clamp(100 - globalProgress, 0, 100);
 
-  const startLabel = hasActiveEnrollment && derivedStartDate ? formatMonthYear(derivedStartDate) : "Por definir";
-  const endLabel = hasActiveEnrollment && derivedEndDate ? formatMonthYear(derivedEndDate) : "Por definir";
+  const startLabel = hasActiveEnrollment && derivedStartDate ? formatMonthYear(derivedStartDate) : "TBD";
+  const endLabel = hasActiveEnrollment && derivedEndDate ? formatMonthYear(derivedEndDate) : "TBD";
 
   const scheduleRange = hasActiveEnrollment && commission?.start_time && commission?.end_time
-    ? `${commission.start_time} a ${commission.end_time}`
-    : "Horario por definir";
+    ? `${commission.start_time} to ${commission.end_time}`
+    : "Hours TBD";
 
-  const classDays = hasActiveEnrollment ? formatDaysFull(commission?.days_of_week) : "Dias por definir";
+  const classDays = hasActiveEnrollment ? formatDaysFull(commission?.days_of_week) : "Days TBD";
 
   const nextClassDate = hasActiveEnrollment
     ? derivedNextClassDate ||
@@ -380,132 +376,195 @@ export default async function StudentDashboard() {
     : null;
 
   return (
-    <section className="space-y-8 text-foreground">
-      {isNonStudent ? (
-        <div className="rounded-3xl border border-primary/40 bg-primary/10 p-6">
-          <p className="text-xs uppercase tracking-[0.3em] text-primary">No matriculado</p>
-          <h3 className="mt-2 text-2xl font-semibold text-foreground">Completa tu matricula</h3>
-          <p className="mt-2 text-sm text-muted">
-            Tu cuenta esta activa, pero aun no tienes un curso asignado. Completa el proceso para acceder a Mi curso.
-          </p>
-          <Link
-            href="/app/matricula"
-            className="mt-4 inline-flex rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2"
-          >
-            Ir a Mi Matricula
-          </Link>
-        </div>
-      ) : null}
-      <div className="flex flex-col gap-2">
-        <p className="text-sm uppercase tracking-[0.35em] text-muted">Inicio</p>
-        <h2 className="text-3xl font-semibold">Hola, {name}!</h2>
-        <p className="text-sm text-muted">
-          Este es tu panel de progreso. Encuentra todo lo que necesitas para mantener tu ritmo de estudio.
-        </p>
-      </div>
-
-      <div className="grid gap-6">
-        <div className="rounded-3xl border border-border bg-surface p-6 shadow-2xl shadow-black/35">
-          <div className="flex flex-wrap items-start justify-between gap-6">
-            <div className="space-y-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-muted">Tu curso actual</p>
-                <h3 className="mt-2 text-2xl font-semibold">{courseTitle}</h3>
-                {hasActiveEnrollment && commission?.commission_number ? (
-                  <p className="mt-1 text-xs text-muted">Comision #{commission.commission_number}</p>
-                ) : null}
-              </div>
-              <div>
-                <p className="text-sm text-muted">
-                  {hasActiveEnrollment ? `${courseProgress}% completado` : "No tienes un curso activo aun"}
-                </p>
-                <div className="mt-2 h-2.5 w-full max-w-md rounded-full bg-surface-2">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
-                    style={{ width: `${courseProgress}%` }}
-                  />
-                </div>
-              </div>
+    <section className="space-y-6 text-foreground">
+      <header className="student-panel px-5 py-5 sm:px-6">
+        <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
+          <div>
+            <p className="text-xs uppercase tracking-[0.38em] text-muted">Dashboard</p>
+            <h1 className="mt-2 text-3xl font-semibold text-foreground">Welcome back, {name}.</h1>
+            <p className="mt-2 max-w-2xl text-sm text-muted">
+              Track your current course, upcoming class, academic path, and core skills from one place.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="student-panel-soft px-4 py-4">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Current level</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{hasActiveEnrollment ? courseStageLabel : "Pending"}</p>
             </div>
-
-            <div className="flex w-full max-w-sm flex-col gap-4 rounded-2xl border border-border bg-surface-2 p-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-muted">Proxima clase</p>
-                <p className="mt-1 text-sm text-foreground">{formatNextClass(nextClassDate)}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-muted">Rango del curso</p>
-                <p className="mt-1 text-sm text-foreground">Del {startLabel} al {endLabel}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-muted">Dias y horario</p>
-                <p className="mt-1 text-sm text-foreground">{classDays} - {scheduleRange}</p>
-              </div>
-              <div className="mt-1 grid gap-2">
-                <Link
-                  href="/app/curso"
-                  className={`inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                    hasActiveEnrollment
-                      ? "bg-primary text-primary-foreground hover:bg-primary-2"
-                      : "pointer-events-none border border-border bg-surface text-muted"
-                  }`}
-                >
-                  Ir al curso
-                </Link>
-              </div>
+            <div className="student-panel-soft px-4 py-4">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Next class</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{nextClassDate ? "Scheduled" : "Waiting"}</p>
+            </div>
+            <div className="student-panel-soft px-4 py-4">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Progress</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{hasActiveEnrollment ? `${courseProgress}%` : "Locked"}</p>
             </div>
           </div>
         </div>
+      </header>
 
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="rounded-3xl border border-border bg-surface p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-muted">Mi ruta de aprendizaje</p>
-                <h3 className="mt-2 text-xl font-semibold">Progreso hacia avanzado</h3>
-              </div>
-              <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs text-muted">
-                {remainingProgress}% restante
+      <div className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
+        <article className="student-panel px-5 py-5 sm:px-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-muted">Current course</p>
+              <h2 className="mt-2 text-3xl font-semibold text-foreground">{courseTitle}</h2>
+              <p className="mt-2 text-sm text-muted">{courseStageLabel}</p>
+            </div>
+            {hasActiveEnrollment && commission?.commission_number ? (
+              <span className="rounded-[10px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+                Commission #{commission.commission_number}
               </span>
+            ) : null}
+          </div>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            <div className="student-panel-soft px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.24em] text-muted">Course window</p>
+              <p className="mt-2 text-sm font-medium text-foreground">{startLabel} to {endLabel}</p>
+            </div>
+            <div className="student-panel-soft px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.24em] text-muted">Study days</p>
+              <p className="mt-2 text-sm font-medium text-foreground">{classDays}</p>
+            </div>
+            <div className="student-panel-soft px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.24em] text-muted">Schedule</p>
+              <p className="mt-2 text-sm font-medium text-foreground">{scheduleRange}</p>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-[12px] border border-[rgba(16,52,116,0.1)] bg-[#f7faff] px-4 py-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium text-foreground">Course completion</span>
+              <span className="font-semibold text-foreground">{hasActiveEnrollment ? `${courseProgress}%` : "Locked"}</span>
+            </div>
+            <div className="mt-3 h-2.5 w-full rounded-full bg-surface-2">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
+                style={{ width: `${courseProgress}%` }}
+              />
             </div>
             <p className="mt-3 text-sm text-muted">
-              Te falta {remainingProgress}% para llegar a Avanzado.
+              {hasActiveEnrollment
+                ? "Your current commission is active and ready to continue."
+                : "Complete enrollment to unlock your current course workspace."}
             </p>
-            <div className="mt-4 h-3 w-full rounded-full bg-surface-2">
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link href={hasActiveEnrollment ? "/app/curso" : "/app/matricula"} className="student-button-primary px-4 py-2.5 text-sm">
+              {hasActiveEnrollment ? "Go to course" : "Open enrollment"}
+            </Link>
+            <Link href="/app/ruta-academica" className="student-button-secondary px-4 py-2.5 text-sm">
+              View academic path
+            </Link>
+          </div>
+        </article>
+
+        <aside className="student-panel px-5 py-5 sm:px-6">
+          <div className="student-panel-soft px-4 py-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-muted">Next class</p>
+            <h2 className="mt-2 text-2xl font-semibold text-foreground">{formatNextClass(nextClassDate)}</h2>
+            <p className="mt-2 text-sm text-muted">
+              {hasActiveEnrollment
+                ? "Keep your schedule visible and jump straight into the live course workspace."
+                : "Your next live class will appear here once your enrollment is active."}
+            </p>
+          </div>
+
+          <div className="mt-5 grid gap-3">
+            <div className="student-panel-soft px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.24em] text-muted">Course access</p>
+              <p className="mt-2 text-sm font-medium text-foreground">{hasActiveEnrollment ? "Open and available" : "Pending enrollment"}</p>
+            </div>
+            <div className="student-panel-soft px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.24em] text-muted">Recommendation</p>
+              <p className="mt-2 text-sm text-foreground">
+                {hasActiveEnrollment ? "Review the class list and upcoming materials before your next session." : "Complete enrollment first to unlock classes and recordings."}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3">
+            <Link
+              href={hasActiveEnrollment ? "/app/curso" : "/app/matricula"}
+              className={`inline-flex items-center justify-center rounded-[12px] px-4 py-2.5 text-sm font-semibold transition ${
+                hasActiveEnrollment
+                  ? "bg-primary text-primary-foreground hover:bg-primary-2"
+                  : "border border-[rgba(15,23,42,0.1)] bg-white text-[#103474] hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+              }`}
+            >
+              {hasActiveEnrollment ? "Go to course" : "Open enrollment"}
+            </Link>
+          </div>
+        </aside>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <article className="student-panel px-5 py-5 sm:px-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-muted">Academic path</p>
+              <h2 className="mt-2 text-2xl font-semibold text-foreground">Progress toward the next level</h2>
+            </div>
+            <span className="rounded-[10px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
+              {remainingProgress}% remaining
+            </span>
+          </div>
+          <p className="mt-3 text-sm text-muted">
+            Use your current course progress as a quick reference for how far you are from the next stage.
+          </p>
+
+          <div className="mt-5 rounded-[12px] border border-[rgba(16,52,116,0.1)] bg-[#f7faff] px-4 py-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted">Progress map</span>
+              <span className="font-semibold text-foreground">{globalProgress}%</span>
+            </div>
+            <div className="mt-3 h-3 w-full rounded-full bg-surface-2">
               <div
                 className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
                 style={{ width: `${globalProgress}%` }}
               />
             </div>
-            <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted">
-              {"Basico,Intermedio,Avanzado".split(",").map((level) => (
-                <span key={level} className="rounded-full border border-border px-3 py-1">
-                  {level}
-                </span>
-              ))}
-            </div>
           </div>
 
-          <div className="rounded-3xl border border-border bg-surface p-6">
-            <p className="text-xs uppercase tracking-[0.3em] text-muted">Tus habilidades</p>
-            <div className="mt-4 space-y-4">
-              {skillCards.map((skill) => (
-                <div key={skill.label} className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-foreground">{skill.label}</span>
-                    <span className="text-muted">{skill.value == null ? "--" : `${Math.round(skill.value)}%`}</span>
-                  </div>
-                  <div className="h-2 w-full rounded-full bg-surface-2">
-                    <div
-                      className="h-full rounded-full bg-primary"
-                      style={{ width: `${skill.value ?? 0}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            {["Basic", "Intermediate", "Advanced"].map((level) => (
+              <span key={level} className="student-panel-soft px-4 py-3 text-sm font-medium text-foreground">
+                {level}
+              </span>
+            ))}
           </div>
-        </div>
+          <div className="mt-5">
+            <Link href="/app/ruta-academica" className="student-button-secondary px-4 py-2.5 text-sm">
+              View academic path
+            </Link>
+          </div>
+        </article>
+
+        <article className="student-panel px-5 py-5 sm:px-6">
+          <p className="text-xs uppercase tracking-[0.3em] text-muted">Skills snapshot</p>
+          <h2 className="mt-2 text-2xl font-semibold text-foreground">Current performance</h2>
+          <p className="mt-2 text-sm text-muted">
+            Review the latest combined indicators for your core language skills.
+          </p>
+          <div className="mt-5 space-y-3">
+            {skillCards.map((skill) => (
+              <div key={skill.label} className="student-panel-soft px-4 py-4">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-foreground">{skill.label}</span>
+                  <span className="text-muted">{skill.value == null ? "--" : `${Math.round(skill.value)}%`}</span>
+                </div>
+                <div className="mt-3 h-2 w-full rounded-full bg-white">
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${skill.value ?? 0}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
       </div>
     </section>
   );

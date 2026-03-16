@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { strToU8, zipSync } from "fflate";
-import { buildSessionPlan } from "../lib/duolingo/session-generator.js";
+import { buildPracticeSessionPlan, buildSessionPlan } from "../lib/duolingo/session-generator.js";
 import { computeSpacedRepetitionUpdate, qualityFromAttempt } from "../lib/duolingo/sr.js";
+import { buildLevelProgress } from "../lib/gamification/levels.js";
+import { WEEKLY_QUEST_METRICS } from "../lib/competition/constants.js";
+import { getQuestIncrement } from "../lib/competition/quests.js";
+import { calculateCompetitionPoints, getNextTierFromSnapshot } from "../lib/competition/scoring.js";
 import {
   normalizeStudentCodeCore,
   resolveExistingStudentRecord,
@@ -33,22 +37,15 @@ import {
   serializeLibraryReadState,
 } from "../lib/library/read-state.js";
 import {
-  applyLibrarySavedBookmarkState,
-  getLibraryBookmarkSavedText,
-  getLibraryBookmarkValidationError,
-  getLibraryFloatingBookmarkPanelClasses,
-  toggleLibraryReaderFullscreen,
-} from "../lib/library/reader-ui.js";
-import {
   buildLibraryEpubProgressLabel,
   canUseLibraryReaderArrowKeys,
+  canUseLibraryReaderPlaybackKey,
   clampLibraryEpubFontScale,
   flattenLibraryTocItems,
   resolveLibraryEpubDisplayMode,
   resolveLibraryEpubPageKind,
   resolveLibraryEpubPageState,
   resolveLibraryEpubVisiblePageNumbers,
-  shouldShowLibraryBookmarkPanel,
 } from "../lib/library/epub-reader-ui.js";
 import {
   buildLibraryTtsPlaybackQueue,
@@ -225,6 +222,141 @@ await run("session generator uses only published", () => {
   assert.equal(ids.includes("ex-2"), false);
 });
 
+await run("practice session planner can target weakness and scenario modes", () => {
+  const exercises = [
+    { id: "weak-1", type: "scramble", status: "published", skill_tag: "grammar", cefr_level: "A1", practice_enabled: true, content_json: {}, ordering: 1, scenario_tags: [] },
+    { id: "weak-2", type: "cloze", status: "published", skill_tag: "grammar", cefr_level: "A1", practice_enabled: true, content_json: {}, ordering: 2, scenario_tags: [] },
+    { id: "scenario-1", type: "audio_match", status: "published", skill_tag: "listening", cefr_level: "A2", practice_enabled: true, content_json: {}, ordering: 3, scenario_tags: ["airport"] },
+  ];
+  const progressRows = [
+    { exercise_id: "weak-1", is_correct: false, attempts: 3, last_quality: 1, next_due_at: "2026-02-20T00:00:00.000Z", times_seen: 3, times_correct: 1 },
+    { exercise_id: "weak-2", is_correct: true, attempts: 1, last_quality: 5, next_due_at: "2026-03-30T00:00:00.000Z", times_seen: 2, times_correct: 2 },
+  ];
+
+  const weakness = buildPracticeSessionPlan({
+    exercises,
+    progressRows,
+    now: new Date("2026-03-16T12:00:00.000Z"),
+    mode: "weakness",
+    size: 2,
+  });
+  assert.equal(weakness.items[0].source_reason, "weakness");
+
+  const scenario = buildPracticeSessionPlan({
+    exercises,
+    progressRows: [],
+    now: new Date("2026-03-16T12:00:00.000Z"),
+    mode: "scenario",
+    size: 2,
+    filters: { scenario: "airport" },
+  });
+  assert.equal(scenario.items.length, 1);
+  assert.equal(scenario.items[0].id, "scenario-1");
+  assert.equal(scenario.items[0].source_reason, "scenario");
+});
+
+await run("gamification level progress remains deterministic", () => {
+  assert.deepEqual(buildLevelProgress(0), {
+    lifetimeXp: 0,
+    level: 1,
+    currentLevelStartXp: 0,
+    nextLevelXp: 100,
+    xpIntoLevel: 0,
+    xpToNextLevel: 100,
+    progressPercent: 0,
+  });
+  assert.equal(buildLevelProgress(235).level, 3);
+  assert.equal(buildLevelProgress(235).xpToNextLevel, 170);
+});
+
+await run("competition tier progression respects promotion and demotion snapshots", () => {
+  assert.equal(getNextTierFromSnapshot(null), "bronze");
+  assert.equal(
+    getNextTierFromSnapshot({
+      league_tier: "bronze",
+      promotion_state: "promoted",
+    }),
+    "silver"
+  );
+  assert.equal(
+    getNextTierFromSnapshot({
+      league_tier: "gold",
+      promotion_state: "demoted",
+    }),
+    "silver"
+  );
+  assert.equal(
+    getNextTierFromSnapshot({
+      league_tier: "diamond",
+      promotion_state: "hold",
+    }),
+    "diamond"
+  );
+});
+
+await run("competition scoring favors meaningful sessions and scales down suspicious runs", () => {
+  const meaningfulPractice = calculateCompetitionPoints({
+    source: "practice",
+    mode: "weakness",
+    xpEarned: 44,
+    answeredItems: 12,
+    correctItems: 10,
+    accuracyPercent: 83,
+    listeningItemsCompleted: 4,
+    timeSpentSec: 120,
+  });
+  assert.equal(meaningfulPractice.meaningful, true);
+  assert.equal(meaningfulPractice.practiceSessionsCompleted, 1);
+  assert.equal(meaningfulPractice.weaknessSessionsCompleted, 1);
+  assert.ok(meaningfulPractice.weeklyPoints > 0);
+
+  const suspiciousFlashcards = calculateCompetitionPoints({
+    source: "flashcards",
+    mode: "writing_sprint",
+    xpEarned: 28,
+    totalPrompts: 10,
+    correctAnswers: 9,
+    accuracyPercent: 90,
+    durationSec: 8,
+  });
+  assert.equal(suspiciousFlashcards.meaningful, true);
+  assert.equal(suspiciousFlashcards.suspiciouslyFast, true);
+  assert.ok(suspiciousFlashcards.weeklyPoints < 20);
+  assert.equal(suspiciousFlashcards.flashcardWritingAnswersCompleted, 10);
+});
+
+await run("weekly quests increment only from matching competition activity", () => {
+  const activity = {
+    practiceSessionsCompleted: 1,
+    listeningItemsCompleted: 6,
+    weaknessSessionsCompleted: 1,
+    flashcardWritingAnswersCompleted: 8,
+    weeklyXpEarned: 120,
+  };
+
+  assert.equal(
+    getQuestIncrement({ metric_type: WEEKLY_QUEST_METRICS.PRACTICE_SESSIONS_COMPLETED }, activity),
+    1
+  );
+  assert.equal(
+    getQuestIncrement({ metric_type: WEEKLY_QUEST_METRICS.PRACTICE_LISTENING_ITEMS_COMPLETED }, activity),
+    6
+  );
+  assert.equal(
+    getQuestIncrement({ metric_type: WEEKLY_QUEST_METRICS.PRACTICE_WEAKNESS_SESSIONS_COMPLETED }, activity),
+    1
+  );
+  assert.equal(
+    getQuestIncrement({ metric_type: WEEKLY_QUEST_METRICS.FLASHCARD_WRITING_ANSWERS_COMPLETED }, activity),
+    8
+  );
+  assert.equal(
+    getQuestIncrement({ metric_type: WEEKLY_QUEST_METRICS.WEEKLY_XP_EARNED }, activity),
+    120
+  );
+  assert.equal(getQuestIncrement({ metric_type: "unknown_metric" }, activity), 0);
+});
+
 await run("spaced repetition quality and interval", () => {
   assert.equal(qualityFromAttempt({ isCorrect: true, attempts: 1 }), 5);
   const failed = computeSpacedRepetitionUpdate({
@@ -360,8 +492,14 @@ await run("gutenberg imports become student-readable when an epub upload exists"
 });
 
 await run("library tts voice mapping and sentence chunking stay deterministic", () => {
-  assert.equal(resolveLibraryTtsVoice("jenny").label, "Jenny");
+  assert.equal(resolveLibraryTtsVoice("jenny").id, "en_gb-aru-medium:03(0)");
+  assert.equal(resolveLibraryTtsVoice("jenny").label, "en_GB-aru-medium 03(0) [Jenny]");
+  assert.equal(resolveLibraryTtsVoice("jenny").displayLabel, "Jenny");
+  assert.equal(resolveLibraryTtsVoice("jhon").id, "en_gb-aru-medium:12(8)");
+  assert.equal(resolveLibraryTtsVoice("jhon").label, "en_GB-aru-medium 12(8) [Jhon]");
+  assert.equal(resolveLibraryTtsVoice("jhon").displayLabel, "Jhon");
   assert.equal(resolveLibraryTtsVoice("unknown").label, "Alba");
+  assert.equal(resolveLibraryTtsVoice("unknown").displayLabel, "Alba");
   assert.equal(normalizeLibraryTtsText("  Hello   world.\nHow are you? "), "Hello world. How are you?");
   assert.equal(sanitizeLibraryTtsText("Hello\u0000 world \udc9d again"), "Hello world again");
   assert.deepEqual(splitLibraryTtsSentences("Hello world. How are you?"), [
@@ -370,11 +508,17 @@ await run("library tts voice mapping and sentence chunking stay deterministic", 
   ]);
 
   const queue = buildLibraryTtsPlaybackQueue([
-    { id: "seg-1", text: "Hello world. How are you?" },
+    { id: "seg-1", text: "Hello, world; how are you?" },
   ]);
-  assert.equal(queue.length, 1);
+  assert.equal(queue.length, 3);
   assert.equal(queue[0].segmentId, "seg-1");
   assert.equal(queue[0].highlightMode, "paragraph");
+  assert.equal(queue[0].text, "Hello,");
+  assert.equal(queue[0].pauseAfterMs, 700);
+  assert.equal(queue[1].text, "world;");
+  assert.equal(queue[1].pauseAfterMs, 1000);
+  assert.equal(queue[2].text, "how are you?");
+  assert.equal(queue[2].pauseAfterMs, 1500);
 });
 
 await run("admin import search keeps only readable source candidates", () => {
@@ -728,87 +872,73 @@ await run("detail page resume hint reflects the saved page", () => {
   assert.equal(buildLibraryResumeHint(170), "Resume from page 170");
 });
 
-await run("fullscreen button toggles wrapper fullscreen state", async () => {
-  let fullscreenElement = null;
-  const element = {
-    async requestFullscreen() {
-      fullscreenElement = element;
-    },
-  };
-  const documentRef = {
-    fullscreenEnabled: true,
-    get fullscreenElement() {
-      return fullscreenElement;
-    },
-    async exitFullscreen() {
-      fullscreenElement = null;
+await run("reader keyboard helpers support playback space and ignore typing contexts", () => {
+  const baseTarget = {
+    tagName: "DIV",
+    isContentEditable: false,
+    closest() {
+      return null;
     },
   };
 
-  const entered = await toggleLibraryReaderFullscreen({ element, documentRef });
-  const exited = await toggleLibraryReaderFullscreen({ element, documentRef });
-
-  assert.equal(entered, true);
-  assert.equal(exited, false);
-  assert.equal(documentRef.fullscreenElement, null);
-});
-
-await run("floating bookmark panel renders on reader page", () => {
-  const classes = getLibraryFloatingBookmarkPanelClasses({ isMobile: false, isFullscreen: false });
-  assert.match(classes, /\bfixed\b/);
-  assert.match(classes, /\bbottom-/);
-  assert.match(classes, /\bright-/);
-});
-
-await run("saved page appears in floating panel", () => {
-  assert.equal(getLibraryBookmarkSavedText(170), "Saved page: 170");
-});
-
-await run("saved bookmark label falls back when only reader code exists", () => {
-  assert.equal(getLibraryBookmarkSavedText(null, "leaf12"), "Saved bookmark");
-});
-
-await run("page input validates positive integers", () => {
-  assert.equal(getLibraryBookmarkValidationError(12), "");
-  assert.equal(getLibraryBookmarkValidationError(0), "Page number must be a positive integer.");
-  assert.equal(getLibraryBookmarkValidationError("abc"), "Page number must be a positive integer.");
-  assert.equal(getLibraryBookmarkValidationError("", { detectedPageCode: "leaf12" }), "");
-});
-
-await run("save bookmark updates UI and persisted state", () => {
-  const nextState = applyLibrarySavedBookmarkState(
-    {
-      savedPageNumber: null,
-      savedPageCode: "",
-      startedReading: false,
-      inMyLibrary: true,
-    },
-    {
-      pageNumber: 170,
-      pageCode: "page/n12/mode/2up",
-    }
+  assert.equal(
+    canUseLibraryReaderPlaybackKey({
+      key: " ",
+      code: "Space",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      target: baseTarget,
+    }),
+    true
   );
-
-  assert.equal(nextState.savedPageNumber, 170);
-  assert.equal(nextState.savedPageCode, "page/n12/mode/2up");
-  assert.equal(nextState.startedReading, true);
+  assert.equal(
+    canUseLibraryReaderPlaybackKey({
+      key: " ",
+      code: "Space",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      target: {
+        ...baseTarget,
+        tagName: "INPUT",
+      },
+    }),
+    false
+  );
+  assert.equal(
+    canUseLibraryReaderArrowKeys({
+      key: "ArrowLeft",
+      code: "",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      target: baseTarget,
+    }),
+    true
+  );
 });
 
-await run("floating panel remains visible in fullscreen mode", () => {
-  const classes = getLibraryFloatingBookmarkPanelClasses({ isMobile: false, isFullscreen: true });
-  assert.match(classes, /\bfixed\b/);
-  assert.match(classes, /\bz-30\b/);
+await run("flipbook page sound defaults on and uses a louder layered rustle", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+  const readerUiSource = readFileSync(new URL("../lib/library/epub-reader-ui.js", import.meta.url), "utf8");
+
+  assert.match(shellSource, /const FLIPBOOK_SOUND_STORAGE_KEY = "library\.flipbook\.sound\.v2";/);
+  assert.match(shellSource, /const \[soundEnabled, setSoundEnabled\] = useState\(true\);/);
+  assert.match(shellSource, /const storedSound = window\.localStorage\.getItem\(FLIPBOOK_SOUND_STORAGE_KEY\);/);
+  assert.match(shellSource, /setSoundEnabled\(storedSound == null \? true : storedSound === "1"\);/);
+  assert.match(readerUiSource, /volume = 0\.24/);
+  assert.match(readerUiSource, /const rustleSource = context\.createBufferSource\(\);/);
+  assert.match(readerUiSource, /rustleSource\.start\(now \+ 0\.014\);/);
 });
 
-await run("mobile layout does not break with panel visible", () => {
-  const classes = getLibraryFloatingBookmarkPanelClasses({ isMobile: true, isFullscreen: false });
-  assert.match(classes, /\bright-4\b/);
-  assert.match(classes, /\bbottom-4\b/);
-});
+await run("flipbook shell only treats flips as redundant against the previous committed page state", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
 
-await run("epub readers hide the sticky bookmark panel", () => {
-  assert.equal(shouldShowLibraryBookmarkPanel({ type: "epub" }), false);
-  assert.equal(shouldShowLibraryBookmarkPanel({ type: "archive_embed" }), true);
+  assert.match(shellSource, /const previousSpreadPageIndex = spreadAnchorPageIndexRef\.current;/);
+  assert.match(shellSource, /const previousCurrentPageIndex = currentPageIndexRef\.current;/);
+  assert.match(shellSource, /leftPageIndex === previousSpreadPageIndex/);
+  assert.match(shellSource, /nextPageIndex === previousCurrentPageIndex/);
 });
 
 await run("epub toc flattening keeps nested sections", () => {
@@ -1378,17 +1508,59 @@ await run("flipbook ignores intermediate flip events while a pending chapter jum
 
 await run("flipbook book frame forwards window context and page-set callbacks to the adapter", () => {
   const frameSource = readFileSync(new URL("../components/flipbook/book-frame.js", import.meta.url), "utf8");
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
 
   assert.match(frameSource, /windowStart = 0,/);
+  assert.match(frameSource, /globalVisualPageIndex = 0,/);
+  assert.match(frameSource, /totalPageCount = 0,/);
   assert.match(frameSource, /onPageSet,/);
   assert.match(frameSource, /windowStart=\{windowStart\}/);
   assert.match(frameSource, /onPageSet=\{onPageSet\}/);
   assert.match(frameSource, /pointerEvents: navigationLocked \? "none" : "auto"/);
+  assert.match(shellSource, /globalVisualPageIndex=\{visualPageIndex\}/);
+  assert.match(shellSource, /totalPageCount=\{renderPages\.length\}/);
+});
+
+await run("flipbook book frame adds central drag gesture zones without replacing edge drag", () => {
+  const frameSource = readFileSync(new URL("../components/flipbook/book-frame.js", import.meta.url), "utf8");
+
+  assert.match(frameSource, /const dragGestureRef = useRef\(null\)/);
+  assert.match(frameSource, /onRequestPageTurn\?\.\("next"\)/);
+  assert.match(frameSource, /onRequestPageTurn\?\.\("previous"\)/);
+  assert.match(frameSource, /className=\{`flipbook-drag-gesture-zone left \$\{isPortrait \? "single" : "spread"\}`\}/);
+  assert.match(frameSource, /className=\{`flipbook-drag-gesture-zone right \$\{isPortrait \? "single" : "spread"\}`\}/);
+});
+
+await run("flipbook book frame renders page stacks that grow left and shrink right across reading progress", () => {
+  const frameSource = readFileSync(new URL("../components/flipbook/book-frame.js", import.meta.url), "utf8");
+
+  assert.match(frameSource, /const pagesReadRamp = Math\.min\(1, Math\.max\(0, Number\(globalVisualPageIndex\) \|\| 0\) \/ 64\)/);
+  assert.match(frameSource, /const pagesRemainingRamp = Math\.min\(/);
+  assert.match(frameSource, /const leftStackWeight = Math\.max\(readingProgress, pagesReadRamp\)/);
+  assert.match(frameSource, /const rightStackWeight = Math\.max\(1 - readingProgress, pagesRemainingRamp\)/);
+  assert.match(frameSource, /className="flipbook-reading-frame-stack left"/);
+  assert.match(frameSource, /className="flipbook-reading-frame-stack right"/);
+  assert.match(frameSource, /\.flipbook-reading-frame-stack\.left::before/);
+  assert.match(frameSource, /\.flipbook-reading-frame-stack\.right::before/);
+  assert.match(frameSource, /overflow: "visible"/);
+  assert.match(frameSource, /rotateY\(34deg\)/);
+  assert.match(frameSource, /rotateY\(-34deg\)/);
+  assert.match(frameSource, /\.flipbook-reading-frame-gutter \{/);
+});
+
+await run("flipbook shell keeps manual page arrows enabled across desktop and mobile layouts", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.match(shellSource, /showPageArrows/);
+  assert.match(shellSource, /showPageArrows\s*$/m);
+  assert.doesNotMatch(shellSource, /showPageArrows=\{!isMobile\}/);
 });
 
 await run("flipbook adapter config disables click to turn, corners, and preserves drag support", () => {
   const adapterSource = readFileSync(new URL("../components/flipbook/flip-animation-adapter.js", import.meta.url), "utf8");
-  assert.match(adapterSource, /disableFlipByClick:\s*false/);
+  assert.match(adapterSource, /mobileScrollSupport:\s*false/);
+  assert.match(adapterSource, /useMouseEvents:\s*true/);
+  assert.match(adapterSource, /disableFlipByClick:\s*true/);
   assert.match(adapterSource, /showPageCorners:\s*false/);
 });
 
@@ -1402,6 +1574,94 @@ await run("flipbook shell clips the page-flip host and internal wrappers to avoi
   assert.match(shellSource, /\.stf__wrapper \{\s*position: relative;\s*width: 100%;\s*height: 100%;/);
   assert.match(shellSource, /\.stf__block \{\s*position: absolute;\s*inset: 0;\s*width: 100%;\s*height: 100%;/);
   assert.match(shellSource, /\.stf__item \{\s*overflow: hidden;\s*user-select: none;\s*-webkit-user-select: none;/);
+  assert.match(shellSource, /\.flipbook-page-sheet \{[\s\S]*pointer-events: none;/);
+  assert.match(shellSource, /\.flipbook-selection-mode \.flipbook-page-sheet,[\s\S]*pointer-events: auto;/);
+});
+
+await run("flipbook stage uses exact-fit chrome insets instead of free-floating padding", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.match(shellSource, /const FULL_STAGE_HEIGHT = "100%";/);
+  assert.match(shellSource, /const FLIPBOOK_STAGE_TOP_CHROME_HEIGHT = "clamp\([^)]+\)";/);
+  assert.match(shellSource, /const FLIPBOOK_STAGE_BOTTOM_CHROME_HEIGHT = "clamp\([^)]+\)";/);
+  assert.match(shellSource, /<FlipbookControlsBar \{\.\.\.controlsBarProps\} \/>/);
+  assert.match(shellSource, /top: FLIPBOOK_STAGE_TOP_CHROME_HEIGHT,/);
+  assert.match(shellSource, /bottom: FLIPBOOK_STAGE_BOTTOM_CHROME_HEIGHT,/);
+  assert.match(shellSource, /backgroundColor: "#000000"/);
+  assert.doesNotMatch(shellSource, /pb-24 pt-14/);
+});
+
+await run("flipbook route is no longer public and student shell becomes reader-aware", () => {
+  const proxySource = readFileSync(new URL("../proxy.js", import.meta.url), "utf8");
+  const layoutSource = readFileSync(new URL("../app/app/layout.js", import.meta.url), "utf8");
+  const shellSource = readFileSync(new URL("../components/app-shell.js", import.meta.url), "utf8");
+  const headerSource = readFileSync(new URL("../components/main-header.js", import.meta.url), "utf8");
+
+  assert.doesNotMatch(proxySource, /x-public-flipbook/);
+  assert.match(proxySource, /x-library-flipbook-route/);
+  assert.doesNotMatch(layoutSource, /isPublicFlipbookRoute/);
+  assert.match(layoutSource, /isFlipbookRoute/);
+  assert.match(shellSource, /pathname\?\.startsWith\("\/app\/library\/flipbook\/"\)/);
+  assert.match(shellSource, /overflow-y-hidden/);
+  assert.match(shellSource, /compact=\{isFlipbookRoute\}/);
+  assert.match(headerSource, /compact = false/);
+  assert.match(headerSource, /compact \? "py-2\.5" : "py-3 sm:px-5"/);
+});
+
+await run("flipbook tts only enters paragraph mode after voice choice and keeps playback controls keyboard-aware", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  const ttsEnabledEffectMatch = shellSource.match(/useEffect\(\(\) => \{\s*if \(!ttsEnabled\) \{[\s\S]*?\n  \}, \[stopTtsPlayback, ttsControlsVisible, ttsEnabled, ttsSelectionMode\]\);/);
+  assert.ok(ttsEnabledEffectMatch, "The shell should keep a dedicated ttsEnabled effect");
+  assert.doesNotMatch(ttsEnabledEffectMatch[0], /setTtsSelectionMode\(true\)/);
+  assert.doesNotMatch(ttsEnabledEffectMatch[0], /setTtsControlsVisible\(true\)/);
+  assert.match(shellSource, /onTtsVoiceChange: \(voiceId\) => \{[\s\S]*setTtsControlsVisible\(true\);[\s\S]*setTtsSelectionMode\(true\);/);
+  assert.match(shellSource, /Tap a paragraph to start reading from there\./);
+  assert.match(shellSource, /const selectedSegmentId = String\(ttsSelectedSegment\?\.id \|\| ""\);/);
+  assert.match(shellSource, /canUseLibraryReaderPlaybackKey\(event\)/);
+  assert.match(shellSource, /requestPageTurn\(deltaY > 0 \? "next" : "previous"\)/);
+});
+
+await run("legacy epub reader stack has been removed while redirect routes remain", () => {
+  const readRouteSource = readFileSync(new URL("../app/app/library/read/[slug]/page.js", import.meta.url), "utf8");
+  const epubRouteSource = readFileSync(new URL("../app/app/library/epub/[slug]/page.js", import.meta.url), "utf8");
+
+  assert.match(readRouteSource, /redirect\(`\/app\/library\/flipbook\/\$\{params\?\.slug\}`\)/);
+  assert.match(epubRouteSource, /redirect\(`\/app\/library\/flipbook\/\$\{params\?\.slug\}`\)/);
+  assert.equal(existsSync(new URL("../components/library-reader-shell.js", import.meta.url)), false);
+  assert.equal(existsSync(new URL("../components/library-epub-reader.js", import.meta.url)), false);
+  assert.equal(existsSync(new URL("../app/api/library/books/[slug]/read/route.js", import.meta.url)), false);
+});
+
+await run("flipbook themes default the stage to black while keeping readable chrome", () => {
+  const themeSource = readFileSync(new URL("../lib/flipbook-core/themes.js", import.meta.url), "utf8");
+
+  assert.match(themeSource, /stageBackground: "#000000"/);
+  assert.match(themeSource, /toolbarBackground: "rgba\(/);
+  assert.match(themeSource, /stageHeaderBackground: "rgba\(/);
+});
+
+await run("flipbook reader removes the internal header and keeps attached controls", () => {
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+  const controlsSource = readFileSync(new URL("../components/flipbook/controls-bar.js", import.meta.url), "utf8");
+
+  assert.doesNotMatch(shellSource, /FlipbookHeader/);
+  assert.match(controlsSource, /className=\{`pointer-events-none relative z-20 w-full transition duration-300/);
+  assert.doesNotMatch(controlsSource, /absolute inset-x-2 bottom-2/);
+});
+
+await run("flipbook tts controls use a hand-select icon, human labels, and an explicit close callback", () => {
+  const controlsSource = readFileSync(new URL("../components/flipbook/controls-bar.js", import.meta.url), "utf8");
+  const shellSource = readFileSync(new URL("../components/flipbook/flipbook-shell.js", import.meta.url), "utf8");
+
+  assert.match(controlsSource, /function HandSelectIcon\(/);
+  assert.doesNotMatch(controlsSource, /function MouseIcon\(/);
+  assert.match(controlsSource, /voice\.displayLabel \|\| voice\.label/);
+  assert.match(controlsSource, /onTtsClosePanel\?\.\(\)/);
+  assert.match(shellSource, /const handleTtsClosePanel = useCallback\(\(\) => \{/);
+  assert.match(shellSource, /setTtsControlsVisible\(false\);/);
+  assert.match(shellSource, /setTtsSelectionMode\(false\);/);
+  assert.match(shellSource, /setTtsMessage\(""\);/);
 });
 
 await run("flipbook adapter emits window-aware flip and page-set payloads", () => {
@@ -1489,15 +1749,44 @@ await run("flipbook page chrome skips cover and formats content pages", () => {
         flags: { isSyntheticCover: false },
       },
       bookTitle: "Test Flipbook",
-      chapterLabel: "",
+      chapterLabel: "Chapter One",
+      presentationMode: "spread",
     }),
     {
-      headerLeft: "Test Flipbook",
-      headerRight: "Test Flipbook",
+      headerLeft: "Chapter One",
+      headerRight: "",
       footerLeft: "EnglishMate Library",
       footerRight: "3",
     }
   );
+
+  assert.deepEqual(
+    buildFlipbookPageChrome({
+      page: {
+        pageIndex: 4,
+        flags: { isSyntheticCover: false },
+      },
+      bookTitle: "Test Flipbook",
+      chapterLabel: "Chapter One",
+      presentationMode: "spread",
+    }),
+    {
+      headerLeft: "",
+      headerRight: "Test Flipbook",
+      footerLeft: "EnglishMate Library",
+      footerRight: "4",
+    }
+  );
+});
+
+await run("flipbook detail page promotes reading CTA and keeps my-library as a lighter action", () => {
+  const detailSource = readFileSync(new URL("../app/app/library/book/[slug]/page.js", import.meta.url), "utf8");
+
+  assert.match(detailSource, /showBookmarkIcon/);
+  assert.match(detailSource, /labelOut="Add to my library"/);
+  assert.match(detailSource, /"Continue reading" : "Read book"/);
+  assert.doesNotMatch(detailSource, /book\.tags\.map/);
+  assert.doesNotMatch(detailSource, /Open flipbook/);
 });
 
 await run("flipbook primary reading page prefers explicit and then right page in spreads", () => {

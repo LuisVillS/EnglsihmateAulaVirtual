@@ -4,14 +4,15 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
+import AdminSideDrawer from "@/components/admin-side-drawer";
 
 const SKILL_ORDER = ["speaking", "reading", "grammar", "listening", "vocabulary"];
 const SKILL_LABELS = {
-  speaking: "Speaking",
-  reading: "Reading",
-  grammar: "Grammar",
-  listening: "Listening",
-  vocabulary: "Vocabulary",
+  speaking: "Expresion oral",
+  reading: "Lectura",
+  grammar: "Gramatica",
+  listening: "Escucha",
+  vocabulary: "Vocabulario",
 };
 
 const MENU_WIDTH = 190;
@@ -237,26 +238,18 @@ function RowActionsMenu({ studentId, onEdit }) {
 
 function SkillsPanel({ student, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/45">
-      <button type="button" className="flex-1 cursor-default" onClick={onClose} aria-label="Cerrar panel habilidades" />
-      <aside className="safe-area-bottom w-full max-w-md border-l border-border bg-surface shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.22em] text-muted">Habilidades</p>
-            <h3 className="mt-1 text-lg font-semibold text-foreground">{student?.full_name || "Alumno"}</h3>
-            <p className="text-xs text-muted">{student?.student_code || "Sin codigo"}</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-foreground hover:border-primary"
-          >
-            Cerrar
-          </button>
-        </div>
+    <AdminSideDrawer
+      open={Boolean(student)}
+      onClose={onClose}
+      title={student?.full_name || "Alumno"}
+      description={student?.student_code || "Detalle de habilidades"}
+      widthClass="max-w-[420px]"
+    >
+      <div className="space-y-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#94a3b8]">Desempeno por habilidad</p>
         <SkillDetailsList student={student} />
-      </aside>
-    </div>
+      </div>
+    </AdminSideDrawer>
   );
 }
 
@@ -326,22 +319,19 @@ function GradePanel({ student, onClose, onSaved }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/45">
-      <button type="button" className="flex-1 cursor-default" onClick={onClose} aria-label="Cerrar panel" />
-      <aside className="safe-area-bottom w-full max-w-md border-l border-border bg-surface p-5 shadow-2xl">
-        <div className="flex items-start justify-between gap-4">
+    <AdminSideDrawer
+      open={Boolean(student)}
+      onClose={onClose}
+      title={student?.full_name || "Alumno"}
+      description={student?.student_code || "Ajuste manual de notas"}
+      widthClass="max-w-[460px]"
+    >
+      <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.22em] text-muted">Editar notas</p>
             <h3 className="mt-1 text-lg font-semibold text-foreground">{student.full_name}</h3>
             <p className="text-xs text-muted">{student.student_code || "Sin codigo"}</p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-foreground hover:border-primary"
-          >
-            Cerrar
-          </button>
         </div>
 
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
@@ -401,8 +391,7 @@ function GradePanel({ student, onClose, onSaved }) {
             {pending ? "Guardando..." : "Guardar"}
           </button>
         </form>
-      </aside>
-    </div>
+    </AdminSideDrawer>
   );
 }
 
@@ -420,10 +409,10 @@ export default function TeacherDashboardStudentsTable({ students = [] }) {
   );
 
   return (
-    <div className="rounded-3xl border border-border bg-surface p-5">
+    <div className="rounded-[26px] border border-[rgba(15,23,42,0.08)] bg-white p-4 shadow-[0_16px_32px_rgba(15,23,42,0.05)]">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-muted">Alumnos</p>
+          <p className="text-xs uppercase tracking-[0.24em] text-muted">Seguimiento</p>
           <h3 className="text-xl font-semibold text-foreground">Resumen por estudiante</h3>
         </div>
         <p className="text-sm text-muted">{students.length} registro(s)</p>
@@ -431,7 +420,7 @@ export default function TeacherDashboardStudentsTable({ students = [] }) {
 
       <div className="relative overflow-visible">
         <div className="overflow-x-auto overflow-y-visible">
-        <table className="w-full min-w-[900px] border-separate border-spacing-y-1 text-sm md:min-w-[1080px]">
+        <table className="w-full min-w-[900px] border-separate border-spacing-y-1.5 text-sm md:min-w-[1080px]">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wide text-muted">
               <th className="min-w-[220px] px-3 py-2">Alumno</th>
@@ -451,21 +440,21 @@ export default function TeacherDashboardStudentsTable({ students = [] }) {
                 .join(" · ");
 
               return (
-                <tr key={student.id} className="align-middle transition-colors hover:bg-surface-2/40">
-                  <td className="min-w-[220px] rounded-l-xl bg-surface-2/20 px-3 py-3 align-middle">
+                <tr key={student.id} className="align-middle transition-colors hover:bg-[#f8fbff]">
+                  <td className="min-w-[220px] rounded-l-2xl bg-[#f8fafc] px-3 py-3 align-middle">
                     <p className="font-semibold text-foreground">{student.full_name}</p>
                     <p className="text-xs text-muted">{student.student_code || "Sin codigo"}</p>
                   </td>
-                  <td className="min-w-[170px] bg-surface-2/20 px-3 py-3 align-middle text-muted">
+                  <td className="min-w-[170px] bg-[#f8fafc] px-3 py-3 align-middle text-muted">
                     {student.commission_label || "Sin comision"}
                   </td>
-                  <td className="w-[90px] bg-surface-2/20 px-3 py-3 align-middle text-foreground">{student.current_level || "--"}</td>
-                  <td className="w-[110px] bg-surface-2/20 px-3 py-3 align-middle">
+                  <td className="w-[90px] bg-[#f8fafc] px-3 py-3 align-middle text-foreground">{student.current_level || "--"}</td>
+                  <td className="w-[110px] bg-[#f8fafc] px-3 py-3 align-middle">
                     <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusBadge(student.status)}`}>
                       {student.status === "active" ? "Activo" : "Inactivo"}
                     </span>
                   </td>
-                  <td className="w-[130px] bg-surface-2/20 px-3 py-3 align-middle">
+                  <td className="w-[130px] bg-[#f8fafc] px-3 py-3 align-middle">
                     <div className="min-w-[84px]">
                       <p className="text-base font-semibold text-foreground">{formatScore(student.course_average)}</p>
                       <div className="mt-1 h-[3px] overflow-hidden rounded-full bg-surface">
@@ -476,7 +465,7 @@ export default function TeacherDashboardStudentsTable({ students = [] }) {
                       </div>
                     </div>
                   </td>
-                  <td className="w-[320px] max-w-[420px] bg-surface-2/20 px-3 py-3 align-middle">
+                  <td className="w-[320px] max-w-[420px] bg-[#f8fafc] px-3 py-3 align-middle">
                     <div className="flex min-w-0 items-center gap-2">
                       {skillSummary.hasData ? (
                         <>
@@ -511,7 +500,7 @@ export default function TeacherDashboardStudentsTable({ students = [] }) {
                       )}
                     </div>
                   </td>
-                  <td className="w-[90px] rounded-r-xl bg-surface-2/20 px-3 py-3 align-middle text-right">
+                  <td className="w-[90px] rounded-r-2xl bg-[#f8fafc] px-3 py-3 align-middle text-right">
                     <RowActionsMenu studentId={student.id} onEdit={() => setEditingStudentId(student.id)} />
                   </td>
                 </tr>

@@ -187,7 +187,7 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
 
     const word = String(formValues.word || "").trim();
     if (!word) {
-      setClientError("Ingresa el word antes de generar audio.");
+      setClientError("Ingresa la palabra antes de generar audio.");
       setClientMessage("");
       return;
     }
@@ -276,17 +276,17 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="mt-2 w-full rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground"
-              placeholder="Word o meaning"
+              placeholder="Palabra o significado"
             />
           </div>
           <p className="text-sm text-muted">
-            Administra la biblioteca central y reutiliza las tarjetas por referencia en plantillas y comisiones.
+            Gestiona el inventario central y reutiliza tarjetas en plantillas y comisiones.
           </p>
         </div>
         <div className="rounded-3xl border border-primary/20 bg-primary/5 p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Biblioteca</p>
           <p className="mt-2 text-3xl font-semibold text-foreground">{cards.length}</p>
-          <p className="text-sm text-muted">flashcard(s) registradas</p>
+          <p className="text-sm text-muted">tarjeta(s) registradas</p>
           <button
             suppressHydrationWarning
             type="button"
@@ -307,7 +307,7 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={card.image}
-                    alt={card.word || "Flashcard image"}
+                    alt={card.word || "Imagen de flashcard"}
                     className="h-full w-full rounded-2xl object-contain"
                   />
                 ) : (
@@ -316,8 +316,8 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
               </div>
               <div className="space-y-3 border-t border-border px-5 py-4">
                 <div>
-                  <p className="text-lg font-semibold text-foreground">{card.word || "Sin word"}</p>
-                  <p className="text-sm text-muted">{card.meaning || "Sin meaning"}</p>
+                  <p className="text-lg font-semibold text-foreground">{card.word || "Sin palabra"}</p>
+                  <p className="text-sm text-muted">{card.meaning || "Sin significado"}</p>
                 </div>
                 <div className="grid gap-2 text-xs text-muted">
                   <p>
@@ -371,7 +371,7 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1">
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Word</label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Palabra</label>
               <input
                 suppressHydrationWarning
                 name="word"
@@ -383,7 +383,7 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Meaning</label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Significado</label>
               <input
                 suppressHydrationWarning
                 name="meaning"
@@ -442,10 +442,10 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
           </div>
 
           <div className="rounded-2xl border border-border bg-surface-2 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Compatibilidad audio</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Compatibilidad de audio</p>
             <div className="mt-3 grid gap-4 md:grid-cols-2">
               <div className="space-y-1">
-                <label className="text-xs font-semibold uppercase tracking-wide text-muted">audioUrl</label>
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">URL de audio</label>
                 <input
                   suppressHydrationWarning
                   name="audioUrl"
@@ -456,7 +456,7 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-semibold uppercase tracking-wide text-muted">voiceId</label>
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Voice ID</label>
                 <input
                   suppressHydrationWarning
                   name="voiceId"
@@ -479,7 +479,7 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
               </button>
             </div>
             <div className="mt-4 space-y-1">
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted">audioProvider</label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Proveedor de audio</label>
               <input
                 suppressHydrationWarning
                 name="audioProvider"
@@ -490,7 +490,7 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
               />
             </div>
             <div className="mt-4 space-y-1">
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted">elevenLabsConfig (JSON)</label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Configuracion de ElevenLabs (JSON)</label>
               <textarea
                 suppressHydrationWarning
                 name="elevenLabsConfig"
@@ -518,7 +518,7 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
               disabled={pending}
               className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {pending ? "Guardando..." : formValues.flashcardId ? "Guardar cambios" : "Crear flashcard"}
+              {pending ? "Guardando..." : formValues.flashcardId ? "Guardar cambios" : "Crear tarjeta"}
             </button>
           </div>
         </form>

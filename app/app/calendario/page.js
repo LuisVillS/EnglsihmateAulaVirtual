@@ -147,7 +147,7 @@ export default async function CalendarRoute() {
   const commissionStatus = commission ? resolveCommissionStatus(commission, todayIso) : "inactive";
   if (!commission?.id || commissionStatus !== "active") {
     return (
-      <section className="rounded-3xl border border-border bg-surface p-6 text-foreground">
+      <section className="student-panel px-5 py-5 text-foreground sm:px-6">
         <h2 className="text-2xl font-semibold">Calendario academico</h2>
         <p className="mt-2 text-sm text-muted">No tienes un curso activo aun.</p>
       </section>

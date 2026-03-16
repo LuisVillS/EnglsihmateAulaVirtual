@@ -11,6 +11,8 @@ export const runtime = "nodejs";
 export async function POST(request, { params: paramsPromise }) {
   try {
     const params = await paramsPromise;
+    const auth = await requireLibraryStudentRouteAccess();
+    if (auth.errorResponse) return auth.errorResponse;
     const body = await request.json().catch(() => ({}));
     const voice = resolveLibraryTtsVoice(body?.voiceId);
     const text = String(body?.text || "").trim();
@@ -20,7 +22,12 @@ export async function POST(request, { params: paramsPromise }) {
     }
 
     const session = verifyFlipbookSessionToken(body?.sessionToken);
-    if (session.valid && session.slug === params?.slug && session.ttsEnabled) {
+    if (
+      session.valid &&
+      session.slug === params?.slug &&
+      session.ttsEnabled &&
+      session.userId === auth.user?.id
+    ) {
       const audioBuffer = await generateLibraryPiperSpeech({
         voiceId: voice.id,
         text,
@@ -35,12 +42,6 @@ export async function POST(request, { params: paramsPromise }) {
         },
       });
     }
-
-    const auth = await requireLibraryStudentRouteAccess({
-      allowAdmin: true,
-      allowGuest: true,
-    });
-    if (auth.errorResponse) return auth.errorResponse;
 
     const book = await getPublishedLibraryBookBySlug({
       db: auth.db,

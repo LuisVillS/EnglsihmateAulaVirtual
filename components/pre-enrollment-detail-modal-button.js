@@ -143,7 +143,7 @@ export default function PreEnrollmentDetailModalButton({
             <div className="grid gap-5 md:grid-cols-2">
               <DetailCard title="Estado">
                 <p>ID: <span className="font-semibold">{preEnrollment?.id || "-"}</span></p>
-                <p>Status: <span className="font-semibold">{formatStatus(preEnrollment?.status)}</span></p>
+                <p>Estado: <span className="font-semibold">{formatStatus(preEnrollment?.status)}</span></p>
                 <p>Paso: <span className="font-semibold">{formatStep(preEnrollment?.step)}</span></p>
                 <p>Periodo: <span className="font-semibold">{preEnrollment?.period || "-"}</span></p>
                 <p>Creado: <span className="font-semibold">{formatDateTime(preEnrollment?.created_at)}</span></p>

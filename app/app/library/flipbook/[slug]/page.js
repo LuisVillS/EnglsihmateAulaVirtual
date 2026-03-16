@@ -8,10 +8,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function LibraryFlipbookReadPage({ params: paramsPromise, searchParams: searchParamsPromise }) {
-  const { supabase, user, isGuest } = await requireStudentLibraryPageAccess({
-    allowGuest: true,
-    allowAdmin: true,
-  });
+  const { supabase, user, isGuest } = await requireStudentLibraryPageAccess();
   const params = await paramsPromise;
   await searchParamsPromise;
 

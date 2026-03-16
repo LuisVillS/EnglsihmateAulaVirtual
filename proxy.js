@@ -23,19 +23,21 @@ function shouldBypassProxy(request) {
   return false;
 }
 
-function withPublicFlipbookHeader(request) {
+function buildRequestHeaders(request, { isFlipbookRoute = false } = {}) {
   const requestHeaders = new Headers(request.headers);
-  requestHeaders.set("x-public-flipbook", "1");
-  return NextResponse.next({
+  if (isFlipbookRoute) {
+    requestHeaders.set("x-library-flipbook-route", "1");
+  } else {
+    requestHeaders.delete("x-library-flipbook-route");
+  }
+  return requestHeaders;
+}
+
+async function updateSession(request, requestHeaders = request.headers) {
+  let response = NextResponse.next({
     request: {
       headers: requestHeaders,
     },
-  });
-}
-
-async function updateSession(request) {
-  let response = NextResponse.next({
-    request,
   });
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
@@ -49,7 +51,9 @@ async function updateSession(request) {
         });
 
         response = NextResponse.next({
-          request,
+          request: {
+            headers: requestHeaders,
+          },
         });
 
         cookiesToSet.forEach(({ name, value, options }) => {
@@ -71,23 +75,26 @@ async function updateSession(request) {
 }
 
 export async function proxy(request) {
+  const isFlipbookRoute = request.nextUrl.pathname.startsWith("/app/library/flipbook/");
+  const requestHeaders = buildRequestHeaders(request, { isFlipbookRoute });
+
   if (!supabaseUrl || !supabaseAnonKey) {
     return NextResponse.next({
-      request,
+      request: {
+        headers: requestHeaders,
+      },
     });
-  }
-
-  if (request.nextUrl.pathname.startsWith("/app/library/flipbook/")) {
-    return withPublicFlipbookHeader(request);
   }
 
   if (shouldBypassProxy(request) || !hasSupabaseAuthCookie(request)) {
     return NextResponse.next({
-      request,
+      request: {
+        headers: requestHeaders,
+      },
     });
   }
 
-  return updateSession(request);
+  return updateSession(request, requestHeaders);
 }
 
 export const config = {

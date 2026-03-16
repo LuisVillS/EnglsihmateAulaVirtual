@@ -496,7 +496,7 @@ export default async function CourseGatePage() {
   const commissionStatus = commission ? resolveCommissionStatus(commission, todayIso) : "inactive";
   if (!commission?.id || commissionStatus !== "active") {
     return (
-      <section className="rounded-3xl border border-border bg-surface p-6 text-foreground">
+      <section className="student-panel p-6 text-foreground">
         <h2 className="text-2xl font-semibold">Mi curso</h2>
         <p className="mt-2 text-sm text-muted">No tienes un curso activo aun.</p>
       </section>
@@ -713,7 +713,7 @@ export default async function CourseGatePage() {
   return (
     <section className="space-y-6 text-foreground">
       <CourseBreadcrumbs items={[{ label: "Curso", href: "/app/curso" }]} />
-      <header className="rounded-3xl border border-border bg-surface p-6 shadow-sm">
+      <header className="student-panel px-5 py-5 sm:px-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-2">
             <p className="text-xs uppercase tracking-[0.35em] text-muted">Comision {commission.commission_number}</p>
@@ -726,15 +726,15 @@ export default async function CourseGatePage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
+            <span className="inline-flex rounded-[999px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
               Aula Virtual
             </span>
             {profile?.is_premium ? (
-              <span className="rounded-full border border-accent/35 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
+              <span className="inline-flex rounded-[999px] border border-accent/35 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
                 Premium
               </span>
             ) : (
-              <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
+              <span className="inline-flex rounded-[999px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
                 Regular
               </span>
             )}
@@ -743,7 +743,7 @@ export default async function CourseGatePage() {
       </header>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <article className="rounded-3xl border border-border bg-surface p-5 shadow-sm">
+        <article className="student-panel px-5 py-5 shadow-none">
           <p className="text-xs uppercase tracking-[0.3em] text-muted">Notas</p>
           <p className="mt-3 text-4xl font-black text-primary">{gradeLabel}</p>
           <p className="mt-2 text-xs text-muted">{gradeHint}</p>
@@ -756,10 +756,10 @@ export default async function CourseGatePage() {
           </p>
         </article>
 
-        <article className="rounded-3xl border border-border bg-surface p-5 shadow-sm">
+        <article className="student-panel px-5 py-5 shadow-none">
           <p className="text-xs uppercase tracking-[0.3em] text-muted">Certificado</p>
           <div className="mt-3 flex items-center gap-3">
-            <span className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface-2 text-muted">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-[12px] border border-border bg-surface-2 text-muted">
               <LockIcon />
             </span>
             <div>
@@ -770,7 +770,7 @@ export default async function CourseGatePage() {
           <button
             type="button"
             disabled
-            className="mt-4 rounded-full border border-border px-4 py-2 text-sm font-semibold text-muted disabled:cursor-not-allowed"
+            className="mt-4 inline-flex items-center justify-center rounded-[12px] border border-border px-4 py-2 text-sm font-semibold text-muted disabled:cursor-not-allowed"
           >
             Descargar certificado
           </button>

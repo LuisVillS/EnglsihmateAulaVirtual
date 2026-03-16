@@ -1,6 +1,15 @@
 import Link from "next/link";
 import { requireAdminPageAccess } from "@/lib/admin/access";
 import {
+  AdminBadge,
+  AdminCard,
+  AdminPage as AdminPageLayout,
+  AdminPageHeader,
+  AdminSectionHeader,
+  AdminStatCard,
+  AdminStatsGrid,
+} from "@/components/admin-page";
+import {
   promoteStudentToAdmin,
   assignCourseToUser,
   removeEnrollment,
@@ -13,20 +22,18 @@ export const metadata = {
 };
 
 function InfoCard({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-border bg-surface px-5 py-6 text-center text-foreground shadow-lg shadow-black/30">
-      <p className="text-xs uppercase tracking-[0.3em] text-muted">{label}</p>
-      <p className="mt-2 text-3xl font-semibold">{value}</p>
-    </div>
-  );
+  return <AdminStatCard label={label} value={value} />;
 }
 
 function UserCard({ profile, courses }) {
   return (
-    <div className="space-y-4 rounded-2xl border border-border bg-surface p-5 text-foreground shadow">
-      <div className="flex flex-col gap-1">
-        <p className="text-base font-semibold">{profile.full_name || profile.email}</p>
-        <p className="text-xs text-muted">{profile.email}</p>
+    <div className="space-y-4 rounded-[22px] border border-[rgba(15,23,42,0.08)] bg-[#f8fafc] p-4">
+      <div className="flex flex-col gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-base font-semibold text-[#111827]">{profile.full_name || profile.email}</p>
+          <AdminBadge tone="warning">Needs review</AdminBadge>
+        </div>
+        <p className="text-xs text-[#64748b]">{profile.email}</p>
         <span className="text-xs text-muted">
           Registro: {new Date(profile.created_at).toLocaleDateString()}
         </span>
@@ -35,32 +42,38 @@ function UserCard({ profile, courses }) {
         <input type="hidden" name="profileId" value={profile.id} />
         <button
           type="submit"
-          className="rounded-xl border border-border px-3 py-1.5 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+          className="rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2 text-xs font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
         >
           Convertir en admin
         </button>
-        <span className="text-xs text-muted">Moveras este perfil al registro de administradores.</span>
+        <span className="text-xs text-[#64748b]">Mantiene el mismo usuario; solo cambia su acceso.</span>
       </form>
       <div className="space-y-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Cursos asignados</p>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#94a3b8]">Assigned courses</p>
         {profile.enrollments?.length ? (
           <ul className="space-y-1 text-sm">
             {profile.enrollments.map((enrollment) => (
-              <li key={enrollment.id} className="flex items-center justify-between rounded-xl border border-border px-3 py-1.5">
-                <span>{enrollment.course?.title || "Curso"}</span>
+              <li
+                key={enrollment.id}
+                className="flex items-center justify-between rounded-2xl border border-[rgba(15,23,42,0.08)] bg-white px-3 py-2"
+              >
+                <span className="text-sm text-[#111827]">{enrollment.course?.title || "Curso"}</span>
                 <form action={removeEnrollment}>
                   <input type="hidden" name="enrollmentId" value={enrollment.id} />
-                  <button className="text-xs text-danger">Quitar</button>
+                  <button className="text-xs font-semibold text-[#b91c1c]">Quitar</button>
                 </form>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-xs text-muted">Sin cursos asignados.</p>
+          <p className="text-xs text-[#64748b]">Sin cursos asignados.</p>
         )}
         <form action={assignCourseToUser} className="flex flex-wrap items-center gap-2">
           <input type="hidden" name="profileId" value={profile.id} />
-          <select name="courseId" className="flex-1 rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground">
+          <select
+            name="courseId"
+            className="flex-1 rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2 text-sm text-[#0f172a]"
+          >
             <option value="">Selecciona curso</option>
             {courses.map((course) => (
               <option key={course.id} value={course.id}>
@@ -68,7 +81,7 @@ function UserCard({ profile, courses }) {
               </option>
             ))}
           </select>
-          <button className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2">
+          <button className="rounded-2xl bg-[#103474] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#0c295a]">
             Asignar
           </button>
         </form>
@@ -147,124 +160,136 @@ export default async function AdminPage({ searchParams }) {
   const templatesCount = templatesResult.error ? 0 : (templatesResult.count || 0);
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-background px-6 py-12 text-foreground">
+    <AdminPageLayout className="relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-10 left-16 h-72 w-72 rounded-full bg-primary/25 blur-[140px]" />
-        <div className="absolute bottom-0 right-10 h-96 w-96 rounded-full bg-accent/15 blur-[200px]" />
+        <div className="absolute -top-24 left-4 h-72 w-72 rounded-full bg-[rgba(16,52,116,0.08)] blur-[150px]" />
+        <div className="absolute top-24 right-10 h-72 w-72 rounded-full bg-[rgba(148,163,184,0.14)] blur-[150px]" />
       </div>
-      <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-10">
-        <div className="rounded-[2.5rem] border border-border bg-gradient-to-br from-surface via-surface to-surface-2 p-10 shadow-2xl shadow-black/35">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-4">
-              <p className="inline-flex items-center gap-2 rounded-full bg-primary/18 px-4 py-1 text-xs uppercase tracking-[0.4em] text-primary">
-                Admin CMS
-              </p>
-              <h1 className="text-4xl font-semibold leading-tight">
-                Orquesta cursos y alumnos en un solo tablero.
-              </h1>
-              <p className="text-base text-muted">
-                Gestiona usuarios, asigna cursos e importa alumnos via CSV desde un panel central.
-              </p>
-              <div className="flex flex-wrap gap-3 text-xs">
-                <Link
-                  href="/admin/students"
-                  className="rounded-full bg-primary px-4 py-2 font-semibold text-primary-foreground transition hover:bg-primary-2"
-                >
-                  Ir a Gestion de alumnos
-                </Link>
-                <Link
-                  href="/admin/commissions"
-                  className="rounded-full border border-border px-4 py-2 font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-                >
-                  Ir a Comisiones
-                </Link>
-                <Link
-                  href="/admin/courses/templates"
-                  className="rounded-full border border-border px-4 py-2 font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-                >
-                  Plantillas + Ejercicios
-                </Link>
-                <Link
-                  href="/admin/flashcards"
-                  className="rounded-full border border-border px-4 py-2 font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-                >
-                  Flashcards Library
-                </Link>
-                <Link
-                  href="/admin/teacher-dashboard"
-                  className="rounded-full border border-border px-4 py-2 font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-                >
-                  Teacher Dashboard
-                </Link>
-              </div>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:w-[420px]">
-              <InfoCard label="Comisiones" value={commissionsCount || 0} />
-              <InfoCard label="Alumnos" value={studentsCount} />
-              <InfoCard label="Pre-matriculas" value={nonStudentCount} />
-              <InfoCard label="Plantillas" value={templatesCount} />
-            </div>
-          </div>
-        </div>
 
-        <div className="space-y-4 rounded-[2rem] border border-border bg-surface p-6 text-foreground shadow-xl backdrop-blur">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h2 className="text-2xl font-semibold">Gestion de alumnos</h2>
-              <p className="text-sm text-muted">
-                Convierte alumnos en administradores, asigna cursos manualmente o abre la vista avanzada para editar datos academicos.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-3 text-xs">
-                <Link
-                  href="/admin/students"
-                  className="rounded-full bg-primary px-4 py-2 font-semibold text-primary-foreground transition hover:bg-primary-2"
-                >
-                  Ir a gestion avanzada
-                </Link>
+      <div className="relative space-y-5">
+        <AdminPageHeader
+          eyebrow="Operations overview"
+          title="Admin dashboard"
+          description="Monitor the core academic operation, jump into the busiest tools, and resolve pending student setup tasks without changing any existing workflow."
+          actions={
+            <>
+              <Link
+                href="/admin/students"
+                className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#103474] px-4 text-sm font-semibold text-white transition hover:bg-[#0c295a]"
+              >
+                Open students
+              </Link>
+              <Link
+                href="/admin/commissions"
+                className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+              >
+                View commissions
+              </Link>
+            </>
+          }
+        />
+
+        <AdminStatsGrid>
+          <InfoCard label="Commissions" value={commissionsCount || 0} />
+          <InfoCard label="Students" value={studentsCount} />
+          <InfoCard label="Pre-enrollments" value={nonStudentCount} />
+          <InfoCard label="Templates" value={templatesCount} />
+        </AdminStatsGrid>
+
+        <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+          <AdminCard className="space-y-4">
+            <AdminSectionHeader
+              eyebrow="Priority shortcuts"
+              title="Main work areas"
+              description="These links keep the current routes and let you move faster between the sections used most often."
+            />
+            <div className="grid gap-3 md:grid-cols-2">
+              <Link
+                href="/admin/students"
+                className="rounded-[22px] border border-[rgba(15,23,42,0.08)] bg-[#f8fafc] px-4 py-4 transition hover:border-[rgba(16,52,116,0.16)] hover:bg-[#f8fbff]"
+              >
+                <p className="text-sm font-semibold text-[#111827]">Students</p>
+                <p className="mt-1 text-sm text-[#64748b]">Create, import, filter, and edit student records.</p>
+              </Link>
+              <Link
+                href="/admin/commissions"
+                className="rounded-[22px] border border-[rgba(15,23,42,0.08)] bg-[#f8fafc] px-4 py-4 transition hover:border-[rgba(16,52,116,0.16)] hover:bg-[#f8fbff]"
+              >
+                <p className="text-sm font-semibold text-[#111827]">Commissions</p>
+                <p className="mt-1 text-sm text-[#64748b]">Review schedules, statuses, and commission capacity.</p>
+              </Link>
+              <Link
+                href="/admin/courses/templates"
+                className="rounded-[22px] border border-[rgba(15,23,42,0.08)] bg-[#f8fafc] px-4 py-4 transition hover:border-[rgba(16,52,116,0.16)] hover:bg-[#f8fbff]"
+              >
+                <p className="text-sm font-semibold text-[#111827]">Templates</p>
+                <p className="mt-1 text-sm text-[#64748b]">Maintain reusable course structures and related content.</p>
+              </Link>
+              <Link
+                href="/admin/teacher-dashboard"
+                className="rounded-[22px] border border-[rgba(15,23,42,0.08)] bg-[#f8fafc] px-4 py-4 transition hover:border-[rgba(16,52,116,0.16)] hover:bg-[#f8fbff]"
+              >
+                <p className="text-sm font-semibold text-[#111827]">Teacher dashboard</p>
+                <p className="mt-1 text-sm text-[#64748b]">Track current student performance and recent progress.</p>
+              </Link>
+            </div>
+          </AdminCard>
+
+          <AdminCard className="space-y-4">
+            <AdminSectionHeader
+              eyebrow="Bulk operations"
+              title="Student import"
+              description="Use the existing CSV flow; this redesign only makes the entry point clearer."
+              actions={
                 <a
                   href="/api/admin/students/template"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="rounded-full border border-border px-4 py-2 font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+                  className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
                 >
-                  Plantilla CSV
+                  CSV template
                 </a>
-              </div>
-            </div>
-            <form action={importStudentsCsv} className="flex flex-wrap items-center gap-3">
+              }
+            />
+            <form action={importStudentsCsv} className="space-y-3 rounded-[22px] border border-[rgba(15,23,42,0.08)] bg-[#f8fafc] p-4">
               <input
                 type="file"
                 name="csv"
                 accept=".csv"
-                className="text-xs text-muted file:mr-3 file:rounded-full file:border-0 file:bg-primary file:px-4 file:py-2 file:text-xs file:text-primary-foreground"
+                className="w-full text-xs text-[#64748b] file:mr-3 file:rounded-2xl file:border-0 file:bg-[#103474] file:px-4 file:py-2.5 file:text-xs file:font-semibold file:text-white"
                 required
               />
-              <button className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2">
-                Importar CSV
+              <button className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#103474] px-4 text-sm font-semibold text-white transition hover:bg-[#0c295a]">
+                Import CSV
               </button>
-              <p className="text-[11px] text-muted">
-                Columnas: full_name,email,dni,phone,birth_date,course_level,is_premium,start_month,enrollment_date,preferred_hour,modality
-              </p>
-              <p className="text-[11px] text-muted/85">
-                Modalidad valida: Diaria | Interdiaria (Lunes, Miercoles y Viernes) | Interdiaria (Martes y Jueves) | Sabatinos
-              </p>
-              <p className="text-[11px] text-muted/85">
-                Course level valido: BASICO A1 | BASICO A2 | INTERMEDIO B1 | INTERMEDIO B2 | AVANZADO C1
-              </p>
+              <div className="space-y-1 text-[11px] text-[#64748b]">
+                <p>Columns: `full_name,email,dni,phone,birth_date,course_level,is_premium,start_month,enrollment_date,preferred_hour,modality`</p>
+                <p>Modality: `Diaria`, `Interdiaria (Lunes, Miercoles y Viernes)`, `Interdiaria (Martes y Jueves)`, `Sabatinos`</p>
+                <p>Course level: `BASICO A1`, `BASICO A2`, `INTERMEDIO B1`, `INTERMEDIO B2`, `AVANZADO C1`</p>
+              </div>
             </form>
-          </div>
-          <div className="grid gap-4 lg:grid-cols-2">
+          </AdminCard>
+        </div>
+
+        <AdminCard className="space-y-4">
+          <AdminSectionHeader
+            eyebrow="Pending setup"
+            title="Students without commission"
+            description="Keep the same promotion and assignment actions, but surface the pending records in a cleaner operational queue."
+            meta={<AdminBadge tone={usersNeedingCommission.length ? "warning" : "success"}>{usersNeedingCommission.length} pending</AdminBadge>}
+          />
+          <div className="grid gap-4 xl:grid-cols-2">
             {usersNeedingCommission.map((profile) => (
               <UserCard key={profile.id} profile={profile} courses={courses} />
             ))}
             {!usersNeedingCommission.length ? (
-              <p className="rounded-2xl border border-dashed border-border p-6 text-sm text-muted">
-                No hay alumnos pendientes de comision.
-              </p>
+              <div className="rounded-[22px] border border-dashed border-[rgba(15,23,42,0.12)] bg-[#f8fafc] p-6 text-sm text-[#64748b]">
+                No students are waiting for commission assignment.
+              </div>
             ) : null}
           </div>
-        </div>
+        </AdminCard>
       </div>
-    </section>
+    </AdminPageLayout>
   );
 }

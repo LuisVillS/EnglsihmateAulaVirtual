@@ -13,7 +13,7 @@ function formatDate(date) {
 }
 
 export const metadata = {
-  title: "Mi Matricula | Aula Virtual",
+  title: "Mi matrícula | Aula Virtual",
 };
 
 function getMissingColumnFromError(error) {
@@ -136,8 +136,11 @@ export default async function AppMatriculaPage({ searchParams }) {
     return (
       <div className="space-y-4">
         {showLockedNotice ? (
-          <div className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-foreground">
-            [LOCK] Solo puedes usar <strong>Mi matricula</strong> hasta completar tu matricula.
+          <div className="student-panel-soft border-accent/40 bg-accent/10 px-4 py-4 text-sm text-foreground">
+            <p className="text-xs uppercase tracking-[0.28em] text-primary">Acceso a matrícula</p>
+            <p className="mt-2">
+              Solo puedes usar <strong>Mi matrícula</strong> hasta completar tu registro como estudiante.
+            </p>
           </div>
         ) : null}
         <MatriculaPage />
@@ -247,10 +250,11 @@ export default async function AppMatriculaPage({ searchParams }) {
   if (!canRenewSameCourse && canStartNewEnrollment) {
     return (
       <div className="space-y-4">
-        <div className="rounded-2xl border border-primary/35 bg-primary/10 p-5">
-          <p className="text-lg font-semibold text-foreground">Tu curso actual esta por finalizar.</p>
+        <div className="student-panel px-5 py-5">
+          <p className="text-xs uppercase tracking-[0.28em] text-primary">Mi matrícula</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground">Tu curso actual está por finalizar.</p>
           <p className="mt-1 text-sm text-muted">
-            Ya puedes iniciar una nueva matricula para el siguiente ciclo.
+            Ya puedes iniciar una nueva matrícula para el siguiente ciclo usando el flujo existente de abajo.
           </p>
         </div>
         <MatriculaPage />

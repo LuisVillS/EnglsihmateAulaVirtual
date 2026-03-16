@@ -8,10 +8,7 @@ import { createFlipbookSessionToken } from "@/lib/flipbook-services/session-toke
 import { resolveInitialCanonicalPageIndex } from "@/lib/flipbook-core/presentation";
 
 export async function GET(request, { params: paramsPromise }) {
-  const auth = await requireLibraryStudentRouteAccess({
-    allowAdmin: true,
-    allowGuest: true,
-  });
+  const auth = await requireLibraryStudentRouteAccess();
   if (auth.errorResponse) return auth.errorResponse;
 
   try {
@@ -39,14 +36,13 @@ export async function GET(request, { params: paramsPromise }) {
       book,
       source,
     });
-    const userStatePromise =
-      auth.user?.id && !auth.isGuest
-        ? loadFlipbookProgress({
-            db: auth.db,
-            userId: auth.user.id,
-            libraryBookId: book.id,
-          })
-        : Promise.resolve(null);
+    const userStatePromise = auth.user?.id
+      ? loadFlipbookProgress({
+          db: auth.db,
+          userId: auth.user.id,
+          libraryBookId: book.id,
+        })
+      : Promise.resolve(null);
     const [manifest, userState] = await Promise.all([manifestPromise, userStatePromise]);
     const isCompatibleState =
       userState?.manifestId === manifest.id &&
@@ -72,17 +68,16 @@ export async function GET(request, { params: paramsPromise }) {
       pageCount: manifest.pageCount,
     });
     const ttsEnabled = source?.sourceName === "manual_epub";
-    const sessionToken =
-      auth.user?.id && !auth.isGuest
-        ? createFlipbookSessionToken({
-            userId: auth.user.id,
-            libraryBookId: book.id,
-            slug: book.slug,
-            manifestId: manifest.id,
-            layoutProfileId: manifest.layoutProfileId,
-            ttsEnabled,
-          })
-        : "";
+    const sessionToken = auth.user?.id
+      ? createFlipbookSessionToken({
+          userId: auth.user.id,
+          libraryBookId: book.id,
+          slug: book.slug,
+          manifestId: manifest.id,
+          layoutProfileId: manifest.layoutProfileId,
+          ttsEnabled,
+        })
+      : "";
 
     return NextResponse.json({
       book: {

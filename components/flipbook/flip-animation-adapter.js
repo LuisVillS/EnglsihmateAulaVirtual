@@ -52,6 +52,26 @@ function debugAdapterEvent(label, payload = {}) {
   console.info("[flipbook-adapter-debug]", label, payload);
 }
 
+function destroyPageFlipInstance(instance, hostElement) {
+  if (!instance) return;
+
+  const blockElement = hostElement || instance.block || null;
+  const originalRemove =
+    blockElement && typeof blockElement.remove === "function" ? blockElement.remove.bind(blockElement) : null;
+
+  if (blockElement && originalRemove) {
+    blockElement.remove = () => {};
+  }
+
+  try {
+    instance.destroy?.();
+  } finally {
+    if (blockElement && originalRemove) {
+      blockElement.remove = originalRemove;
+    }
+  }
+}
+
 const FlipAnimationAdapter = forwardRef(function FlipAnimationAdapter(
   {
     pages = [],
@@ -272,11 +292,12 @@ const FlipAnimationAdapter = forwardRef(function FlipAnimationAdapter(
         showCover,
         usePortrait: true,
         drawShadow: true,
-        maxShadowOpacity: 0.12,
-        flippingTime: 610,
+        maxShadowOpacity: 0.16,
+        flippingTime: 660,
         autoSize: false,
-        mobileScrollSupport: true,
-        disableFlipByClick: false,
+        mobileScrollSupport: false,
+        useMouseEvents: true,
+        disableFlipByClick: true,
         showPageCorners: false,
       });
       pageFlipRef.current = instance;
@@ -389,7 +410,7 @@ const FlipAnimationAdapter = forwardRef(function FlipAnimationAdapter(
         window.cancelAnimationFrame(scheduledUpdateFrameRef.current);
         scheduledUpdateFrameRef.current = 0;
       }
-      pageFlipRef.current?.destroy?.();
+      destroyPageFlipInstance(pageFlipRef.current, hostElement);
       pageFlipRef.current = null;
       pendingPageUpdateRef.current = null;
       if (hostElement) {

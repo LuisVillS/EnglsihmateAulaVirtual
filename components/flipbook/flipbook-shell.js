@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import FlipbookBookFrame from "@/components/flipbook/book-frame";
 import FlipbookControlsBar from "@/components/flipbook/controls-bar";
-import FlipbookHeader from "@/components/flipbook/header";
 import { buildFlipbookStageStyle } from "@/components/flipbook/theme-layer";
 import { resolveSinglePage } from "@/components/flipbook/single-page-view";
 import { resolveSpreadPages } from "@/components/flipbook/spread-view";
@@ -37,10 +36,15 @@ import {
 } from "@/lib/flipbook-core/page-loading";
 import { DEFAULT_FLIPBOOK_LAYOUT_PROFILE } from "@/lib/flipbook-core/layout-profile";
 import { resolveFlipbookChapterLabel } from "@/lib/flipbook-core/page-paginator";
-import { canUseLibraryReaderArrowKeys, playLibraryPageFlipSound } from "@/lib/library/epub-reader-ui";
+import {
+  canUseLibraryReaderArrowKeys,
+  canUseLibraryReaderPlaybackKey,
+  playLibraryPageFlipSound,
+} from "@/lib/library/epub-reader-ui";
 import {
   buildLibraryTtsPlaybackQueue,
   LIBRARY_TTS_VOICE_OPTIONS,
+  normalizeLibraryTtsVoiceId,
   resolveLibraryTtsVoice,
 } from "@/lib/library/tts";
 
@@ -54,15 +58,20 @@ async function fetchJson(url, options) {
 }
 
 const FLIPBOOK_JUMP_LOAD_RADIUS = 10;
-const FULL_STAGE_HEIGHT = "calc(100dvh - 4.5rem)";
+const FULL_STAGE_HEIGHT = "100%";
+const FLIPBOOK_SOUND_STORAGE_KEY = "library.flipbook.sound.v2";
 const FULL_STAGE_FRAME_STYLE = {
-  width: "100vw",
-  maxWidth: "100vw",
-  marginLeft: "calc(50% - 50vw)",
-  marginRight: "calc(50% - 50vw)",
+  width: "100%",
+  maxWidth: "none",
+  marginLeft: 0,
+  marginRight: 0,
 };
+const FLIPBOOK_STAGE_EDGE_INSET = "clamp(4px, 0.55vw, 8px)";
+const FLIPBOOK_STAGE_TOP_CHROME_HEIGHT = "clamp(8px, 1.2vw, 14px)";
+const FLIPBOOK_STAGE_BOTTOM_CHROME_HEIGHT = "clamp(60px, 6vw, 82px)";
 const FLIPBOOK_EDITORIAL_CONTENT_TOP_INSET = 54;
 const FLIPBOOK_EDITORIAL_CONTENT_BOTTOM_INSET = 92;
+const FLIPBOOK_FULLSCREEN_WHEEL_THROTTLE_MS = 520;
 
 function debugFlipbookEvent(label, payload = {}) {
   if (process.env.NODE_ENV === "production" || typeof window === "undefined") return;
@@ -193,6 +202,7 @@ export default function FlipbookShell({ initialBook }) {
   const adapterReadyWaitersRef = useRef(new Map());
   const pendingNavigationRef = useRef(null);
   const pendingGoToPageRef = useRef(null);
+  const fullscreenWheelLockRef = useRef(0);
   const [bookPayload, setBookPayload] = useState(initialBook);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -208,7 +218,7 @@ export default function FlipbookShell({ initialBook }) {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [spreadPageIndex, setSpreadPageIndex] = useState(0);
   const [theme, setTheme] = useState("paper-cream");
-  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [ttsVoiceId, setTtsVoiceId] = useState(LIBRARY_TTS_VOICE_OPTIONS[0].id);
   const [ttsStatus, setTtsStatus] = useState("idle");
@@ -244,11 +254,11 @@ export default function FlipbookShell({ initialBook }) {
   useEffect(() => {
     try {
       const storedTheme = window.localStorage.getItem("library.flipbook.theme");
-      const storedSound = window.localStorage.getItem("library.flipbook.sound");
+      const storedSound = window.localStorage.getItem(FLIPBOOK_SOUND_STORAGE_KEY);
       const storedVoice = window.localStorage.getItem("library.flipbook.tts.voice");
       if (storedTheme) setTheme(storedTheme);
-      if (storedSound) setSoundEnabled(storedSound === "1");
-      if (storedVoice) setTtsVoiceId(resolveLibraryTtsVoice(storedVoice).id);
+      setSoundEnabled(storedSound == null ? true : storedSound === "1");
+      if (storedVoice) setTtsVoiceId(normalizeLibraryTtsVoiceId(storedVoice));
     } catch {
       return undefined;
     }
@@ -258,8 +268,8 @@ export default function FlipbookShell({ initialBook }) {
   useEffect(() => {
     try {
       window.localStorage.setItem("library.flipbook.theme", theme);
-      window.localStorage.setItem("library.flipbook.sound", soundEnabled ? "1" : "0");
-      window.localStorage.setItem("library.flipbook.tts.voice", ttsVoiceId);
+      window.localStorage.setItem(FLIPBOOK_SOUND_STORAGE_KEY, soundEnabled ? "1" : "0");
+      window.localStorage.setItem("library.flipbook.tts.voice", normalizeLibraryTtsVoiceId(ttsVoiceId));
     } catch {
       return undefined;
     }
@@ -535,6 +545,7 @@ export default function FlipbookShell({ initialBook }) {
     () => (Array.isArray(manifest?.toc) ? manifest.toc : []).filter((item) => !isSkippedTocItem(item)),
     [manifest?.toc]
   );
+  const visualPresentationMode = isSinglePageView ? "single" : "spread";
   const renderPages = useMemo(
     () =>
       pages.map((page) => ({
@@ -543,11 +554,11 @@ export default function FlipbookShell({ initialBook }) {
           page,
           bookTitle: bookPayload?.title || "",
           chapterLabel: resolveFlipbookChapterLabel(visibleToc, page.pageIndex),
+          presentationMode: visualPresentationMode,
         }),
       })),
-    [bookPayload?.title, pages, visibleToc]
+    [bookPayload?.title, pages, visibleToc, visualPresentationMode]
   );
-  const visualPresentationMode = isSinglePageView ? "single" : "spread";
   const chapterLabel = useMemo(
     () => resolveFlipbookChapterLabel(visibleToc, currentPageIndex),
     [currentPageIndex, visibleToc]
@@ -1114,7 +1125,6 @@ export default function FlipbookShell({ initialBook }) {
       }
       setTtsActiveSegmentId("");
       setTtsActivePageIndex(null);
-      setTtsSelectionMode(false);
       setTtsStatus("idle");
       setTtsHighlightMode("paragraph");
       setTtsMessage(message);
@@ -1262,6 +1272,28 @@ export default function FlipbookShell({ initialBook }) {
     audioChunk.release?.();
   }, []);
 
+  const waitForTtsPause = useCallback(async (pauseAfterMs, token) => {
+    const duration = Math.max(0, Number(pauseAfterMs) || 0);
+    if (!duration || typeof window === "undefined") return;
+
+    await new Promise((resolve) => {
+      let watchId = null;
+      const timeoutId = window.setTimeout(() => {
+        if (watchId) {
+          window.clearInterval(watchId);
+        }
+        resolve();
+      }, duration);
+
+      watchId = window.setInterval(() => {
+        if (ttsRunTokenRef.current === token) return;
+        window.clearTimeout(timeoutId);
+        window.clearInterval(watchId);
+        resolve();
+      }, 120);
+    });
+  }, []);
+
   const advanceToNextTtsView = useCallback(async () => {
     const nextVisualPageIndex = resolveVisualTurnTarget("next");
     const currentVisualPageIndex = isSinglePageViewRef.current
@@ -1404,6 +1436,7 @@ export default function FlipbookShell({ initialBook }) {
         }
 
         await playTtsAudioUrl(currentAudioChunk, token);
+        await waitForTtsPause(item.pauseAfterMs, token);
         currentAudioChunk = nextAudioPromise ? await nextAudioPromise : null;
       }
 
@@ -1441,18 +1474,25 @@ export default function FlipbookShell({ initialBook }) {
     stopTtsPlayback,
     ttsEnabled,
     ttsVoiceId,
+    waitForTtsPause,
   ]);
 
   useEffect(() => {
     if (!ttsEnabled) {
       stopTtsPlayback({ message: "", preserveSelection: false });
       setTtsControlsVisible(false);
+      setTtsSelectionMode(false);
+      setTtsMessage("");
+      return;
     }
-  }, [stopTtsPlayback, ttsEnabled]);
+    if (!ttsControlsVisible && !ttsSelectionMode && ttsStatusRef.current === "idle") {
+      setTtsMessage("");
+    }
+  }, [stopTtsPlayback, ttsControlsVisible, ttsEnabled, ttsSelectionMode]);
 
   useEffect(() => {
     if (!ttsEnabled || !ttsSelectionMode) return undefined;
-    setTtsMessage("Click a paragraph to start reading from there.");
+    setTtsMessage("Tap a paragraph to start reading from there.");
 
     const element = rootRef.current;
     if (!element) return undefined;
@@ -1486,7 +1526,7 @@ export default function FlipbookShell({ initialBook }) {
       setExplicitSelectedPageIndex(segment.pageIndex);
       setCurrentPageIndex(segment.pageIndex);
       currentPageIndexRef.current = segment.pageIndex;
-      setTtsSelectionMode(false);
+      setTtsMessage("");
 
       try {
         await continueTtsPlayback({ startSegmentId: segment.id, startPageIndex: segment.pageIndex });
@@ -1671,18 +1711,30 @@ export default function FlipbookShell({ initialBook }) {
         registerReaderActivity();
       }
 
+      const resolvedPendingJump =
+        pendingJump?.windowKey === windowKey &&
+        pendingJump?.windowStart === safeWindowStart &&
+        pendingJump?.visualTargetPageIndex === leftPageIndex &&
+        adapterReadyWindowKeyRef.current === windowKey;
+      const previousSpreadPageIndex = spreadAnchorPageIndexRef.current;
+      const previousCurrentPageIndex = currentPageIndexRef.current;
+      const isRedundantFlipCommit =
+        source === "flip" &&
+        !resolvedPendingJump &&
+        explicitPageIndex == null &&
+        leftPageIndex === previousSpreadPageIndex &&
+        nextPageIndex === previousCurrentPageIndex &&
+        !isReadyCommit;
+      if (isRedundantFlipCommit) {
+        return false;
+      }
+
       setSpreadPageIndex(leftPageIndex);
       spreadAnchorPageIndexRef.current = leftPageIndex;
       setExplicitSelectedPageIndex(null);
       explicitSelectedPageIndexRef.current = null;
       setCurrentPageIndex(nextPageIndex);
       currentPageIndexRef.current = nextPageIndex;
-
-      const resolvedPendingJump =
-        pendingJump?.windowKey === windowKey &&
-        pendingJump?.windowStart === safeWindowStart &&
-        pendingJump?.visualTargetPageIndex === leftPageIndex &&
-        adapterReadyWindowKeyRef.current === windowKey;
       const shouldUnlockWindow =
         resolvedPendingJump ||
         (isReadyCommit &&
@@ -1832,22 +1884,38 @@ export default function FlipbookShell({ initialBook }) {
     [commitNavigationFromLocal]
   );
 
-  async function handleTtsPlay() {
+  const handleTtsPlay = useCallback(async () => {
     registerReaderActivity();
     setTtsControlsVisible(true);
-    setTtsSelectedSegment(null);
-    setExplicitSelectedPageIndex(null);
+    const selectedSegmentId = String(ttsSelectedSegment?.id || "");
+    const selectedPageIndex =
+      selectedSegmentId && ttsSegmentPageIndexMap.has(selectedSegmentId)
+        ? ttsSegmentPageIndexMap.get(selectedSegmentId)
+        : ttsFocusPageIndex;
+    if (selectedPageIndex != null) {
+      setExplicitSelectedPageIndex(selectedPageIndex);
+    }
     try {
-      await continueTtsPlayback({ startPageIndex: ttsFocusPageIndex });
+      await continueTtsPlayback({
+        startSegmentId: selectedSegmentId,
+        startPageIndex: selectedPageIndex,
+      });
     } catch (playError) {
       stopTtsPlayback({
         message: playError?.message || "Read aloud is temporarily unavailable.",
         preserveSelection: true,
       });
     }
-  }
+  }, [
+    continueTtsPlayback,
+    registerReaderActivity,
+    stopTtsPlayback,
+    ttsFocusPageIndex,
+    ttsSegmentPageIndexMap,
+    ttsSelectedSegment?.id,
+  ]);
 
-  function handleTtsPause() {
+  const handleTtsPause = useCallback(() => {
     if (!ttsAudioRef.current) return;
     try {
       ttsAudioRef.current.pause();
@@ -1856,9 +1924,9 @@ export default function FlipbookShell({ initialBook }) {
     } catch {
       return;
     }
-  }
+  }, []);
 
-  async function handleTtsResume() {
+  const handleTtsResume = useCallback(async () => {
     if (!ttsAudioRef.current) return;
     try {
       await ttsAudioRef.current.play();
@@ -1867,7 +1935,13 @@ export default function FlipbookShell({ initialBook }) {
     } catch (resumeError) {
       setTtsMessage(resumeError?.message || "Read aloud could not resume.");
     }
-  }
+  }, []);
+
+  const handleTtsClosePanel = useCallback(() => {
+    setTtsControlsVisible(false);
+    setTtsSelectionMode(false);
+    setTtsMessage("");
+  }, []);
 
   const requestPageTurn = useCallback((direction) => {
     debugFlipbookEvent("request-page-turn", {
@@ -1889,7 +1963,6 @@ export default function FlipbookShell({ initialBook }) {
       }
       return;
     }
-    if (ttsSelectionMode) return;
     if (direction === "previous" && !canGoPrev) return;
     if (direction === "next" && !canGoNext) return;
     registerReaderActivity();
@@ -1907,13 +1980,10 @@ export default function FlipbookShell({ initialBook }) {
     navigationLocked,
     registerReaderActivity,
     requestBookOpening,
-    ttsSelectionMode,
   ]);
 
   useEffect(() => {
     function handleKeydown(event) {
-      registerReaderActivity();
-      if (!canUseLibraryReaderArrowKeys(event)) return;
       const activeElement = document.activeElement;
       if (
         activeElement &&
@@ -1922,6 +1992,25 @@ export default function FlipbookShell({ initialBook }) {
       ) {
         return;
       }
+
+      if (canUseLibraryReaderPlaybackKey(event)) {
+        if (!ttsEnabled) return;
+        event.preventDefault();
+        registerReaderActivity();
+        if (ttsStatusRef.current === "playing") {
+          handleTtsPause();
+          return;
+        }
+        if (ttsStatusRef.current === "paused") {
+          void handleTtsResume();
+          return;
+        }
+        void handleTtsPlay();
+        return;
+      }
+
+      registerReaderActivity();
+      if (!canUseLibraryReaderArrowKeys(event)) return;
 
       if (event.key === "ArrowLeft") {
         event.preventDefault();
@@ -1934,7 +2023,36 @@ export default function FlipbookShell({ initialBook }) {
 
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [registerReaderActivity, requestPageTurn]);
+  }, [handleTtsPause, handleTtsPlay, handleTtsResume, registerReaderActivity, requestPageTurn, ttsEnabled]);
+
+  useEffect(() => {
+    const element = rootRef.current;
+    if (!element || !isFullscreen) return undefined;
+
+    function handleWheel(event) {
+      if (event.defaultPrevented) return;
+      if (event.target?.closest?.("[data-reader-ignore-keys='true']")) return;
+      if (navigationLocked || isAdapterWindowSettlingRef.current) return;
+      if (["playing", "paused", "loading"].includes(ttsStatusRef.current)) return;
+
+      const now = Date.now();
+      if (now - fullscreenWheelLockRef.current < FLIPBOOK_FULLSCREEN_WHEEL_THROTTLE_MS) {
+        event.preventDefault();
+        return;
+      }
+
+      const deltaY = Number(event.deltaY) || 0;
+      if (Math.abs(deltaY) < 18) return;
+
+      fullscreenWheelLockRef.current = now;
+      event.preventDefault();
+      registerReaderActivity();
+      requestPageTurn(deltaY > 0 ? "next" : "previous");
+    }
+
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handleWheel);
+  }, [isFullscreen, navigationLocked, registerReaderActivity, requestPageTurn]);
 
   async function handleGoToPage(pageIndex) {
     const targetPageIndex = Math.max(0, Number(pageIndex) || 0);
@@ -2018,7 +2136,7 @@ export default function FlipbookShell({ initialBook }) {
   if (loading) {
     return (
       <section
-        className="-mx-4 -my-6 flex items-center bg-[#111] p-8 text-white sm:-mx-6 sm:-my-8"
+        className="flipbook-reader-stage flex h-full min-h-0 items-center bg-[#111] p-8 text-white"
         style={{ ...FULL_STAGE_FRAME_STYLE, minHeight: FULL_STAGE_HEIGHT, height: FULL_STAGE_HEIGHT }}
       >
         <p className="text-sm uppercase tracking-[0.22em] text-white/50">Preparing flipbook</p>
@@ -2029,7 +2147,7 @@ export default function FlipbookShell({ initialBook }) {
   if (error || !manifest || !renderPages.length) {
     return (
       <section
-        className="-mx-4 -my-6 bg-[#111] p-8 text-white sm:-mx-6 sm:-my-8"
+        className="flipbook-reader-stage h-full min-h-0 bg-[#111] p-8 text-white"
         style={{ ...FULL_STAGE_FRAME_STYLE, minHeight: FULL_STAGE_HEIGHT, height: FULL_STAGE_HEIGHT }}
       >
         <p className="text-sm uppercase tracking-[0.22em] text-white/50">Flipbook unavailable</p>
@@ -2038,12 +2156,67 @@ export default function FlipbookShell({ initialBook }) {
     );
   }
 
+  const controlsBarProps = {
+    toc: visibleToc,
+    currentPageIndex,
+    visiblePageNumber,
+    visiblePageTotal,
+    progressPercent,
+    theme,
+    onThemeChange: setTheme,
+    isMobile,
+    soundEnabled,
+    onToggleSound: () => setSoundEnabled((previous) => !previous),
+    fullscreenSupported,
+    isFullscreen,
+    chromeVisible: chromeVisible || !isFullscreen,
+    onToggleFullscreen: toggleFullscreen,
+    onGoToPage: handleGoToPage,
+    ttsEnabled,
+    tts: {
+      voices: LIBRARY_TTS_VOICE_OPTIONS,
+      voiceId: ttsVoiceId,
+      voiceLabel: resolveLibraryTtsVoice(ttsVoiceId).displayLabel || resolveLibraryTtsVoice(ttsVoiceId).label,
+      status: ttsStatus,
+      selectionMode: ttsSelectionMode,
+      selectedSegmentLabel: ttsSelectedSegment?.label || "",
+      message: ttsMessage,
+      highlightMode: ttsHighlightMode,
+      showControls: ttsControlsVisible,
+    },
+    onTtsVoiceChange: (voiceId) => {
+      registerReaderActivity();
+      setTtsControlsVisible(true);
+      setTtsVoiceId(normalizeLibraryTtsVoiceId(voiceId));
+      setTtsSelectionMode(true);
+      if (["playing", "paused", "loading"].includes(ttsStatusRef.current)) {
+        stopTtsPlayback({
+          message: "Voice updated. Tap a paragraph or press play to continue with the new voice.",
+          preserveSelection: true,
+        });
+      } else {
+        setTtsMessage("Tap a paragraph to start reading from there.");
+      }
+    },
+    onTtsPlay: handleTtsPlay,
+    onTtsPause: handleTtsPause,
+    onTtsResume: handleTtsResume,
+    onTtsStop: () => {
+      setTtsControlsVisible(true);
+      stopTtsPlayback({ message: "Read aloud stopped.", preserveSelection: true });
+    },
+    onTtsClosePanel: handleTtsClosePanel,
+    onTtsToggleSelectionMode: () => {
+      registerReaderActivity();
+      setTtsControlsVisible(true);
+      setTtsSelectionMode((previous) => !previous);
+    },
+  };
+
   return (
     <section
       ref={rootRef}
-      className={`relative -mx-4 -my-6 flex w-auto flex-col overflow-hidden text-white sm:-mx-6 sm:-my-8 ${
-        isFullscreen ? "min-h-screen" : ""
-      }`}
+      className="flipbook-reader-stage relative flex h-full min-h-0 w-full flex-col overflow-hidden text-white"
       data-theme={theme}
       style={{
         ...FULL_STAGE_FRAME_STYLE,
@@ -2051,112 +2224,110 @@ export default function FlipbookShell({ initialBook }) {
         height: isFullscreen ? "100dvh" : FULL_STAGE_HEIGHT,
         minHeight: isFullscreen ? "100dvh" : FULL_STAGE_HEIGHT,
         borderRadius: "0px",
+        backgroundColor: "#000000",
       }}
       onMouseMove={() => registerReaderActivity()}
       onPointerDown={() => registerReaderActivity()}
       onTouchStart={() => registerReaderActivity()}
     >
-      <div className="absolute inset-x-0 top-0 z-20 px-2 pt-2 sm:px-4 sm:pt-4">
-        <div
-          className={`transition duration-300 ${
-            chromeVisible || !isFullscreen ? "translate-y-0 opacity-100" : "-translate-y-3 opacity-0"
-          }`}
-        >
-          <FlipbookHeader slug={bookPayload.slug} title={bookPayload.title} />
-        </div>
-      </div>
-
       <div className="relative flex-1 min-h-0">
         <div
-          className="pointer-events-none absolute left-1/2 top-1/3 h-40 w-40 -translate-x-1/2 rounded-full blur-3xl"
+          className="pointer-events-none absolute left-1/2 top-1/2 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
           style={{ background: "var(--flipbook-stage-glow)" }}
         />
-
-        <div className="relative flex h-full min-h-0 items-center justify-center px-1 pb-24 pt-14 sm:px-2 sm:pb-28 sm:pt-20">
-          <div className="relative h-full w-full">
-            <FlipbookBookFrame
-              adapterRef={adapterRef}
-              pages={visualWindowPages}
-              startPage={localVisualPageIndex}
-              windowStart={visualWindow.start}
-              visualPageIndex={localVisualPageIndex}
-              ttsActivePageIndex={localTtsFocusPageIndex}
-              adapterWindowKey={visualWindowKey}
-              showCover={showCoverInVisualWindow}
-              coverPage={renderPages[0] || null}
-              isFullscreen={isFullscreen}
-              showPageArrows={!isMobile}
-              canGoPrev={canGoPrev}
-              canGoNext={canGoNext}
-              chromeVisible={chromeVisible || !isFullscreen}
-              ttsSelectionMode={ttsSelectionMode}
-              navigationLocked={navigationLocked}
-              visualState={bookVisualState}
-              onReady={handleAdapterReady}
-              onPageSet={handlePageSet}
-              onFlipStateChange={handleFlipStateChange}
-              onOpeningTransitionReady={handleOpeningTransitionReady}
-              onRequestOpenBook={requestBookOpening}
-              onRequestPageTurn={requestPageTurn}
-              onFlip={handleFlip}
-              onOrientationChange={handleAdapterOrientationChange}
+        <div
+          className="absolute inset-0"
+          style={{
+            paddingLeft: FLIPBOOK_STAGE_EDGE_INSET,
+            paddingRight: FLIPBOOK_STAGE_EDGE_INSET,
+            paddingTop: FLIPBOOK_STAGE_EDGE_INSET,
+            paddingBottom: FLIPBOOK_STAGE_EDGE_INSET,
+          }}
+        >
+          <div className="flipbook-stage-shell flipbook-stage-body relative h-full w-full overflow-hidden">
+            <div
+              className="pointer-events-none absolute inset-x-0 top-0 z-20"
+              style={{
+                height: FLIPBOOK_STAGE_TOP_CHROME_HEIGHT,
+                background:
+                  "linear-gradient(180deg, rgba(0,0,0,0.14) 0%, rgba(0,0,0,0.04) 52%, rgba(0,0,0,0) 100%)",
+              }}
             />
+            <div
+              className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
+              style={{
+                height: FLIPBOOK_STAGE_BOTTOM_CHROME_HEIGHT,
+                background:
+                  "linear-gradient(0deg, rgba(0,0,0,0.38) 0%, rgba(0,0,0,0.12) 58%, rgba(0,0,0,0) 100%)",
+              }}
+            />
+            <div
+              className="absolute inset-x-0 bottom-0 z-30"
+              style={{
+                paddingLeft: FLIPBOOK_STAGE_EDGE_INSET,
+                paddingRight: FLIPBOOK_STAGE_EDGE_INSET,
+                paddingBottom: FLIPBOOK_STAGE_EDGE_INSET,
+              }}
+            >
+              <FlipbookControlsBar {...controlsBarProps} />
+            </div>
+            <div
+              className="absolute inset-x-0 flex min-h-0 items-center justify-center"
+              style={{
+                top: FLIPBOOK_STAGE_TOP_CHROME_HEIGHT,
+                bottom: FLIPBOOK_STAGE_BOTTOM_CHROME_HEIGHT,
+                paddingLeft: FLIPBOOK_STAGE_EDGE_INSET,
+                paddingRight: FLIPBOOK_STAGE_EDGE_INSET,
+              }}
+            >
+              <div className="relative h-full w-full">
+                <FlipbookBookFrame
+                  adapterRef={adapterRef}
+                  pages={visualWindowPages}
+                  startPage={localVisualPageIndex}
+                  windowStart={visualWindow.start}
+                  visualPageIndex={localVisualPageIndex}
+                  globalVisualPageIndex={visualPageIndex}
+                  totalPageCount={renderPages.length}
+                  ttsActivePageIndex={localTtsFocusPageIndex}
+                  adapterWindowKey={visualWindowKey}
+                  showCover={showCoverInVisualWindow}
+                  coverPage={renderPages[0] || null}
+                  isFullscreen={isFullscreen}
+                  showPageArrows
+                  canGoPrev={canGoPrev}
+                  canGoNext={canGoNext}
+                  chromeVisible={chromeVisible || !isFullscreen}
+                  ttsSelectionMode={ttsSelectionMode}
+                  navigationLocked={navigationLocked}
+                  visualState={bookVisualState}
+                  onReady={handleAdapterReady}
+                  onPageSet={handlePageSet}
+                  onFlipStateChange={handleFlipStateChange}
+                  onOpeningTransitionReady={handleOpeningTransitionReady}
+                  onRequestOpenBook={requestBookOpening}
+                  onRequestPageTurn={requestPageTurn}
+                  onFlip={handleFlip}
+                  onOrientationChange={handleAdapterOrientationChange}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
-      <FlipbookControlsBar
-        toc={visibleToc}
-        currentPageIndex={currentPageIndex}
-        visiblePageNumber={visiblePageNumber}
-        visiblePageTotal={visiblePageTotal}
-        progressPercent={progressPercent}
-        theme={theme}
-        onThemeChange={setTheme}
-        isMobile={isMobile}
-        soundEnabled={soundEnabled}
-        onToggleSound={() => setSoundEnabled((previous) => !previous)}
-        fullscreenSupported={fullscreenSupported}
-        isFullscreen={isFullscreen}
-        chromeVisible={chromeVisible || !isFullscreen}
-        onToggleFullscreen={toggleFullscreen}
-        onGoToPage={handleGoToPage}
-        ttsEnabled={ttsEnabled}
-        tts={{
-          voices: LIBRARY_TTS_VOICE_OPTIONS,
-          voiceId: ttsVoiceId,
-          voiceLabel: resolveLibraryTtsVoice(ttsVoiceId).label,
-          status: ttsStatus,
-          selectionMode: ttsSelectionMode,
-          selectedSegmentLabel: ttsSelectedSegment?.label || "",
-          message: ttsMessage,
-          highlightMode: ttsHighlightMode,
-          showControls: ttsControlsVisible,
-        }}
-        onTtsVoiceChange={(voiceId) => {
-          registerReaderActivity();
-          setTtsControlsVisible(true);
-          setTtsVoiceId(resolveLibraryTtsVoice(voiceId).id);
-          if (["playing", "paused", "loading"].includes(ttsStatusRef.current)) {
-            stopTtsPlayback({
-              message: "Voice updated. Press play to continue with the new voice.",
-              preserveSelection: true,
-            });
-          }
-        }}
-        onTtsPlay={handleTtsPlay}
-        onTtsPause={handleTtsPause}
-        onTtsResume={handleTtsResume}
-        onTtsStop={() => {
-          setTtsControlsVisible(false);
-          stopTtsPlayback({ message: "Read aloud stopped.", preserveSelection: true });
-        }}
-        onTtsToggleSelectionMode={() => {
-          registerReaderActivity();
-          setTtsControlsVisible(true);
-          setTtsSelectionMode((previous) => !previous);
-        }}
-      />
       <style jsx global>{`
+        .flipbook-reader-stage,
+        .flipbook-reader-stage > div,
+        .flipbook-reader-stage .flipbook-stage-shell {
+          min-height: 0;
+          background: #000;
+        }
+        .flipbook-reader-stage .flipbook-stage-body {
+          background: transparent;
+          border: 0;
+          box-shadow: none;
+          outline: none;
+        }
         .flipbook-selection-mode [data-block-id] {
           cursor: pointer;
         }
@@ -2173,6 +2344,7 @@ export default function FlipbookShell({ initialBook }) {
           clip-path: inset(0);
           user-select: none;
           -webkit-user-select: none;
+          touch-action: pan-x;
         }
         .stf__parent {
           position: relative;
@@ -2212,6 +2384,7 @@ export default function FlipbookShell({ initialBook }) {
           will-change: transform;
           user-select: none;
           -webkit-user-select: none;
+          touch-action: pan-x;
         }
         .flipbook-runtime-page {
           position: relative;
@@ -2232,7 +2405,10 @@ export default function FlipbookShell({ initialBook }) {
           content: "";
           position: absolute;
           inset: 0;
-          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03), inset 0 24px 36px rgba(255, 255, 255, 0.02);
+          box-shadow:
+            inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+            inset 0 24px 36px rgba(255, 255, 255, 0.02),
+            inset 0 -18px 30px rgba(0, 0, 0, 0.05);
           pointer-events: none;
         }
         .flipbook-page-sheet {
@@ -2243,6 +2419,59 @@ export default function FlipbookShell({ initialBook }) {
           color: var(--flipbook-page-text);
           backface-visibility: hidden;
           transform: translateZ(0);
+          pointer-events: none;
+        }
+        .flipbook-page-sheet::before,
+        .flipbook-page-sheet::after {
+          content: "";
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          pointer-events: none;
+        }
+        .flipbook-page-sheet.page-side-cover::before {
+          left: 0;
+          right: 0;
+          background:
+            radial-gradient(circle at 34% 48%, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 34%),
+            linear-gradient(90deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 14%, rgba(255,255,255,0) 26%, rgba(0,0,0,0.12) 78%, rgba(0,0,0,0.28) 100%),
+            linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 18%, rgba(0,0,0,0.12) 100%);
+          opacity: 0.96;
+        }
+        .flipbook-page-sheet.page-side-cover::after {
+          right: 0;
+          width: 30px;
+          background:
+            linear-gradient(270deg, rgba(0, 0, 0, 0.34) 0%, rgba(0, 0, 0, 0.12) 42%, rgba(255,255,255,0.03) 74%, rgba(0, 0, 0, 0) 100%);
+          opacity: 0.88;
+        }
+        .flipbook-page-sheet.page-side-left::before {
+          right: 0;
+          width: 64px;
+          background:
+            linear-gradient(270deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.32) 24%, rgba(255, 255, 255, 0.16) 50%, rgba(255, 255, 255, 0.06) 72%, rgba(0, 0, 0, 0) 100%);
+          opacity: 1;
+        }
+        .flipbook-page-sheet.page-side-right::before {
+          left: 0;
+          width: 64px;
+          background:
+            linear-gradient(90deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.32) 24%, rgba(255, 255, 255, 0.16) 50%, rgba(255, 255, 255, 0.06) 72%, rgba(0, 0, 0, 0) 100%);
+          opacity: 1;
+        }
+        .flipbook-page-sheet.page-side-right::after {
+          right: 0;
+          width: 24px;
+          background:
+            linear-gradient(270deg, rgba(0, 0, 0, 0.24) 0%, rgba(0, 0, 0, 0.08) 42%, rgba(255,255,255,0.04) 74%, rgba(0, 0, 0, 0) 100%);
+          opacity: 0.78;
+        }
+        .flipbook-page-sheet.page-side-left::after {
+          left: 0;
+          width: 18px;
+          background:
+            linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 42%, rgba(255, 255, 255, 0) 100%);
+          opacity: 0.74;
         }
         .flipbook-page-content,
         .flipbook-page-inner {
@@ -2255,6 +2484,8 @@ export default function FlipbookShell({ initialBook }) {
           box-sizing: border-box;
           position: relative;
           overflow: hidden;
+          pointer-events: none;
+          touch-action: pan-x;
         }
         .flipbook-page-sheet.has-editorial-chrome .flipbook-page-content {
           padding-top: ${FLIPBOOK_EDITORIAL_CONTENT_TOP_INSET}px;
@@ -2270,6 +2501,15 @@ export default function FlipbookShell({ initialBook }) {
           font-size: 18px;
           line-height: 1.58;
           overflow: hidden;
+          pointer-events: none;
+        }
+        .flipbook-selection-mode .flipbook-page-sheet,
+        .flipbook-selection-mode .flipbook-page-content,
+        .flipbook-selection-mode .flipbook-page-inner {
+          pointer-events: auto;
+        }
+        .flipbook-selection-mode [data-block-id] {
+          pointer-events: auto;
         }
         .flipbook-page-shell {
           width: 100%;
@@ -2372,10 +2612,10 @@ export default function FlipbookShell({ initialBook }) {
           background: var(--flipbook-page-chrome-line);
         }
         .flipbook-page-meta-line.top {
-          top: 1.62rem;
+          top: 2.18rem;
         }
         .flipbook-page-meta-line.bottom {
-          bottom: 1.52rem;
+          bottom: 2.14rem;
         }
         .flipbook-page-meta-row {
           position: absolute;
@@ -2385,14 +2625,14 @@ export default function FlipbookShell({ initialBook }) {
           align-items: center;
           justify-content: space-between;
           gap: 1rem;
-          font-size: 11px;
+          font-size: 12.5px;
           line-height: 1;
         }
         .flipbook-page-meta-row.top {
-          top: 1rem;
+          top: 0.96rem;
         }
         .flipbook-page-meta-row.bottom {
-          bottom: 0.78rem;
+          bottom: 0.7rem;
         }
         .flipbook-page-meta-row.bottom span:last-child {
           min-width: 2rem;

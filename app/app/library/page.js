@@ -7,7 +7,7 @@ import {
 } from "@/lib/library/repository";
 
 export const metadata = {
-  title: "EnglishMate Library",
+  title: "Biblioteca | Aula Virtual",
 };
 
 export const dynamic = "force-dynamic";
@@ -45,7 +45,7 @@ export default async function LibraryPage() {
     });
   } catch (error) {
     if (isMissingLibraryTableError(error, "library_books")) {
-      errorMessage = "Library tables are not available yet. Run the latest Supabase migration first.";
+      errorMessage = "Las tablas de biblioteca todavía no están disponibles. Ejecuta primero la migración más reciente de Supabase.";
     } else {
       errorMessage = error?.message || "No se pudo cargar la biblioteca.";
     }
@@ -54,7 +54,7 @@ export default async function LibraryPage() {
   return (
     <div className="space-y-6">
       {errorMessage ? (
-        <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+        <div className="rounded-[12px] border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
           {errorMessage}
         </div>
       ) : null}

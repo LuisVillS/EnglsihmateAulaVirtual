@@ -8,10 +8,7 @@ import {
 } from "@/lib/library/source-manager";
 
 export async function GET(request, { params: paramsPromise }) {
-  const auth = await requireLibraryStudentRouteAccess({
-    allowAdmin: true,
-    allowGuest: true,
-  });
+  const auth = await requireLibraryStudentRouteAccess();
   if (auth.errorResponse) return auth.errorResponse;
 
   try {

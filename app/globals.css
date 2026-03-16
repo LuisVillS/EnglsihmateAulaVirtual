@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --em-primary: #0b5cff;
-  --em-secondary: #1a3ea8;
+  --em-primary: #103474;
+  --em-secondary: #0c295a;
   --em-accent: #f13d4f;
   --em-bg: #ffffff;
   --em-surface: #ffffff;
@@ -12,7 +12,7 @@
   --em-text-muted: #667089;
   --em-danger: #ff5f77;
   --em-success: #3dcf95;
-  --em-radius: 14px;
+  --em-radius: 10px;
   --em-shadow: 0 10px 30px rgba(31, 36, 50, 0.12);
 
   --background: var(--em-bg);
@@ -90,6 +90,62 @@ h6 {
 .app-content,
 .app-content * {
   min-width: 0;
+}
+
+.student-panel {
+  border: 1px solid rgba(16, 52, 116, 0.1);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.85) inset,
+    0 16px 32px rgba(15, 23, 42, 0.07);
+}
+
+.student-panel-soft {
+  border: 1px solid rgba(16, 52, 116, 0.1);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fbff 0%, #f2f6fd 100%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+}
+
+.student-empty-panel {
+  border: 1px dashed rgba(16, 52, 116, 0.2);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fafcff 0%, #f4f7fc 100%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.03);
+}
+
+.student-button-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: #103474;
+  color: #ffffff;
+  font-weight: 600;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.student-button-primary:hover {
+  background: #0c295a;
+}
+
+.student-button-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 600;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.student-button-secondary:hover {
+  border-color: rgba(16, 52, 116, 0.2);
+  background: #f8fbff;
+  color: #103474;
 }
 
 @keyframes page-skeleton-pulse {

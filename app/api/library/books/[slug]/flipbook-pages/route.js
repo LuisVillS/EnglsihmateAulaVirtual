@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { requireLibraryStudentRouteAccess } from "@/lib/library/auth";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { getPublishedLibraryBookBySlug } from "@/lib/library/repository";
 import { resolvePreferredEpubSource, sourceHasReadableEpubAsset } from "@/lib/library/source-manager";
 import { getOrCreateFlipbookManifest } from "@/lib/flipbook-services/manifest-cache";
@@ -23,11 +22,17 @@ export async function GET(request, { params: paramsPromise }) {
     const to = Math.max(from, Number(searchParams.get("to")) || from + 119);
     const manifestId = String(searchParams.get("manifestId") || "").trim();
     const session = verifyFlipbookSessionToken(readSessionToken(request));
+    const auth = await requireLibraryStudentRouteAccess();
+    if (auth.errorResponse) return auth.errorResponse;
 
-    if (session.valid && session.slug === params?.slug && session.manifestId === manifestId) {
-      const db = await createSupabaseServerClient();
+    if (
+      session.valid &&
+      session.slug === params?.slug &&
+      session.manifestId === manifestId &&
+      session.userId === auth.user?.id
+    ) {
       const manifest = await getFlipbookManifestById({
-        db,
+        db: auth.db,
         manifestId: session.manifestId,
         includePages: false,
       });
@@ -37,7 +42,7 @@ export async function GET(request, { params: paramsPromise }) {
 
       const safeTo = Math.min(to, Math.max(0, manifest.pageCount - 1));
       const pages = await listFlipbookPages({
-        db,
+        db: auth.db,
         manifestId: manifest.id,
         from,
         to: safeTo,
@@ -50,12 +55,6 @@ export async function GET(request, { params: paramsPromise }) {
         pages,
       });
     }
-
-    const auth = await requireLibraryStudentRouteAccess({
-      allowAdmin: true,
-      allowGuest: true,
-    });
-    if (auth.errorResponse) return auth.errorResponse;
 
     const book = await getPublishedLibraryBookBySlug({
       db: auth.db,

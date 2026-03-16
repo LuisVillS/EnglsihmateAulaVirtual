@@ -1,8 +1,15 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { deleteCourseTemplate } from "@/app/admin/actions";
+import {
+  AdminBadge,
+  AdminCard,
+  AdminPage,
+  AdminPageHeader,
+  AdminSectionHeader,
+} from "@/components/admin-page";
 import { getFrequencyReference } from "@/lib/course-sessions";
+import { createSupabaseServerClient } from "@/lib/supabase-server";
 
 export const metadata = {
   title: "Plantillas de curso | Admin",
@@ -17,7 +24,7 @@ function getMissingTableName(error) {
 
 function formatFrequencyLabel(value) {
   const map = {
-    DAILY: "Daily (L-V)",
+    DAILY: "Diario (L-V)",
     MWF: "Interdiario 1 (LMV)",
     TT: "Interdiario 2 (MJ)",
     SAT: "Sabatinos",
@@ -72,107 +79,106 @@ export default async function CourseTemplatesPage() {
   }
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-10 left-12 h-72 w-72 rounded-full bg-primary/25 blur-[140px]" />
-        <div className="absolute bottom-0 right-16 h-80 w-80 rounded-full bg-accent/15 blur-[160px]" />
-      </div>
-      <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-muted">Admin / Plantillas</p>
-            <h1 className="text-3xl font-semibold">Plantillas de curso</h1>
-            <p className="text-sm text-muted">
-              Define estructura y material reusable por nivel + frecuencia.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
+    <AdminPage className="mx-auto w-full max-w-7xl">
+      <AdminPageHeader
+        eyebrow="Contenido academico"
+        title="Plantillas de curso"
+        description="Estructuras reutilizables por nivel y frecuencia, con las mismas rutas y acciones actuales dentro de un indice mas limpio."
+        actions={
+          <>
             <Link
               href="/admin/courses/templates/new"
-              className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#103474] px-4 text-sm font-semibold text-white transition hover:bg-[#0c295a]"
             >
-              + Nueva plantilla
+              Nueva plantilla
             </Link>
             <Link
               href="/admin/commissions"
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
             >
-              Volver a comisiones
+              Ver comisiones
             </Link>
-          </div>
+          </>
+        }
+      />
+
+      {missingTable ? (
+        <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+          Falta crear tablas de templates en Supabase. Ejecuta el SQL actualizado.
         </div>
+      ) : null}
 
-        {missingTable ? (
-          <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-            Falta crear tablas de templates en Supabase. Ejecuta el SQL actualizado.
-          </div>
-        ) : null}
+      <AdminCard className="space-y-4">
+        <AdminSectionHeader
+          eyebrow="Catalogo"
+          title="Biblioteca de plantillas"
+          description="Consulta, edita o elimina plantillas manteniendo intacta la logica de sesiones y duracion."
+          meta={<AdminBadge tone="accent">{templates.length} plantilla(s)</AdminBadge>}
+        />
 
-        <div className="rounded-2xl border border-border bg-surface p-4">
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-muted">
-                  <th className="px-3 py-2">Nivel</th>
-                  <th className="px-3 py-2">Frecuencia</th>
-                  <th className="px-3 py-2">Nombre</th>
-                  <th className="px-3 py-2">Sesiones/mes</th>
-                  <th className="px-3 py-2">Meses</th>
-                  <th className="px-3 py-2">Sesiones total</th>
-                  <th className="px-3 py-2">Creada</th>
-                  <th className="px-3 py-2 text-right">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {templates.map((template) => {
-                  const metrics = getFrequencyReference(template.frequency);
-                  const sessionsPerMonth = metrics?.sessionsPerMonth || 0;
-                  const months = metrics?.months || 0;
-                  const expectedTotal = sessionsPerMonth * months;
-                  const currentTotal = sessionsCountByTemplate.get(template.id) || 0;
-                  return (
-                    <tr key={template.id} className="border-t border-border text-foreground">
-                      <td className="px-3 py-2">{template.course_level}</td>
-                      <td className="px-3 py-2">{formatFrequencyLabel(template.frequency)}</td>
-                      <td className="px-3 py-2">{template.template_name || "-"}</td>
-                      <td className="px-3 py-2">{sessionsPerMonth || "-"}</td>
-                      <td className="px-3 py-2">{months || "-"}</td>
-                      <td className="px-3 py-2">{currentTotal || expectedTotal || 0}</td>
-                      <td className="px-3 py-2">{template.created_at ? template.created_at.slice(0, 10) : "-"}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex justify-end gap-2">
-                          <Link
-                            href={`/admin/courses/templates/${template.id}`}
-                            className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b border-[rgba(15,23,42,0.08)] text-left text-[11px] uppercase tracking-[0.18em] text-[#94a3b8]">
+                <th className="px-3 py-3 font-semibold">Nivel</th>
+                <th className="px-3 py-3 font-semibold">Frecuencia</th>
+                <th className="px-3 py-3 font-semibold">Nombre</th>
+                <th className="px-3 py-3 font-semibold">Sesiones / mes</th>
+                <th className="px-3 py-3 font-semibold">Meses</th>
+                <th className="px-3 py-3 font-semibold">Sesiones totales</th>
+                <th className="px-3 py-3 font-semibold">Creada</th>
+                <th className="px-3 py-3 text-right font-semibold">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {templates.map((template) => {
+                const metrics = getFrequencyReference(template.frequency);
+                const sessionsPerMonth = metrics?.sessionsPerMonth || 0;
+                const months = metrics?.months || 0;
+                const expectedTotal = sessionsPerMonth * months;
+                const currentTotal = sessionsCountByTemplate.get(template.id) || 0;
+                return (
+                  <tr key={template.id} className="border-b border-[rgba(15,23,42,0.06)] text-[#0f172a] last:border-b-0">
+                    <td className="px-3 py-3 font-medium">{template.course_level}</td>
+                    <td className="px-3 py-3 text-[#475569]">{formatFrequencyLabel(template.frequency)}</td>
+                    <td className="px-3 py-3">{template.template_name || "-"}</td>
+                    <td className="px-3 py-3 text-[#475569]">{sessionsPerMonth || "-"}</td>
+                    <td className="px-3 py-3 text-[#475569]">{months || "-"}</td>
+                    <td className="px-3 py-3 text-[#475569]">{currentTotal || expectedTotal || 0}</td>
+                    <td className="px-3 py-3 text-[#475569]">{template.created_at ? template.created_at.slice(0, 10) : "-"}</td>
+                    <td className="px-3 py-3">
+                      <div className="flex justify-end gap-2">
+                        <Link
+                          href={`/admin/courses/templates/${template.id}`}
+                          className="inline-flex min-h-9 items-center justify-center rounded-xl border border-[rgba(15,23,42,0.1)] bg-white px-3 text-xs font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+                        >
+                          Editar
+                        </Link>
+                        <form action={deleteCourseTemplate}>
+                          <input type="hidden" name="templateId" value={template.id} />
+                          <button
+                            type="submit"
+                            className="inline-flex min-h-9 items-center justify-center rounded-xl border border-[rgba(239,68,68,0.2)] bg-white px-3 text-xs font-semibold text-[#b91c1c] transition hover:bg-[rgba(239,68,68,0.06)]"
                           >
-                            Editar
-                          </Link>
-                          <form action={deleteCourseTemplate}>
-                            <input type="hidden" name="templateId" value={template.id} />
-                            <button
-                              type="submit"
-                              className="rounded-full border border-danger/50 px-3 py-1 text-xs font-semibold text-danger transition hover:bg-danger/10"
-                            >
-                              Eliminar
-                            </button>
-                          </form>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {!templates.length ? (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted">
-                      Aun no hay plantillas creadas.
+                            Eliminar
+                          </button>
+                        </form>
+                      </div>
                     </td>
                   </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
+                );
+              })}
+              {!templates.length ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-10 text-center text-sm text-[#64748b]">
+                    Aun no hay plantillas creadas.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
         </div>
-      </div>
-    </section>
+      </AdminCard>
+    </AdminPage>
   );
 }

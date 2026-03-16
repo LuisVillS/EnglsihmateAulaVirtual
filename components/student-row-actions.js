@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { deleteStudent } from "@/app/admin/actions";
+import AppModal from "@/components/app-modal";
 
 const MENU_WIDTH = 220;
 const MENU_MARGIN = 8;
@@ -36,6 +37,8 @@ function calculateMenuPosition(rect, menuHeight = 140) {
 export default function StudentRowActions({ studentId }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [isPending, startTransition] = useTransition();
   const [menuStyle, setMenuStyle] = useState(null);
   const menuRef = useRef(null);
@@ -101,18 +104,21 @@ export default function StudentRowActions({ studentId }) {
   }, [open, menuStyle]);
 
   const handleDeleteClick = () => {
-    if (!window.confirm("Estas seguro de que deseas eliminar este alumno?")) {
-      return;
-    }
+    closeMenu();
+    setDeleteError("");
+    setDeleteOpen(true);
+  };
+
+  const confirmDelete = () => {
     startTransition(async () => {
       const formData = new FormData();
       formData.append("profileId", studentId);
       const result = await deleteStudent(formData);
       if (result?.error) {
-        window.alert(result.error);
+        setDeleteError(result.error);
         return;
       }
-      closeMenu();
+      setDeleteOpen(false);
       router.refresh();
     });
   };
@@ -136,17 +142,17 @@ export default function StudentRowActions({ studentId }) {
               href={`/admin/students/${studentId}`}
               prefetch={false}
               onClick={closeMenu}
-              className="block rounded-xl px-3 py-2 text-foreground transition hover:bg-surface-2"
+              className="block rounded-xl px-3 py-2 text-[#0f172a] transition hover:bg-[#f8fbff]"
             >
-              Ver / Editar alumno
+              Abrir ficha completa
             </Link>
             <button
               type="button"
               disabled={isPending}
-              className="mt-1 block w-full rounded-xl px-3 py-2 text-left text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-1 block w-full rounded-xl px-3 py-2 text-left text-[#b91c1c] transition hover:bg-[rgba(239,68,68,0.08)] disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleDeleteClick}
             >
-              Eliminar alumno
+              Eliminar alumno...
             </button>
           </div>,
           document.body
@@ -159,7 +165,7 @@ export default function StudentRowActions({ studentId }) {
         type="button"
         onClick={toggleMenu}
         ref={buttonRef}
-        className="rounded-full border border-border p-2 text-muted transition hover:border-primary hover:text-foreground"
+        className="rounded-xl border border-[rgba(15,23,42,0.1)] p-2 text-[#64748b] transition hover:border-[rgba(16,52,116,0.22)] hover:bg-[#f8fbff] hover:text-[#103474]"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Acciones del alumno"
@@ -167,6 +173,36 @@ export default function StudentRowActions({ studentId }) {
         <span className="text-lg leading-none">{isPending ? "..." : "\u22EE"}</span>
       </button>
       {menu}
+      <AppModal open={deleteOpen} onClose={() => setDeleteOpen(false)} title="Eliminar alumno" widthClass="max-w-xl">
+        <div className="space-y-4">
+          <p className="text-sm text-[#475569]">
+            Esta accion eliminara el perfil del alumno y sus inscripciones actuales. No cambia la logica del sistema,
+            pero si remueve el registro de forma inmediata.
+          </p>
+          {deleteError ? (
+            <p className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+              {deleteError}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setDeleteOpen(false)}
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={confirmDelete}
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#b91c1c] px-4 text-sm font-semibold text-white transition hover:bg-[#991b1b] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPending ? "Eliminando..." : "Confirmar eliminacion"}
+            </button>
+          </div>
+        </div>
+      </AppModal>
     </div>
   );
 }

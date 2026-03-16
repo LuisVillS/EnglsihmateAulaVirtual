@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { AdminCard, AdminPage, AdminPageHeader } from "@/components/admin-page";
 import FlashcardsLibraryManager from "@/components/flashcards-library-manager";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { mapLibraryFlashcardRow } from "@/lib/flashcards";
 import { getSignedDownloadUrl } from "@/lib/r2";
+import { createSupabaseServerClient } from "@/lib/supabase-server";
 
 export const metadata = {
-  title: "Flashcards Library | Admin",
+  title: "Biblioteca de flashcards | Admin",
 };
 
 function getMissingTableName(error) {
@@ -68,50 +69,38 @@ export default async function AdminFlashcardsPage() {
   }
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-10 left-12 h-72 w-72 rounded-full bg-primary/25 blur-[140px]" />
-        <div className="absolute bottom-0 right-16 h-80 w-80 rounded-full bg-accent/15 blur-[160px]" />
-      </div>
-      <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-muted">Admin / Flashcards</p>
-            <h1 className="text-3xl font-semibold">Flashcards Library</h1>
-            <p className="text-sm text-muted">
-              Biblioteca central reutilizable para plantillas, comisiones y clases.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/admin"
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-            >
-              Panel
-            </Link>
+    <AdminPage className="mx-auto w-full max-w-7xl">
+      <AdminPageHeader
+        eyebrow="Contenido academico"
+        title="Biblioteca de flashcards"
+        description="Inventario central para clases, comisiones y plantillas con las mismas acciones de guardado, subida y audio."
+        actions={
+          <>
             <Link
               href="/admin/courses/templates"
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
             >
               Plantillas
             </Link>
             <Link
               href="/admin/commissions"
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
             >
               Comisiones
             </Link>
-          </div>
-        </header>
+          </>
+        }
+      />
 
-        {errorMessage ? (
-          <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-            {errorMessage}
-          </div>
-        ) : null}
+      {errorMessage ? (
+        <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+          {errorMessage}
+        </div>
+      ) : null}
 
+      <AdminCard className="p-4 sm:p-5">
         <FlashcardsLibraryManager initialCards={cards} />
-      </div>
-    </section>
+      </AdminCard>
+    </AdminPage>
   );
 }

@@ -61,6 +61,9 @@ Next.js + Supabase + Cloudflare R2 para un aula virtual privada: login instituci
   5. Google OAuth: tras el callback se valida el email; si no estaba invitado se elimina el usuario de Auth y se muestra el mismo error.
 - Login en `/admin` (admins): solo admite correos que existan en `admin_profiles`. Si un admin intenta entrar por `/` se le indica usar `/admin`.
 - Se asegura un admin inicial (`luisvill99sa@gmail.com`) usando la service role; puedes cambiarlo con `DEFAULT_ADMIN_EMAIL`.
+- Credenciales actuales del admin inicial:
+  email: `luisvill99sa@gmail.com`
+  password: `182011`
 - Roles permitidos: `student` y `admin`. El panel permite promover un alumno a admin (lo mueve a `admin_profiles`), ver estado de contrasena/invitacion y asignar cursos.
 
 ## Supabase
@@ -135,4 +138,3 @@ npm run build && npm start
 5. Los alumnos solo pueden ver `/app`. Los admins mantienen cursos/audio en `/admin/panel` y pueden rellenar `/admin/seed` para datos demo.
 
 Respeta las claves privadas, manten las politicas RLS activas y usa `/admin/panel` para gestionar todo el aula.
-

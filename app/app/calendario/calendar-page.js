@@ -172,8 +172,8 @@ export default function CalendarPage({
   };
 
   return (
-    <div className="space-y-4 rounded-2xl border border-slate-200/80 bg-slate-50/95 p-4 text-slate-800 shadow-sm md:p-5">
-      <header className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+    <div className="student-panel space-y-4 p-4 text-slate-800 md:p-5">
+      <header className="student-panel-soft px-4 py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-800">Calendario</h2>
@@ -185,7 +185,7 @@ export default function CalendarPage({
             {hasUnlockedInMonth ? (
               <a
                 href={`/api/calendar/ics?month=${visibleMonth}`}
-                className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+                className="student-button-secondary"
               >
                 Exportar .ics
               </a>
@@ -193,40 +193,40 @@ export default function CalendarPage({
               <button
                 type="button"
                 disabled
-                className="rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-400"
+                className="rounded-[10px] border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-400"
               >
                 Exportar .ics
               </button>
             )}
 
             {!googleCalendarEnabled ? (
-              <span className="rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs text-slate-500">
+              <span className="rounded-[999px] border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs text-slate-500">
                 Google Calendar no configurado
               </span>
             ) : calendarConnection.connected ? (
               <>
-                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
+                <span className="rounded-[999px] border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
                   Google conectado
                 </span>
                 <button
                   type="button"
                   onClick={handleSyncGoogleCalendar}
                   disabled={syncState.loading || !hasUnlockedInAnyMonth}
-                  className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  className="student-button-secondary disabled:cursor-not-allowed disabled:text-slate-400"
                 >
                   {syncState.loading ? "Sincronizando..." : "Sincronizar"}
                 </button>
               </>
             ) : (
               <>
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+                <span className="rounded-[999px] border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
                   Google desconectado
                 </span>
                 <button
                   type="button"
                   onClick={handleConnectGoogleCalendar}
                   disabled={!hasUnlockedInAnyMonth}
-                  className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  className="student-button-secondary disabled:cursor-not-allowed disabled:text-slate-400"
                 >
                   Conectar
                 </button>
@@ -236,10 +236,10 @@ export default function CalendarPage({
         </div>
 
         {calendarConnection.connected ? (
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-            <p>Conectado: {calendarConnection.email || "Google Account"}</p>
+          <div className="student-panel-soft mt-3 px-3 py-2 text-xs text-slate-500">
+            <p>Conectado: {calendarConnection.email || "Cuenta de Google"}</p>
             {calendarConnection.lastSyncAt ? (
-              <p>Ultima sincronizacion: {new Date(calendarConnection.lastSyncAt).toLocaleString("es-PE")}</p>
+              <p>Última sincronización: {new Date(calendarConnection.lastSyncAt).toLocaleString("es-PE")}</p>
             ) : null}
             {calendarConnection.lastSyncStatus === "error" && calendarConnection.lastSyncError ? (
               <p>Error previo: {calendarConnection.lastSyncError}</p>
@@ -249,7 +249,7 @@ export default function CalendarPage({
 
         {syncState.message ? (
           <div
-            className={`mt-3 rounded-lg border px-3 py-2 text-sm ${
+            className={`mt-3 rounded-[10px] border px-3 py-2 text-sm ${
               syncState.type === "error"
                 ? "border-red-200 bg-red-50 text-red-700"
                 : syncState.type === "warning"
@@ -262,14 +262,14 @@ export default function CalendarPage({
         ) : null}
 
         {loadError ? (
-          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="mt-3 rounded-[10px] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {loadError}
           </div>
         ) : null}
 
         {hasLockedOnlyInMonth ? (
-          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-            Este mes tiene clases bloqueadas hasta la renovacion.
+          <div className="mt-3 rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+            Este mes tiene clases bloqueadas hasta la renovación.
           </div>
         ) : null}
       </header>

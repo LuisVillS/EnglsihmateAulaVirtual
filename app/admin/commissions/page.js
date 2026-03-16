@@ -1,9 +1,8 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
-import CommissionsTable from "./table";
-import CommissionCreateForm from "./commission-create-form";
+import { AdminPage } from "@/components/admin-page";
+import CommissionsWorkspace from "./commissions-workspace";
 
 export const metadata = {
   title: "Comisiones | Admin",
@@ -120,45 +119,8 @@ export default async function CommissionsPage() {
   }
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-10 left-12 h-72 w-72 rounded-full bg-primary/25 blur-[140px]" />
-        <div className="absolute bottom-0 right-16 h-80 w-80 rounded-full bg-accent/15 blur-[160px]" />
-      </div>
-      <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-muted">Admin / Comisiones</p>
-            <h1 className="text-3xl font-semibold">Comisiones</h1>
-            <p className="text-sm text-muted">Gestiona horarios, sesiones y alumnos por comision.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/admin/courses/templates"
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-            >
-              Plantillas
-            </Link>
-            <Link
-              href="/admin"
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
-            >
-              Volver al panel
-            </Link>
-          </div>
-        </div>
-
-        <details open className="rounded-2xl border border-border bg-surface p-5">
-          <summary className="cursor-pointer text-base font-semibold text-foreground">
-            Crear nueva comision
-          </summary>
-          <div className="mt-4 max-w-3xl">
-            <CommissionCreateForm templates={templates} />
-          </div>
-        </details>
-
-        <CommissionsTable commissions={commissions} />
-      </div>
-    </section>
+    <AdminPage className="space-y-4">
+      <CommissionsWorkspace commissions={commissions} templates={templates} />
+    </AdminPage>
   );
 }

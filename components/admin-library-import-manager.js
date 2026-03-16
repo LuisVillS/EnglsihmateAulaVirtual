@@ -28,7 +28,7 @@ function CandidateBadge({ label, tone = "neutral" }) {
 function buildLocalPreview(candidate, overrides = {}) {
   const title = candidate?.title || candidate?.rawTitle || candidate?.raw_title || "Untitled";
   const subtitle = candidate?.subtitle || "";
-  const authorDisplay = candidate?.author_display || candidate?.authorDisplay || "Unknown author";
+  const authorDisplay = candidate?.author_display || candidate?.authorDisplay || "Sin autor";
   const category = overrides.category || candidate?.category || "";
   const tags = String(overrides.tags || "")
     ? String(overrides.tags)
@@ -80,9 +80,9 @@ function PreviewModal({ preview, loading, error, onClose }) {
       <div className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-muted">Publish preview</p>
+            <p className="text-xs uppercase tracking-[0.24em] text-muted">Vista previa</p>
             <h2 className="mt-1 text-xl font-semibold text-foreground">
-              {preview?.title || (loading ? "Loading preview..." : "Preview unavailable")}
+              {preview?.title || (loading ? "Cargando vista previa..." : "Vista previa no disponible")}
             </h2>
           </div>
           <button
@@ -90,14 +90,14 @@ function PreviewModal({ preview, loading, error, onClose }) {
             onClick={onClose}
             className="rounded-xl border border-border px-3 py-2 text-sm font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
           >
-            Close
+            Cerrar
           </button>
         </div>
 
         <div className="grid gap-0 lg:grid-cols-[320px_minmax(0,1fr)]">
           <div className="border-b border-border bg-surface-2 p-5 lg:border-b-0 lg:border-r">
             {loading ? (
-              <p className="text-sm text-muted">Loading source metadata...</p>
+              <p className="text-sm text-muted">Cargando metadata de origen...</p>
             ) : error ? (
               <p className="text-sm text-danger">{error}</p>
             ) : (
@@ -107,7 +107,7 @@ function PreviewModal({ preview, loading, error, onClose }) {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={preview.coverUrl} alt={preview.title} className="h-full w-full rounded-xl object-cover shadow-lg shadow-black/10" />
                   ) : (
-                    <span className="text-xs uppercase tracking-[0.24em] text-muted">No cover</span>
+                    <span className="text-xs uppercase tracking-[0.24em] text-muted">Sin portada</span>
                   )}
                 </div>
 
@@ -118,16 +118,16 @@ function PreviewModal({ preview, loading, error, onClose }) {
                 </div>
 
                 <div className="space-y-2 text-sm text-muted">
-                  <p><span className="font-semibold text-foreground">Author:</span> {preview?.authorDisplay || "Unknown author"}</p>
-                  <p><span className="font-semibold text-foreground">Provider:</span> {preview?.providerName || "N/A"}</p>
-                  <p><span className="font-semibold text-foreground">Provider ID:</span> {preview?.providerBookId || "N/A"}</p>
-                  <p><span className="font-semibold text-foreground">Published:</span> {preview?.firstPublishYear || "N/A"}</p>
-                  <p><span className="font-semibold text-foreground">Category:</span> {preview?.category || "N/A"}</p>
+                  <p><span className="font-semibold text-foreground">Autor:</span> {preview?.authorDisplay || "Sin autor"}</p>
+                  <p><span className="font-semibold text-foreground">Proveedor:</span> {preview?.providerName || "N/A"}</p>
+                  <p><span className="font-semibold text-foreground">ID proveedor:</span> {preview?.providerBookId || "N/A"}</p>
+                  <p><span className="font-semibold text-foreground">Publicado:</span> {preview?.firstPublishYear || "N/A"}</p>
+                  <p><span className="font-semibold text-foreground">Categoria:</span> {preview?.category || "N/A"}</p>
                 </div>
 
                 {preview?.uploadedEpub?.fileName ? (
                   <div className="rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm text-foreground">
-                    <p className="font-semibold">Uploaded EPUB</p>
+                    <p className="font-semibold">EPUB cargado</p>
                     <p className="mt-1 text-muted">{preview.uploadedEpub.fileName}</p>
                   </div>
                 ) : null}
@@ -140,9 +140,9 @@ function PreviewModal({ preview, loading, error, onClose }) {
 
                 {preview?.duplicateWarning?.hasDuplicate ? (
                   <div className="rounded-xl border border-primary/25 bg-primary/8 p-4 text-sm text-foreground">
-                    <p className="font-semibold">Possible duplicate already in catalog</p>
+                    <p className="font-semibold">Posible duplicado en catalogo</p>
                     <p className="mt-1 text-muted">
-                      {preview.duplicateWarning.existingBooks.length} published match(es), {preview.duplicateWarning.stagingMatches.length} staging match(es)
+                      {preview.duplicateWarning.existingBooks.length} coincidencia(s) publicada(s), {preview.duplicateWarning.stagingMatches.length} coincidencia(s) en staging
                     </p>
                   </div>
                 ) : null}
@@ -154,7 +154,7 @@ function PreviewModal({ preview, loading, error, onClose }) {
             {preview?.bookDraft ? (
               <div className="space-y-4 rounded-xl border border-border bg-surface-2 p-5">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-muted">Book Data To Save</p>
+                  <p className="text-xs uppercase tracking-[0.24em] text-muted">Datos que se guardaran</p>
                   <h3 className="mt-2 text-lg font-semibold text-foreground">{preview.bookDraft.title || "Untitled"}</h3>
                   {preview.bookDraft.subtitle ? (
                     <p className="mt-1 text-sm text-muted">{preview.bookDraft.subtitle}</p>
@@ -163,11 +163,11 @@ function PreviewModal({ preview, loading, error, onClose }) {
 
                 <dl className="grid gap-3 text-sm text-muted md:grid-cols-2">
                   <div>
-                    <dt className="font-semibold text-foreground">Author</dt>
-                    <dd>{preview.bookDraft.authorDisplay || "Unknown author"}</dd>
+                    <dt className="font-semibold text-foreground">Autor</dt>
+                    <dd>{preview.bookDraft.authorDisplay || "Sin autor"}</dd>
                   </div>
                   <div>
-                    <dt className="font-semibold text-foreground">Language</dt>
+                    <dt className="font-semibold text-foreground">Idioma</dt>
                     <dd>{preview.bookDraft.languageCode || "eng"}</dd>
                   </div>
                   <div>
@@ -175,15 +175,15 @@ function PreviewModal({ preview, loading, error, onClose }) {
                     <dd>{preview.bookDraft.cefrLevel || "N/A"}</dd>
                   </div>
                   <div>
-                    <dt className="font-semibold text-foreground">Category</dt>
+                    <dt className="font-semibold text-foreground">Categoria</dt>
                     <dd>{preview.bookDraft.category || "N/A"}</dd>
                   </div>
                   <div>
-                    <dt className="font-semibold text-foreground">Year</dt>
+                    <dt className="font-semibold text-foreground">Ano</dt>
                     <dd>{preview.bookDraft.firstPublishYear || "N/A"}</dd>
                   </div>
                   <div>
-                    <dt className="font-semibold text-foreground">Cover</dt>
+                    <dt className="font-semibold text-foreground">Portada</dt>
                     <dd className="break-all">{preview.bookDraft.coverUrl || "N/A"}</dd>
                   </div>
                   <div className="md:col-span-2">
@@ -191,7 +191,7 @@ function PreviewModal({ preview, loading, error, onClose }) {
                     <dd>{Array.isArray(preview.bookDraft.tags) && preview.bookDraft.tags.length ? preview.bookDraft.tags.join(", ") : "N/A"}</dd>
                   </div>
                   <div>
-                    <dt className="font-semibold text-foreground">Source provider</dt>
+                    <dt className="font-semibold text-foreground">Proveedor origen</dt>
                     <dd>{preview.bookDraft.sourceName || "gutenberg"}</dd>
                   </div>
                 </dl>
@@ -205,9 +205,9 @@ function PreviewModal({ preview, loading, error, onClose }) {
             ) : (
               <div className="flex min-h-[56vh] items-center justify-center rounded-xl border border-dashed border-border bg-surface-2 px-6 text-center">
                 <div>
-                  <p className="text-lg font-semibold text-foreground">Preview unavailable</p>
+                  <p className="text-lg font-semibold text-foreground">Vista previa no disponible</p>
                   <p className="mt-2 text-sm text-muted">
-                    We could not build the final book payload preview for this result.
+                    No se pudo construir la vista previa final para este resultado.
                   </p>
                 </div>
               </div>
@@ -423,7 +423,7 @@ export default function AdminLibraryImportManager() {
       setCandidates((previous) => previous.filter((candidate) => !rejectedIds.has(candidateId(candidate))));
       setSelectedIds([]);
       setError("");
-      setMessage(`${selectedCandidates.length} selected title(s) removed from this import view.`);
+      setMessage(`${selectedCandidates.length} titulo(s) quitados de esta vista temporal.`);
       return;
     }
 
@@ -454,7 +454,7 @@ export default function AdminLibraryImportManager() {
 
       applyImportedState(payload?.imported || []);
       setSelectedIds([]);
-      setMessage(`${payload?.imported?.length || 0} selected title(s) published to the library.`);
+      setMessage(`${payload?.imported?.length || 0} titulo(s) publicados en la biblioteca.`);
       if (payload?.errors?.length) {
         setError(payload.errors.map((entry) => entry.error).join(" "));
       }
@@ -474,7 +474,7 @@ export default function AdminLibraryImportManager() {
       <form onSubmit={handleSearch} className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_160px_180px]">
           <div>
-            <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Search Gutenberg</label>
+            <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Buscar en Gutenberg</label>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -482,11 +482,11 @@ export default function AdminLibraryImportManager() {
               placeholder="Pride and Prejudice"
             />
             <p className="mt-2 text-sm text-muted">
-              Admin-only discovery. Search Gutenberg metadata, then attach your EPUB upload to make the title readable inside EnglishMate.
+              Flujo solo para admin. Busca metadata en Gutenberg y adjunta un EPUB para dejar el libro listo en EnglishMate.
             </p>
           </div>
           <div>
-            <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Results</label>
+            <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">Resultados</label>
             <select
               value={searchLimit}
               onChange={(event) => setSearchLimit(Number(event.target.value) || 24)}
@@ -498,14 +498,14 @@ export default function AdminLibraryImportManager() {
               <option value={48}>48</option>
               <option value={60}>60</option>
             </select>
-            <p className="mt-2 text-sm text-muted">Choose how many Gutenberg candidates to load.</p>
+            <p className="mt-2 text-sm text-muted">Define cuantos candidatos quieres cargar por busqueda.</p>
           </div>
           <button
             type="submit"
             disabled={loading}
             className="inline-flex items-center justify-center rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? "Searching..." : "Search"}
+            {loading ? "Buscando..." : "Buscar"}
           </button>
         </div>
       </form>
@@ -518,25 +518,25 @@ export default function AdminLibraryImportManager() {
               onClick={toggleSelectAll}
               className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
             >
-              {allVisibleSelected ? "Clear selection" : "Select all on page"}
+              {allVisibleSelected ? "Limpiar seleccion" : "Seleccionar visibles"}
             </button>
             <input
               value={bulkForm.cefrLevel}
               onChange={(event) => setBulkForm((previous) => ({ ...previous, cefrLevel: event.target.value.toUpperCase() }))}
               className="rounded-xl border border-border bg-surface-2 px-4 py-2 text-sm text-foreground"
-              placeholder="Bulk CEFR"
+              placeholder="CEFR"
             />
             <input
               value={bulkForm.category}
               onChange={(event) => setBulkForm((previous) => ({ ...previous, category: event.target.value }))}
               className="rounded-xl border border-border bg-surface-2 px-4 py-2 text-sm text-foreground"
-              placeholder="Bulk category"
+              placeholder="Categoria"
             />
             <input
               value={bulkForm.tags}
               onChange={(event) => setBulkForm((previous) => ({ ...previous, tags: event.target.value }))}
               className="rounded-xl border border-border bg-surface-2 px-4 py-2 text-sm text-foreground"
-              placeholder="Bulk tags"
+              placeholder="Tags"
             />
             <button
               type="button"
@@ -544,7 +544,7 @@ export default function AdminLibraryImportManager() {
               disabled={!selectedCount || loading}
               className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Publish selected ({selectedCount})
+              Publicar seleccionados ({selectedCount})
             </button>
             <button
               type="button"
@@ -552,7 +552,7 @@ export default function AdminLibraryImportManager() {
               disabled={!selectedCount || loading}
               className="rounded-xl border border-danger/40 px-4 py-2 text-sm font-semibold text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Remove selected
+              Quitar seleccionados
             </button>
           </div>
         </div>
@@ -589,23 +589,23 @@ export default function AdminLibraryImportManager() {
                       className="h-full w-full rounded-xl object-cover shadow-lg shadow-black/10"
                     />
                   ) : (
-                    <span className="text-xs uppercase tracking-[0.25em] text-muted">No cover</span>
+                    <span className="text-xs uppercase tracking-[0.25em] text-muted">Sin portada</span>
                   )}
                 </div>
 
                 <div className="space-y-4 border-t border-border px-5 py-5">
                   <div className="flex flex-wrap gap-2">
-                    <CandidateBadge label={candidate.language_code || "unknown language"} />
-                    <CandidateBadge label={candidate.source_name || "provider"} />
+                    <CandidateBadge label={candidate.language_code || "idioma"} />
+                    <CandidateBadge label={candidate.source_name || "proveedor"} />
                     {candidate.first_publish_year ? <CandidateBadge label={String(candidate.first_publish_year)} /> : null}
                     {duplicateWarning?.hasDuplicate ? (
-                      <CandidateBadge label="possible duplicate" tone="warning" />
+                      <CandidateBadge label="posible duplicado" tone="warning" />
                     ) : null}
                   </div>
 
                   <div>
                     <h2 className="text-lg font-semibold text-foreground">{candidate.title}</h2>
-                    <p className="mt-1 text-sm text-muted">{candidate.author_display || "Unknown author"}</p>
+                    <p className="mt-1 text-sm text-muted">{candidate.author_display || "Sin autor"}</p>
                     {candidate.description ? (
                       <p className="mt-2 text-sm leading-6 text-muted">
                         {candidate.description.length > 180
@@ -617,22 +617,22 @@ export default function AdminLibraryImportManager() {
 
                   <dl className="grid gap-2 text-xs text-muted">
                     <div>
-                      <dt className="font-semibold text-foreground">Provider ID</dt>
+                      <dt className="font-semibold text-foreground">ID proveedor</dt>
                       <dd>{candidate.provider_book_id || candidate.source_payload?.providerBookId || "N/A"}</dd>
                     </div>
                     <div>
-                      <dt className="font-semibold text-foreground">Published</dt>
+                      <dt className="font-semibold text-foreground">Publicado</dt>
                       <dd>{candidate.first_publish_year || "N/A"}</dd>
                     </div>
                     <div>
-                      <dt className="font-semibold text-foreground">Category</dt>
+                      <dt className="font-semibold text-foreground">Categoria</dt>
                       <dd>{candidate.category || "N/A"}</dd>
                     </div>
                   </dl>
 
                   <div>
                     <label className="text-xs font-semibold uppercase tracking-[0.24em] text-muted">
-                      EPUB upload
+                      EPUB
                     </label>
                     <input
                       type="file"
@@ -647,14 +647,14 @@ export default function AdminLibraryImportManager() {
                           type="button"
                           onClick={() => removeCandidateEpub(id, candidate.uploadedEpubKey)}
                           className="font-semibold text-danger"
-                          aria-label="Remove uploaded EPUB"
+                          aria-label="Quitar EPUB cargado"
                         >
                           X
                         </button>
                       </div>
                     ) : (
                       <p className="mt-2 text-xs text-muted">
-                        Upload an EPUB if you want this book to use your internal reader immediately.
+                        Sube un EPUB si quieres que este libro use el lector interno de inmediato.
                       </p>
                     )}
                   </div>
@@ -665,7 +665,7 @@ export default function AdminLibraryImportManager() {
                       onClick={() => openPreview(candidate)}
                       className="flex-1 rounded-xl border border-border px-4 py-3 text-sm font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
                     >
-                      Preview
+                      Vista previa
                     </button>
                     <button
                       type="button"
@@ -673,7 +673,7 @@ export default function AdminLibraryImportManager() {
                       disabled={loading}
                       className="flex-1 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {candidate.imported ? "Published" : "Publish"}
+                      {candidate.imported ? "Publicado" : "Publicar"}
                     </button>
                   </div>
                 </div>
@@ -683,8 +683,8 @@ export default function AdminLibraryImportManager() {
         </div>
       ) : (
         <div className="rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
-          <p className="text-lg font-semibold text-foreground">No search results yet</p>
-          <p className="mt-2 text-sm text-muted">Run an admin search to preview and publish readable candidates.</p>
+          <p className="text-lg font-semibold text-foreground">Aun no hay resultados</p>
+          <p className="mt-2 text-sm text-muted">Ejecuta una busqueda para revisar candidatos y publicarlos.</p>
         </div>
       )}
 

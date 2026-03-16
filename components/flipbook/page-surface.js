@@ -55,6 +55,7 @@ export function buildFlipbookPageMarkup({ page }) {
       : page?.html || "";
   const sheetClasses = [
     "flipbook-page-sheet",
+    hardPage ? "page-side-cover" : Number(page?.pageIndex) % 2 === 0 ? "page-side-right" : "page-side-left",
     chrome ? "has-editorial-chrome" : "",
     hardPage ? "is-cover-page" : "",
     `runtime-${runtimeMode}`,

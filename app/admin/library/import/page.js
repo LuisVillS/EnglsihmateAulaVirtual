@@ -1,31 +1,24 @@
 import AdminLibraryImportManager from "@/components/admin-library-import-manager";
+import { AdminPage, AdminPageHeader } from "@/components/admin-page";
 import { requireAdminLibraryPageAccess } from "@/lib/library/page-access";
 
 export const metadata = {
-  title: "Import Library Books | Admin",
+  title: "Importar libros | Admin",
 };
 
 export default async function AdminLibraryImportPage() {
   await requireAdminLibraryPageAccess();
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-background px-6 py-10 text-foreground">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-12 left-12 h-72 w-72 rounded-full bg-primary/20 blur-[140px]" />
-        <div className="absolute bottom-0 right-16 h-80 w-80 rounded-full bg-accent/15 blur-[170px]" />
-      </div>
-
-      <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <header>
-          <p className="text-xs uppercase tracking-[0.35em] text-muted">Admin / Library / Import</p>
-          <h1 className="text-3xl font-semibold">Import from Gutenberg</h1>
-          <p className="text-sm text-muted">
-            Search Gutenberg metadata, preview candidates, attach an EPUB, and publish directly into the library.
-          </p>
-        </header>
-
+    <AdminPage className="mx-auto w-full max-w-7xl">
+      <AdminPageHeader
+        eyebrow="Biblioteca"
+        title="Importar desde Gutenberg"
+        description="Busca metadata, revisa candidatos, adjunta EPUB y publica sin cambiar el flujo real de importacion."
+      />
+      <div className="rounded-[26px] border border-[rgba(15,23,42,0.08)] bg-white p-4 shadow-[0_16px_32px_rgba(15,23,42,0.05)] sm:p-5">
         <AdminLibraryImportManager />
       </div>
-    </section>
+    </AdminPage>
   );
 }

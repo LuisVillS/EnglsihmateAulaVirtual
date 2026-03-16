@@ -12,6 +12,7 @@ export default function LibraryMyLibraryButton({
   inactiveButtonClassName = "",
   labelIn = "Remove from My Library",
   labelOut = "Add to My Library",
+  showBookmarkIcon = false,
 }) {
   const [inMyLibrary, setInMyLibrary] = useState(Boolean(initialInMyLibrary));
   const [pending, setPending] = useState(false);
@@ -57,6 +58,16 @@ export default function LibraryMyLibraryButton({
             : inactiveButtonClassName || "border-border bg-surface text-foreground hover:border-primary/35 hover:bg-surface-2"
         } ${compact ? "text-xs" : "text-sm"} ${buttonClassName} disabled:cursor-not-allowed disabled:opacity-60`}
       >
+        {showBookmarkIcon ? (
+          <svg viewBox="0 0 20 20" aria-hidden="true" className="mr-2 h-4 w-4" fill="none">
+            <path
+              d="M6 4.5A1.5 1.5 0 0 1 7.5 3h5A1.5 1.5 0 0 1 14 4.5v11l-4-2.6-4 2.6v-11Z"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinejoin="round"
+            />
+          </svg>
+        ) : null}
         {pending ? "Saving..." : inMyLibrary ? labelIn : labelOut}
       </button>
       {error ? <p className="text-xs text-danger">{error}</p> : null}

@@ -36,9 +36,7 @@ export default async function LibraryBookDetailPage({ params: paramsPromise }) {
   const hasPreferredEpubSource = (Array.isArray(sourceRows) ? sourceRows : []).some(
     (source) => source?.source_format === "epub"
   );
-  const readHref = hasPreferredEpubSource ? `/app/library/epub/${book.slug}` : `/app/library/read/${book.slug}`;
-  const flipbookHref = hasPreferredEpubSource ? `/app/library/flipbook/${book.slug}` : "";
-
+  const readHref = `/app/library/flipbook/${book.slug}`;
   const relatedBooks = await listRelatedLibraryBooks({
     db: supabase,
     book,
@@ -48,31 +46,47 @@ export default async function LibraryBookDetailPage({ params: paramsPromise }) {
 
   return (
     <section className="space-y-8 text-foreground">
-      <div className="grid gap-6 rounded-2xl border border-border bg-surface p-6 shadow-sm lg:grid-cols-[280px_minmax(0,1fr)] lg:p-8">
-        <div className="flex items-center justify-center rounded-xl bg-surface-2 p-5">
+      <div className="student-panel grid gap-6 p-5 lg:grid-cols-[320px_minmax(0,1fr)] lg:p-7">
+        <div className="student-panel-soft flex items-center justify-center p-5 lg:p-6">
           {book.coverUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={book.coverUrl} alt={book.title} className="w-full rounded-xl object-cover shadow-xl shadow-black/10" />
+            <img src={book.coverUrl} alt={book.title} className="w-full max-w-[300px] rounded-[12px] object-cover shadow-[0_28px_64px_rgba(0,0,0,0.18)]" />
           ) : (
-            <div className="flex aspect-[4/5] w-full items-center justify-center rounded-xl border border-dashed border-border bg-white text-xs uppercase tracking-[0.3em] text-muted">
+            <div className="flex aspect-[4/5] w-full items-center justify-center rounded-[12px] border border-dashed border-border bg-white text-xs uppercase tracking-[0.3em] text-muted">
               EnglishMate
             </div>
           )}
         </div>
 
-        <div className="space-y-5">
-          <div className="space-y-3">
+        <div className="space-y-6">
+          <div className="flex items-start justify-between gap-4">
             <Link href="/app/library" className="text-xs uppercase tracking-[0.28em] text-muted hover:text-primary">
-              EnglishMate Library
+              Biblioteca
             </Link>
+            <LibraryMyLibraryButton
+              slug={book.slug}
+              initialInMyLibrary={book.inMyLibrary}
+              compact
+              showBookmarkIcon
+              labelIn="En mi biblioteca"
+              labelOut="Agregar a mi biblioteca"
+              className="shrink-0"
+              buttonClassName="rounded-[999px] px-4 py-2 text-[11px] uppercase tracking-[0.18em]"
+              activeButtonClassName="border-primary/30 bg-primary/10 text-primary hover:bg-primary/15"
+              inactiveButtonClassName="border-border bg-surface-2 text-muted hover:border-primary/35 hover:bg-primary/5 hover:text-primary"
+            />
+          </div>
+
+          <div className="space-y-4">
+            <p className="text-xs uppercase tracking-[0.28em] text-muted">Lectura seleccionada</p>
             <div className="flex flex-wrap gap-2">
               {book.cefrLevel ? (
-                <span className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                <span className="rounded-[10px] border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
                   {book.cefrLevel}
                 </span>
               ) : null}
               {book.category ? (
-                <span className="rounded-lg border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
+                <span className="rounded-[10px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
                   {book.category}
                 </span>
               ) : null}
@@ -81,47 +95,27 @@ export default async function LibraryBookDetailPage({ params: paramsPromise }) {
               <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">{book.title}</h1>
               {book.subtitle ? <p className="mt-2 text-lg text-muted">{book.subtitle}</p> : null}
             </div>
-            <p className="text-sm text-muted">by {book.authorDisplay || "Unknown author"}</p>
+            <p className="text-sm text-muted">Por {book.authorDisplay || "Autor desconocido"}</p>
           </div>
 
           <p className="max-w-3xl text-sm leading-7 text-muted">
-            {book.description || "This book was added to the curated library and is ready to read inside EnglishMate."}
+            {book.description || "Este libro ya forma parte de la biblioteca y está listo para leerse dentro de EnglishMate."}
           </p>
 
-          <div className="flex flex-wrap gap-2">
-            {book.tags.length ? (
-              book.tags.map((tag) => (
-                <span key={tag} className="rounded-lg border border-border bg-surface-2 px-3 py-1 text-xs text-muted">
-                  {tag}
-                </span>
-              ))
-            ) : (
-              <span className="text-sm text-muted">No tags assigned yet.</span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Link
               href={readHref}
-              className="inline-flex items-center justify-center rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary-2"
+              className="student-button-primary inline-flex min-w-[180px] items-center justify-center px-6 py-3.5 text-sm font-semibold"
             >
-              {book.savedPageNumber || book.savedPageCode || book.startedReading ? "Continue Reading" : "Read now"}
+              {book.savedPageNumber || book.savedPageCode || book.startedReading ? "Continuar lectura" : "Leer libro"}
             </Link>
-            {hasPreferredEpubSource ? (
-              <Link
-                href={flipbookHref}
-                className="inline-flex items-center justify-center rounded-xl border border-border bg-surface-2 px-5 py-3 text-sm font-semibold text-foreground transition hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
-              >
-                Open flipbook
-              </Link>
-            ) : null}
-            <LibraryMyLibraryButton slug={book.slug} initialInMyLibrary={book.inMyLibrary} />
+            {hasPreferredEpubSource ? <span className="text-sm text-muted">Abrir en el lector premium tipo flipbook.</span> : null}
           </div>
           {book.savedPageNumber || book.savedPageCode ? (
-            <div className="space-y-2">
+            <div className="student-panel-soft px-4 py-3">
               {book.savedPageNumber ? <LibrarySavedPageBadge pageNumber={book.savedPageNumber} /> : null}
-              <p className="text-sm text-muted">
-                {buildLibraryResumeHint(book.savedPageNumber, book.savedPageCode)} the next time you open this book.
+              <p className="mt-2 text-sm text-muted">
+                {buildLibraryResumeHint(book.savedPageNumber, book.savedPageCode)} la próxima vez que abras este libro.
               </p>
             </div>
           ) : null}
@@ -130,8 +124,8 @@ export default async function LibraryBookDetailPage({ params: paramsPromise }) {
 
       <div className="space-y-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-muted">Related books</p>
-          <h2 className="mt-2 text-2xl font-semibold">More from the curated shelf</h2>
+          <p className="text-xs uppercase tracking-[0.28em] text-muted">Libros relacionados</p>
+          <h2 className="mt-2 text-2xl font-semibold">Más títulos para seguir leyendo</h2>
         </div>
         <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
           {relatedBooks.map((relatedBook) => (

@@ -36,12 +36,12 @@ export default function CalendarMonth({
 
   return (
     <>
-      <section className="rounded-[24px] border border-slate-200 bg-white p-4 text-slate-800 shadow-sm lg:hidden">
+      <section className="student-panel p-4 text-slate-800 lg:hidden">
         <div className="flex items-center justify-between">
           <button
             type="button"
             onClick={onPrevMonth}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-orange-500 transition hover:bg-orange-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-[10px] text-[#103474] transition hover:bg-[#eef3fb]"
             aria-label="Mes anterior"
           >
             <ArrowLeftIcon />
@@ -50,7 +50,7 @@ export default function CalendarMonth({
           <button
             type="button"
             onClick={onNextMonth}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-orange-500 transition hover:bg-orange-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-[10px] text-[#103474] transition hover:bg-[#eef3fb]"
             aria-label="Mes siguiente"
           >
             <ArrowRightIcon />
@@ -84,16 +84,16 @@ export default function CalendarMonth({
                   if (!onSelectDate) return;
                   onSelectDate(cell.dateKey);
                 }}
-                className="mx-auto inline-flex h-9 w-9 items-center justify-center rounded-full"
+                className="mx-auto inline-flex h-9 w-9 items-center justify-center rounded-[10px]"
               >
                 <span
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition ${
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-[10px] text-sm font-medium transition ${
                     isSelected
-                      ? "bg-slate-800 text-white"
+                      ? "bg-[#103474] text-white"
                       : hasEvents
-                        ? "bg-cyan-700 text-white"
+                        ? "bg-[#103474] text-white"
                         : "text-slate-800 hover:bg-slate-100"
-                  } ${isToday && !isSelected ? "ring-2 ring-blue-300/70 ring-offset-1 ring-offset-white" : ""}`}
+                  } ${isToday && !isSelected ? "ring-2 ring-[#103474]/25 ring-offset-1 ring-offset-white" : ""}`}
                 >
                   {cell.dayNumber}
                 </span>
@@ -107,14 +107,14 @@ export default function CalendarMonth({
         ) : null}
       </section>
 
-      <section className="hidden rounded-2xl border border-slate-200 bg-white p-4 text-slate-800 shadow-sm lg:block lg:p-5">
+      <section className="student-panel hidden p-4 text-slate-800 lg:block lg:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-lg font-semibold text-slate-800 md:text-xl">{title}</h1>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onPrevMonth}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-slate-100"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[10px] border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-slate-100"
               aria-label="Mes anterior"
             >
               <ArrowLeftIcon />
@@ -122,7 +122,7 @@ export default function CalendarMonth({
             <button
               type="button"
               onClick={onNextMonth}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-slate-100"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[10px] border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-slate-100"
               aria-label="Mes siguiente"
             >
               <ArrowRightIcon />
@@ -154,11 +154,11 @@ export default function CalendarMonth({
                   if (!cell.inCurrentMonth || !onSelectDate) return;
                   onSelectDate(cell.dateKey);
                 }}
-                className={`relative flex h-[78px] flex-col justify-between rounded-lg border p-2 text-left transition md:h-[88px] ${
+                className={`relative flex h-[78px] flex-col justify-between rounded-[10px] border p-2 text-left transition md:h-[88px] ${
                   cell.inCurrentMonth
                     ? "border-slate-200 bg-white hover:bg-slate-50"
                     : "cursor-default border-slate-100 bg-slate-50 text-slate-400"
-                } ${isToday ? "border-blue-400 bg-blue-50/50" : ""} ${isSelected ? "border-blue-500 bg-blue-50 ring-1 ring-blue-400/40" : ""}`}
+                } ${isToday ? "border-[#103474]/35 bg-[#f4f7fc]" : ""} ${isSelected ? "border-[#103474] bg-[#eef3fb] ring-1 ring-[#103474]/20" : ""}`}
               >
                 <span className={`text-xs font-medium md:text-sm ${cell.inCurrentMonth ? "text-slate-700" : "text-slate-400"}`}>
                   {cell.dayNumber}
@@ -166,7 +166,7 @@ export default function CalendarMonth({
                 {metrics.count > 0 && cell.inCurrentMonth ? (
                   <div className="flex items-center gap-1">
                     {Array.from({ length: dotCount }).map((_, idx) => (
-                      <span key={`${cell.dateKey}-dot-${idx}`} className="h-1.5 w-1.5 rounded-full bg-blue-500/75" />
+                      <span key={`${cell.dateKey}-dot-${idx}`} className="h-1.5 w-1.5 rounded-full bg-[#103474]/75" />
                     ))}
                     {overflow > 0 ? (
                       <span className="ml-0.5 text-[10px] font-medium text-slate-500">+{overflow}</span>

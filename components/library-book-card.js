@@ -31,7 +31,7 @@ export default function LibraryBookCard({ book, compact = false }) {
             {book.title}
           </h3>
           <p className="text-[0.82rem] leading-6 tracking-[0.03em] text-muted transition duration-300 ease-out group-hover:text-foreground/80">
-            {book.authorDisplay || "Unknown author"}
+            {book.authorDisplay || "Autor desconocido"}
           </p>
         </div>
       </Link>

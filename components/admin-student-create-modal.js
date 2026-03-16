@@ -14,9 +14,9 @@ export default function AdminStudentCreateModal({ commissions = [] }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+        className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#103474] px-4 text-sm font-semibold text-white transition hover:bg-[#0c295a]"
       >
-        + Crear alumno
+        Crear alumno
       </button>
 
       <AppModal open={open} onClose={() => setOpen(false)} title="Crear alumno" widthClass="max-w-3xl">
@@ -33,4 +33,3 @@ export default function AdminStudentCreateModal({ commissions = [] }) {
     </>
   );
 }
-

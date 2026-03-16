@@ -615,7 +615,7 @@ export default function CourseSessionList({
           const status = getGroupStatus(group, nowMs);
           const monthLocked = allowedMonthSet.size > 0 && !allowedMonthSet.has(group.key);
           return (
-            <section key={group.key} className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+            <section key={group.key} className="overflow-hidden rounded-[14px] border border-border bg-surface shadow-sm">
               <button
                 type="button"
                 onClick={() => toggleMonth(group.key)}
@@ -674,7 +674,7 @@ export default function CourseSessionList({
 
                         <article
                           onClick={(event) => handleCardClick(event, session.id, monthLocked)}
-                          className={`rounded-lg border border-border bg-surface-2 px-4 py-4 transition ${monthLocked ? "opacity-85" : "hover:border-primary/45 hover:bg-surface"} ${monthLocked ? "" : "cursor-pointer"}`}
+                          className={`rounded-[12px] border border-border bg-surface-2 px-4 py-4 transition ${monthLocked ? "opacity-85" : "hover:border-primary/45 hover:bg-surface"} ${monthLocked ? "" : "cursor-pointer"}`}
                         >
                           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                             <div className="space-y-2">
@@ -947,7 +947,7 @@ export default function CourseSessionList({
               <p className="text-sm text-muted">{selectedClassTitle || "Slide de la clase"}</p>
             </div>
             {embedUrl ? (
-              <div className="relative w-full aspect-[16/9] overflow-hidden rounded-2xl border border-border bg-surface-2">
+              <div className="relative w-full aspect-[16/9] overflow-hidden rounded-[14px] border border-border bg-surface-2">
                 <iframe
                   title="Slide principal"
                   src={embedUrl}
@@ -956,7 +956,7 @@ export default function CourseSessionList({
                 />
               </div>
             ) : (
-              <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
+              <div className="rounded-[12px] border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
                 Slide principal no disponible aún.
               </div>
             )}
@@ -965,7 +965,7 @@ export default function CourseSessionList({
                 type="button"
                 onClick={() => openInAnotherWindow(selectedSlideUrl)}
                 disabled={!selectedSlideUrl}
-                className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
+                className="student-button-primary px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Ver slide en otra ventana
               </button>
@@ -978,7 +978,7 @@ export default function CourseSessionList({
             </div>
             {selectedRecordingLink ? (
               recordingEmbedUrl ? (
-                <div className="relative w-full aspect-[16/9] overflow-hidden rounded-2xl border border-border bg-surface-2">
+                <div className="relative w-full aspect-[16/9] overflow-hidden rounded-[14px] border border-border bg-surface-2">
                   <iframe
                     title="Grabación Vimeo"
                     src={recordingEmbedUrl}
@@ -988,12 +988,12 @@ export default function CourseSessionList({
                   />
                 </div>
               ) : (
-                <div className="rounded-2xl border border-border bg-surface-2 px-4 py-4 text-sm text-muted">
+                <div className="rounded-[12px] border border-border bg-surface-2 px-4 py-4 text-sm text-muted">
                   No se puede embeber esta grabación en el aula.
                 </div>
               )
             ) : (
-              <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
+              <div className="rounded-[12px] border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
                 Grabación no disponible aún.
               </div>
             )}
@@ -1005,7 +1005,7 @@ export default function CourseSessionList({
                 type="button"
                 onClick={() => openInAnotherWindow(selectedRecordingLink)}
                 disabled={!selectedRecordingLink}
-                className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
+                className="student-button-primary px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Ver grabación en otra ventana
               </button>
@@ -1018,7 +1018,7 @@ export default function CourseSessionList({
               <p className="text-sm text-muted">{selectedClassTitle || "Material de la clase"}</p>
             </div>
             {selectedMaterialEmbedUrl ? (
-              <div className="relative w-full aspect-[16/9] overflow-hidden rounded-2xl border border-border bg-surface-2">
+              <div className="relative w-full aspect-[16/9] overflow-hidden rounded-[14px] border border-border bg-surface-2">
                 <iframe
                   title={selectedMaterialTitle}
                   src={selectedMaterialEmbedUrl}
@@ -1028,7 +1028,7 @@ export default function CourseSessionList({
                 />
               </div>
             ) : (
-              <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
+              <div className="rounded-[12px] border border-dashed border-border bg-surface-2 px-4 py-6 text-sm text-muted">
                 {selectedMaterialType === "video"
                   ? "Este video no se puede mostrar dentro del aula."
                   : "Este material no se puede previsualizar dentro del aula."}
@@ -1042,7 +1042,7 @@ export default function CourseSessionList({
                 type="button"
                 onClick={() => openInAnotherWindow(selectedMaterialUrl)}
                 disabled={!selectedMaterialUrl}
-                className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2 disabled:cursor-not-allowed disabled:opacity-60"
+                className="student-button-primary px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Abrir en otra ventana
               </button>
@@ -1053,6 +1053,7 @@ export default function CourseSessionList({
             key={`${String(selectedSession?.id || "session")}:${String(selectedFlashcardsItem?.id || "flashcards")}`}
             title={String(selectedFlashcardsItem?.title || "").trim() || "Flashcards"}
             sessionTitle={selectedClassTitle}
+            sessionId={String(selectedSession?.id || "").trim()}
             flashcards={selectedFlashcards}
           />
         )}

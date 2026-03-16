@@ -13,13 +13,13 @@ import {
   resolveFlipbookStageScale,
 } from "@/lib/flipbook-core/presentation";
 
-const FLIPBOOK_ARROW_BUTTON_WIDTH = 44;
-const FLIPBOOK_ARROW_BUTTON_HEIGHT = 108;
-const FLIPBOOK_ARROW_EDGE_GAP = 50;
+const FLIPBOOK_ARROW_BUTTON_WIDTH = 58;
+const FLIPBOOK_ARROW_BUTTON_HEIGHT = 152;
+const FLIPBOOK_ARROW_EDGE_GAP = 8;
 
 function ChevronLeftIcon() {
   return (
-    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-5 w-5">
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-10 w-10">
       <path d="M11.75 4.75 6.5 10l5.25 5.25" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -27,7 +27,7 @@ function ChevronLeftIcon() {
 
 function ChevronRightIcon() {
   return (
-    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-5 w-5">
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-10 w-10">
       <path d="M8.25 4.75 13.5 10l-5.25 5.25" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -39,6 +39,8 @@ export default function FlipbookBookFrame({
   windowStart = 0,
   ttsActivePageIndex = null,
   visualPageIndex = 0,
+  globalVisualPageIndex = 0,
+  totalPageCount = 0,
   adapterWindowKey = "0:-1",
   showCover = true,
   isFullscreen = false,
@@ -67,6 +69,7 @@ export default function FlipbookBookFrame({
   const frameRef = useRef(0);
   const layoutSyncFrameRef = useRef(0);
   const openingNotificationRef = useRef(false);
+  const dragGestureRef = useRef(null);
 
   const measureViewport = useCallback(() => {
     const element = viewportRef.current;
@@ -144,6 +147,24 @@ export default function FlipbookBookFrame({
   const isClosedBook = visualState === FLIPBOOK_VISUAL_STATE_CLOSED_BOOK;
   const isOpeningBook = visualState === FLIPBOOK_VISUAL_STATE_OPENING_BOOK;
   const isPortrait = presentationMode === "single";
+  const effectiveTotalPageCount = Math.max(1, Number(totalPageCount) || pages.length || 1);
+  const readingProgress = Math.min(
+    1,
+    Math.max(0, Number(globalVisualPageIndex) || 0) / Math.max(1, effectiveTotalPageCount - 1)
+  );
+  const pagesReadRamp = Math.min(1, Math.max(0, Number(globalVisualPageIndex) || 0) / 64);
+  const pagesRemainingRamp = Math.min(
+    1,
+    Math.max(0, effectiveTotalPageCount - 1 - (Number(globalVisualPageIndex) || 0)) / 64
+  );
+  const leftStackWeight = Math.max(readingProgress, pagesReadRamp);
+  const rightStackWeight = Math.max(1 - readingProgress, pagesRemainingRamp);
+  const leftStackDepth = isPortrait ? 0 : 6 + Math.round(leftStackWeight * 24);
+  const rightStackDepth = isPortrait ? 0 : 6 + Math.round(rightStackWeight * 24);
+  const leftStackWidth = isPortrait ? 0 : 6 + leftStackWeight * 38;
+  const rightStackWidth = isPortrait ? 0 : 10 + rightStackWeight * 38;
+  const leftStackOpacity = isPortrait ? 0 : 0.22 + leftStackWeight * 0.54;
+  const rightStackOpacity = isPortrait ? 0 : 0.22 + rightStackWeight * 0.54;
   const readingWidth = isPortrait
     ? FLIPBOOK_CANONICAL_PAGE_WIDTH
     : FLIPBOOK_CANONICAL_SPREAD_WIDTH;
@@ -156,12 +177,9 @@ export default function FlipbookBookFrame({
         viewportWidth: Math.max(0, viewportSize.width - sideReserve * 2),
         viewportHeight: viewportSize.height,
         presentationMode: isClosedBook ? "single" : presentationMode,
-        targetHeight:
-          isFullscreen || !windowViewport.height
-            ? viewportSize.height
-            : Math.min(viewportSize.height, windowViewport.height * 0.85),
+        targetHeight: viewportSize.height,
       }) || 1,
-    [isClosedBook, isFullscreen, presentationMode, sideReserve, viewportSize.height, viewportSize.width, windowViewport.height]
+    [isClosedBook, presentationMode, sideReserve, viewportSize.height, viewportSize.width]
   );
 
   const closedCoverMarkup = useMemo(() => {
@@ -178,6 +196,39 @@ export default function FlipbookBookFrame({
   useEffect(() => {
     orientationBridgeRef.current?.(isPortrait);
   }, [isPortrait]);
+
+  useEffect(() => {
+    function handlePointerMove(event) {
+      const gesture = dragGestureRef.current;
+      if (!gesture || gesture.handled) return;
+      const deltaX = Number(event.clientX) - gesture.startX;
+      const deltaY = Number(event.clientY) - gesture.startY;
+      if (Math.abs(deltaX) < 42 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) {
+        return;
+      }
+
+      if (gesture.side === "right" && deltaX < 0) {
+        gesture.handled = true;
+        onRequestPageTurn?.("next");
+      } else if (gesture.side === "left" && deltaX > 0) {
+        gesture.handled = true;
+        onRequestPageTurn?.("previous");
+      }
+    }
+
+    function clearGesture() {
+      dragGestureRef.current = null;
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", clearGesture);
+    window.addEventListener("pointercancel", clearGesture);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", clearGesture);
+      window.removeEventListener("pointercancel", clearGesture);
+    };
+  }, [onRequestPageTurn]);
 
   useEffect(() => {
     if (!isOpeningBook) {
@@ -220,7 +271,7 @@ export default function FlipbookBookFrame({
       height: `${activeHeight * scale}px`,
       position: "relative",
       flex: "0 0 auto",
-      overflow: "hidden",
+      overflow: "visible",
       transition: isOpeningBook ? "width 320ms cubic-bezier(0.22, 1, 0.36, 1)" : "none",
     }),
     [activeHeight, activeWidth, isOpeningBook, scale, sideReserve]
@@ -240,6 +291,70 @@ export default function FlipbookBookFrame({
     [activeHeight, isClosedBook, navigationLocked, readingWidth, scale, sideReserve]
   );
 
+  const readingFrameStyle = useMemo(
+    () => ({
+      position: "absolute",
+      left: `${sideReserve}px`,
+      top: 0,
+      width: `${readingWidth * scale}px`,
+      height: `${activeHeight * scale}px`,
+      opacity: isClosedBook ? 0 : 1,
+      pointerEvents: "none",
+      transition: "opacity 220ms ease",
+      filter: "drop-shadow(0 30px 54px rgba(0, 0, 0, 0.48))",
+    }),
+    [activeHeight, isClosedBook, readingWidth, scale, sideReserve]
+  );
+
+  const leftStackStyle = useMemo(
+    () => ({
+      "--flipbook-stack-depth": String(leftStackDepth),
+      "--flipbook-stack-width": `${leftStackWidth}px`,
+      "--flipbook-stack-opacity": leftStackOpacity,
+    }),
+    [leftStackDepth, leftStackOpacity, leftStackWidth]
+  );
+
+  const rightStackStyle = useMemo(
+    () => ({
+      "--flipbook-stack-depth": String(rightStackDepth),
+      "--flipbook-stack-width": `${rightStackWidth}px`,
+      "--flipbook-stack-opacity": rightStackOpacity,
+    }),
+    [rightStackDepth, rightStackOpacity, rightStackWidth]
+  );
+
+  const leftStackShellStyle = useMemo(
+    () => ({
+      position: "absolute",
+      top: 0,
+      left: `${Math.max(0, sideReserve - leftStackWidth * 0.82)}px`,
+      width: `${leftStackWidth}px`,
+      height: `${activeHeight * scale}px`,
+      opacity: isClosedBook || isPortrait ? 0 : 1,
+      pointerEvents: "none",
+      zIndex: 5,
+      transition: "opacity 220ms ease",
+    }),
+    [activeHeight, isClosedBook, isPortrait, leftStackWidth, scale, sideReserve]
+  );
+
+  const rightStackShellStyle = useMemo(
+    () => ({
+      position: "absolute",
+      top: 0,
+      left: `${sideReserve + readingWidth * scale - rightStackWidth * 0.18}px`,
+      width: `${rightStackWidth}px`,
+      height: `${activeHeight * scale}px`,
+      opacity: isClosedBook || isPortrait ? 0 : 1,
+      pointerEvents: "none",
+      zIndex: 5,
+      transition: "opacity 220ms ease",
+    }),
+    [activeHeight, isClosedBook, isPortrait, readingWidth, rightStackWidth, scale, sideReserve]
+  );
+  const showLeftPageStack = !isPortrait && Number(globalVisualPageIndex) > 0;
+
   const innerShellStyle = useMemo(
     () => ({
       width: `${readingWidth}px`,
@@ -255,6 +370,19 @@ export default function FlipbookBookFrame({
     onRequestOpenBook();
   }, [onRequestOpenBook]);
 
+  const startGestureCapture = useCallback(
+    (side) => (event) => {
+      if (navigationLocked || isClosedBook) return;
+      dragGestureRef.current = {
+        side,
+        startX: Number(event.clientX) || 0,
+        startY: Number(event.clientY) || 0,
+        handled: false,
+      };
+    },
+    [isClosedBook, navigationLocked]
+  );
+
   return (
     <div ref={viewportRef} className="relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden">
       <div style={scaledWrapperStyle}>
@@ -262,14 +390,45 @@ export default function FlipbookBookFrame({
           <button
             type="button"
             onClick={() => onRequestPageTurn?.("previous")}
-            disabled={!canGoPrev || ttsSelectionMode || navigationLocked}
+            disabled={!canGoPrev || navigationLocked}
             className={`flipbook-book-arrow left ${chromeVisible || !isFullscreen ? "opacity-100" : "opacity-0"}`}
             aria-label="Previous page"
           >
             <ChevronLeftIcon />
           </button>
         ) : null}
+        {showLeftPageStack ? (
+          <span className="flipbook-reading-frame-stack left" style={{ ...leftStackStyle, ...leftStackShellStyle }} aria-hidden="true" />
+        ) : null}
+        {!isPortrait ? (
+          <span className="flipbook-reading-frame-stack right" style={{ ...rightStackStyle, ...rightStackShellStyle }} aria-hidden="true" />
+        ) : null}
+        <div style={readingFrameStyle} aria-hidden="true">
+          <div className={`flipbook-reading-frame ${isPortrait ? "single" : "spread"}`}>
+            <span className="flipbook-reading-frame-depth left" />
+            <span className="flipbook-reading-frame-depth right" />
+            {!isPortrait ? <span className="flipbook-reading-frame-gutter" /> : null}
+          </div>
+        </div>
         <div style={bookShellStyle}>
+          {!ttsSelectionMode && !navigationLocked && !isClosedBook ? (
+            <>
+              <button
+                type="button"
+                className={`flipbook-drag-gesture-zone left ${isPortrait ? "single" : "spread"}`}
+                aria-hidden="true"
+                tabIndex={-1}
+                onPointerDown={startGestureCapture("left")}
+              />
+              <button
+                type="button"
+                className={`flipbook-drag-gesture-zone right ${isPortrait ? "single" : "spread"}`}
+                aria-hidden="true"
+                tabIndex={-1}
+                onPointerDown={startGestureCapture("right")}
+              />
+            </>
+          ) : null}
           <div style={innerShellStyle}>
             <FlipAnimationAdapter
               key={`${adapterWindowKey}:${presentationMode}`}
@@ -298,7 +457,7 @@ export default function FlipbookBookFrame({
             disabled={
               isClosedBook
                 ? !onRequestOpenBook || navigationLocked
-                : !canGoNext || ttsSelectionMode || navigationLocked
+                : !canGoNext || navigationLocked
             }
             className={`flipbook-book-arrow right ${chromeVisible || !isFullscreen ? "opacity-100" : "opacity-0"}`}
             aria-label={isClosedBook ? "Open book" : "Next page"}
@@ -317,7 +476,6 @@ export default function FlipbookBookFrame({
               className="flipbook-closed-book-surface"
               dangerouslySetInnerHTML={{ __html: closedCoverMarkup }}
             />
-            <span className="flipbook-closed-book-spine" aria-hidden="true" />
           </button>
         ) : null}
       </div>
@@ -331,31 +489,253 @@ export default function FlipbookBookFrame({
           justify-content: center;
           width: ${FLIPBOOK_ARROW_BUTTON_WIDTH}px;
           height: ${FLIPBOOK_ARROW_BUTTON_HEIGHT}px;
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 999px;
-          background: rgba(10, 12, 16, 0.3);
-          color: rgba(255, 255, 255, 0.78);
-          backdrop-filter: blur(16px);
-          box-shadow: 0 14px 38px rgba(0, 0, 0, 0.26);
-          transition: opacity 180ms ease, transform 180ms ease, background 180ms ease, border-color 180ms ease;
+          border: 0;
+          border-radius: 0;
+          background: transparent;
+          color: rgba(255, 255, 255, 0.82);
+          transition: opacity 180ms ease, transform 180ms ease, color 180ms ease;
+          isolation: isolate;
         }
         .flipbook-book-arrow.left {
-          left: 0;
+          left: -2px;
           transform: translateY(-50%);
         }
         .flipbook-book-arrow.right {
-          right: 0;
+          right: -2px;
           transform: translateY(-50%);
         }
+        .flipbook-book-arrow::before {
+          content: "";
+          position: absolute;
+          inset: 18px 12px;
+          border-radius: 999px;
+          opacity: 0.18;
+          transition: opacity 180ms ease, transform 180ms ease, filter 180ms ease;
+        }
+        .flipbook-book-arrow.left::before {
+          background:
+            radial-gradient(circle at 24% 50%, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.06) 22%, rgba(255,255,255,0) 62%),
+            linear-gradient(90deg, rgba(0,0,0,0.26) 0%, rgba(0,0,0,0.08) 40%, rgba(0,0,0,0) 100%);
+          box-shadow: -4px 0 14px rgba(0, 0, 0, 0.16);
+        }
+        .flipbook-book-arrow.right::before {
+          background:
+            radial-gradient(circle at 76% 50%, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.06) 22%, rgba(255,255,255,0) 62%),
+            linear-gradient(270deg, rgba(0,0,0,0.26) 0%, rgba(0,0,0,0.08) 40%, rgba(0,0,0,0) 100%);
+          box-shadow: 4px 0 14px rgba(0, 0, 0, 0.16);
+        }
+        .flipbook-book-arrow::after {
+          display: none;
+        }
+        .flipbook-book-arrow :global(svg) {
+          position: relative;
+          z-index: 1;
+          filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.24));
+        }
         .flipbook-book-arrow:hover:not(:disabled) {
-          transform: translateY(-50%) scale(1.02);
-          background: rgba(255, 255, 255, 0.12);
-          border-color: rgba(255, 255, 255, 0.2);
+          transform: translateY(-50%) scale(1.03);
           color: white;
+        }
+        .flipbook-book-arrow:hover:not(:disabled)::before {
+          opacity: 0.34;
+          filter: brightness(1.04);
         }
         .flipbook-book-arrow:disabled {
           cursor: not-allowed;
-          opacity: 0.28;
+          opacity: 0.22;
+        }
+        .flipbook-reading-frame {
+          position: relative;
+          z-index: 2;
+          width: 100%;
+          height: 100%;
+          border-radius: 6px;
+          overflow: visible;
+          background: transparent;
+          box-shadow:
+            0 24px 52px rgba(0, 0, 0, 0.24);
+        }
+        .flipbook-reading-frame-stack {
+          position: absolute;
+          top: -1px;
+          bottom: -1px;
+          width: var(--flipbook-stack-width, 16px);
+          opacity: var(--flipbook-stack-opacity, 0.45);
+          pointer-events: none;
+          z-index: 5;
+          border-radius: 0;
+          overflow: visible;
+          filter: drop-shadow(0 16px 18px rgba(0, 0, 0, 0.16));
+          backface-visibility: hidden;
+        }
+        .flipbook-reading-frame-stack::before,
+        .flipbook-reading-frame-stack::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+        }
+        .flipbook-reading-frame-stack.left {
+          clip-path: polygon(100% 0, 18% 0, 10% 100%, 100% 100%);
+          transform: perspective(1200px) rotateY(-34deg) translateZ(0);
+          transform-origin: right center;
+        }
+        .flipbook-reading-frame-stack.left::before {
+          background:
+            repeating-linear-gradient(
+              90deg,
+              rgba(251,250,246,0.96) 0,
+              rgba(251,250,246,0.96) 1px,
+              rgba(227,225,220,0.98) 1px,
+              rgba(227,225,220,0.98) 2px,
+              rgba(177,175,171,0.26) 2px,
+              rgba(148,146,142,0.14) calc(100% / var(--flipbook-stack-depth))
+            );
+          box-shadow:
+            inset -2px 0 0 rgba(255,255,255,0.66),
+            9px 0 16px rgba(0,0,0,0.14);
+        }
+        .flipbook-reading-frame-stack.left::after {
+          background:
+            linear-gradient(90deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.16) 22%, rgba(255,255,255,0.12) 56%, rgba(255,255,255,0.34) 100%),
+            linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0));
+        }
+        .flipbook-reading-frame-stack.right {
+          clip-path: polygon(0 0, 82% 0, 100% 100%, 0 100%);
+          transform: perspective(1200px) rotateY(34deg) translateZ(0);
+          transform-origin: left center;
+        }
+        .flipbook-reading-frame-stack.right::before {
+          background:
+            repeating-linear-gradient(
+              90deg,
+              rgba(251,250,246,0.98) 0,
+              rgba(251,250,246,0.98) 1px,
+              rgba(229,227,222,0.98) 1px,
+              rgba(229,227,222,0.98) 2px,
+              rgba(164,162,158,0.24) 2px,
+              rgba(144,142,138,0.14) calc(100% / var(--flipbook-stack-depth))
+            );
+          box-shadow:
+            inset 2px 0 0 rgba(255,255,255,0.66),
+            -9px 0 16px rgba(0,0,0,0.14);
+        }
+        .flipbook-reading-frame-stack.right::after {
+          background:
+            linear-gradient(90deg, rgba(255,255,255,0.34) 0%, rgba(255,255,255,0.12) 44%, rgba(0,0,0,0.16) 78%, rgba(0,0,0,0.3) 100%),
+            linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0));
+        }
+        .flipbook-reading-frame::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background:
+            radial-gradient(ellipse at 50% 54%, rgba(0,0,0,0.14) 0%, rgba(0,0,0,0.06) 20%, rgba(0,0,0,0) 44%),
+            linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 20%, rgba(255,255,255,0) 82%, rgba(0,0,0,0.04));
+          pointer-events: none;
+        }
+        .flipbook-reading-frame::after {
+          content: "";
+          position: absolute;
+          top: 2.2%;
+          bottom: 2.2%;
+          right: -5px;
+          width: 10px;
+          border-radius: 999px;
+          background:
+            linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02)),
+            linear-gradient(270deg, rgba(0,0,0,0.18), rgba(0,0,0,0));
+          box-shadow: -4px 0 10px rgba(0, 0, 0, 0.12);
+          opacity: 0.56;
+          pointer-events: none;
+        }
+        .flipbook-reading-frame-depth {
+          position: absolute;
+          top: 1%;
+          bottom: 1%;
+          width: 6px;
+          border-radius: 999px;
+          background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.03));
+          box-shadow: 0 0 8px rgba(0, 0, 0, 0.08);
+          opacity: 0.22;
+        }
+        .flipbook-reading-frame-depth.left {
+          left: 0;
+          transform: translateX(-42%);
+        }
+        .flipbook-reading-frame-depth.right {
+          right: 0;
+          transform: translateX(42%);
+        }
+        .flipbook-reading-frame-gutter {
+          position: absolute;
+          left: 50%;
+          top: 0;
+          bottom: 0;
+          width: 64px;
+          transform: translateX(-50%);
+          background:
+            linear-gradient(
+              90deg,
+              rgba(0,0,0,0) 0%,
+              rgba(0,0,0,0.22) 8%,
+              rgba(0,0,0,0.5) 24%,
+              rgba(255,255,255,0.14) 40%,
+              rgba(255,255,255,0.16) 47%,
+              rgba(14,10,8,0.54) 50%,
+              rgba(0,0,0,0.5) 58%,
+              rgba(0,0,0,0.22) 86%,
+              rgba(0,0,0,0) 100%
+            ),
+            radial-gradient(ellipse at center, rgba(0,0,0,0.32) 0%, rgba(0,0,0,0.12) 54%, rgba(0,0,0,0) 100%);
+          box-shadow:
+            inset 14px 0 18px rgba(0, 0, 0, 0.16),
+            inset -14px 0 18px rgba(0, 0, 0, 0.22),
+            0 0 18px rgba(0, 0, 0, 0.18);
+          opacity: 1;
+        }
+        .flipbook-reading-frame-gutter::before {
+          content: "";
+          position: absolute;
+          left: 50%;
+          top: 0;
+          bottom: 0;
+          width: 4px;
+          transform: translateX(-50%);
+          background: linear-gradient(180deg, rgba(255,255,255,0.34), rgba(255,255,255,0.06), rgba(255,255,255,0.18));
+          opacity: 0.8;
+        }
+        .flipbook-reading-frame-gutter::after {
+          content: "";
+          position: absolute;
+          left: 50%;
+          top: 0;
+          bottom: 0;
+          width: 44px;
+          transform: translateX(-50%);
+          background: radial-gradient(ellipse at center, rgba(0,0,0,0.42) 0%, rgba(0,0,0,0.22) 42%, rgba(0,0,0,0) 100%);
+          opacity: 1;
+        }
+        .flipbook-drag-gesture-zone {
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          z-index: 9;
+          border: 0;
+          background: transparent;
+          cursor: grab;
+        }
+        .flipbook-drag-gesture-zone.left.spread {
+          left: 12%;
+          width: 32%;
+        }
+        .flipbook-drag-gesture-zone.right.spread {
+          right: 12%;
+          width: 32%;
+        }
+        .flipbook-drag-gesture-zone.left.single,
+        .flipbook-drag-gesture-zone.right.single {
+          display: none;
         }
         .flipbook-closed-book-shell {
           position: absolute;
@@ -371,12 +751,38 @@ export default function FlipbookBookFrame({
           background: transparent;
           cursor: pointer;
           transition: opacity 220ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
-          transform-origin: center center;
+          transform-origin: left center;
+          transform-style: preserve-3d;
+          transform: perspective(1400px) rotateY(-4deg);
         }
         .flipbook-closed-book-shell.opening {
           opacity: 0;
-          transform: scale(0.992);
+          transform: perspective(1400px) rotateY(-4deg) scale(0.992);
           pointer-events: none;
+        }
+        .flipbook-closed-book-shell::after {
+          content: "";
+          position: absolute;
+          top: -1px;
+          bottom: -1px;
+          right: -18px;
+          width: 18px;
+          background:
+            repeating-linear-gradient(
+              180deg,
+              rgba(240,238,232,0.92) 0,
+              rgba(240,238,232,0.92) 1px,
+              rgba(220,217,210,0.96) 1px,
+              rgba(220,217,210,0.96) 2px,
+              rgba(164,160,152,0.18) 2px,
+              rgba(164,160,152,0.08) 4px
+            );
+          clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+          box-shadow:
+            inset 2px 0 0 rgba(255,255,255,0.54),
+            -10px 0 16px rgba(0,0,0,0.16);
+          pointer-events: none;
+          opacity: 0.94;
         }
         .flipbook-closed-book-surface {
           position: relative;
@@ -385,18 +791,25 @@ export default function FlipbookBookFrame({
           filter: drop-shadow(0 28px 42px rgba(0, 0, 0, 0.34));
         }
         .flipbook-closed-book-surface :global(.flipbook-runtime-page) {
-          box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+          box-shadow:
+            0 18px 36px rgba(0, 0, 0, 0.28),
+            inset -18px 0 24px rgba(0, 0, 0, 0.16);
         }
-        .flipbook-closed-book-spine {
-          position: absolute;
-          left: 0;
-          top: 2%;
-          bottom: 2%;
-          width: 14px;
-          border-radius: 999px;
-          background: linear-gradient(180deg, rgba(28, 22, 14, 0.6), rgba(11, 9, 7, 0.22));
-          box-shadow: inset -2px 0 4px rgba(255, 255, 255, 0.08), inset 2px 0 5px rgba(0, 0, 0, 0.2);
-          pointer-events: none;
+        @media (max-width: 767px) {
+          .flipbook-book-arrow {
+            width: 46px;
+            height: 116px;
+          }
+          .flipbook-book-arrow.left {
+            left: -4px;
+          }
+          .flipbook-book-arrow.right {
+            right: -4px;
+          }
+          .flipbook-book-arrow :global(svg) {
+            width: 30px;
+            height: 30px;
+          }
         }
       `}</style>
     </div>

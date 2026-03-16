@@ -1,5 +1,7 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { resolveStudentFromRequest } from "@/lib/duolingo/api-auth";
+import { normalizeSessionSize, normalizeTimedSeconds } from "@/lib/duolingo/practice-config";
+import { ensureGamificationProfile } from "@/lib/gamification/profile";
 import { generateStudentSession } from "@/lib/duolingo/session-service";
 
 function parseExerciseIdsFromRequest(request) {
@@ -18,6 +20,30 @@ function parseExerciseIdsFromRequest(request) {
   );
 }
 
+function parseSessionOptions(request) {
+  const { searchParams } = new URL(request.url);
+  const mode = String(searchParams.get("mode") || "").trim();
+  const size = normalizeSessionSize(searchParams.get("size") || searchParams.get("items"), 12);
+  const timeLimitRaw =
+    searchParams.get("time_limit_sec") ||
+    searchParams.get("timed_seconds") ||
+    searchParams.get("time_limit");
+
+  return {
+    mode,
+    size,
+    timeLimitSec: mode === "timed" ? normalizeTimedSeconds(timeLimitRaw, 180) : null,
+    sourceContext: String(searchParams.get("source") || "").trim() || "practice_arena",
+    filters: {
+      skill: searchParams.get("skill") || "",
+      cefrLevel: searchParams.get("cefr") || searchParams.get("cefrLevel") || "",
+      categoryId: searchParams.get("category_id") || searchParams.get("categoryId") || "",
+      theme: searchParams.get("theme") || "",
+      scenario: searchParams.get("scenario") || "",
+    },
+  };
+}
+
 export async function GET(request) {
   try {
     const resolution = await resolveStudentFromRequest({ request });
@@ -27,11 +53,18 @@ export async function GET(request) {
 
     const profile = resolution.profile;
     const exerciseIds = parseExerciseIdsFromRequest(request);
+    const sessionOptions = parseSessionOptions(request);
+    const gamification = await ensureGamificationProfile(resolution.db, {
+      userId: profile.id,
+      legacyXpTotal: profile.xp_total,
+    });
+
     const session = await generateStudentSession({
       db: resolution.db,
       userId: profile.id,
       now: new Date(),
       exerciseIds,
+      options: sessionOptions,
     });
 
     return NextResponse.json({
@@ -39,9 +72,10 @@ export async function GET(request) {
         id: profile.id,
         student_code: profile.student_code,
         full_name: profile.full_name,
-        xp_total: Number(profile.xp_total || 0) || 0,
+        xp_total: gamification.lifetimeXp,
         current_streak: Number(profile.current_streak || 0) || 0,
       },
+      gamification,
       session,
     });
   } catch (error) {
@@ -52,4 +86,3 @@ export async function GET(request) {
     );
   }
 }
-

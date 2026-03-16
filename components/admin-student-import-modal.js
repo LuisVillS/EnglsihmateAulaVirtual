@@ -35,9 +35,9 @@ export default function AdminStudentImportModal() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+        className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
       >
-        Importacion masiva (CSV)
+        Importar CSV
       </button>
 
       <AppModal open={open} onClose={() => setOpen(false)} title="Importacion masiva de alumnos" widthClass="max-w-2xl">

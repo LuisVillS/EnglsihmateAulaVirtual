@@ -227,7 +227,7 @@ export default function CalendarView({
 
   return (
     <div className="space-y-6">
-      <header className="rounded-3xl border border-border bg-surface p-6 shadow-sm">
+      <header className="student-panel px-5 py-5 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.35em] text-muted">Calendario academico</p>
@@ -240,21 +240,21 @@ export default function CalendarView({
             <button
               type="button"
               onClick={() => setCursor((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              className="student-button-secondary px-4 py-2 text-xs"
             >
               Mes anterior
             </button>
             <button
               type="button"
               onClick={() => setCursor((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
-              className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+              className="student-button-secondary px-4 py-2 text-xs"
             >
               Mes siguiente
             </button>
             {hasUnlockedInMonth ? (
               <a
                 href={icsHref}
-                className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary-2"
+                className="student-button-primary px-4 py-2 text-xs"
               >
                 Exportar calendario
               </a>
@@ -262,7 +262,7 @@ export default function CalendarView({
               <button
                 type="button"
                 disabled
-                className="rounded-full bg-surface-2 px-4 py-2 text-xs font-semibold text-muted disabled:cursor-not-allowed"
+                className="inline-flex items-center justify-center rounded-[12px] bg-surface-2 px-4 py-2 text-xs font-semibold text-muted disabled:cursor-not-allowed"
               >
                 Exportar calendario
               </button>
@@ -272,7 +272,7 @@ export default function CalendarView({
                 type="button"
                 onClick={handleConnectGoogleCalendar}
                 disabled={!hasUnlockedInAnyMonth || !googleCalendarEnabled}
-                className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:text-muted"
+                className="student-button-secondary px-4 py-2 text-xs disabled:cursor-not-allowed disabled:text-muted"
               >
                 {googleCalendarEnabled ? "Conectar Google Calendar" : "Google Calendar no configurado"}
               </button>
@@ -281,7 +281,7 @@ export default function CalendarView({
                 type="button"
                 onClick={handleSyncGoogleCalendar}
                 disabled={!hasUnlockedInAnyMonth || syncState.loading}
-                className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-foreground transition hover:border-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:text-muted"
+                className="student-button-secondary px-4 py-2 text-xs disabled:cursor-not-allowed disabled:text-muted"
               >
                 {syncState.loading ? "Sincronizando..." : "Sincronizar Google Calendar"}
               </button>
@@ -289,13 +289,13 @@ export default function CalendarView({
           </div>
         </div>
         {googleCalendarConnected ? (
-          <div className="mt-4 rounded-2xl border border-border bg-surface-2 p-4 text-xs text-muted">
+          <div className="student-panel-soft mt-4 p-4 text-xs text-muted">
             <p>
-              Conectado: {googleCalendarEmail || "Google Account"}
+              Conectado: {googleCalendarEmail || "Cuenta de Google"}
             </p>
             {googleCalendarLastSyncAt ? (
               <p>
-                Ultima sincronizacion: {new Date(googleCalendarLastSyncAt).toLocaleString("es-PE")}
+                Última sincronización: {new Date(googleCalendarLastSyncAt).toLocaleString("es-PE")}
               </p>
             ) : null}
             {googleCalendarLastSyncStatus === "error" && googleCalendarLastSyncError ? (
@@ -305,7 +305,7 @@ export default function CalendarView({
         ) : null}
         {syncState.message ? (
           <div
-            className={`mt-4 rounded-2xl border p-4 text-sm ${
+            className={`mt-4 rounded-[12px] border p-4 text-sm ${
               syncState.type === "error"
                 ? "border-border bg-surface-2 text-muted"
                 : syncState.type === "warning"
@@ -317,13 +317,13 @@ export default function CalendarView({
           </div>
         ) : null}
         {hasLockedInMonth && !hasUnlockedInMonth ? (
-          <div className="mt-4 rounded-2xl border border-border bg-surface-2 p-4 text-sm text-muted">
+          <div className="student-panel-soft mt-4 p-4 text-sm text-muted">
             Este mes esta bloqueado hasta que renueves tu matricula.
           </div>
         ) : null}
       </header>
 
-      <div className="rounded-3xl border border-border bg-surface p-6 shadow-sm">
+      <div className="student-panel px-5 py-5 sm:px-6">
         <div className="grid grid-cols-7 gap-2 text-xs uppercase tracking-[0.25em] text-muted">
           {WEEK_DAYS.map((day) => (
             <div key={day} className="text-center">
@@ -335,7 +335,7 @@ export default function CalendarView({
         <div className="mt-3 grid grid-cols-7 gap-2">
           {monthInfo.slots.map((date, idx) => {
             if (!date) {
-              return <div key={`empty-${idx}`} className="h-20 rounded-2xl border border-transparent" />;
+              return <div key={`empty-${idx}`} className="h-20 rounded-[12px] border border-transparent" />;
             }
             const key = toDateKey(date);
             const daySessions = sessionsByDate.get(key) || [];
@@ -353,7 +353,7 @@ export default function CalendarView({
                 type="button"
                 key={key}
                 onClick={() => setSelectedKey(key)}
-                className={`flex h-20 flex-col items-start justify-between rounded-2xl border px-3 py-2 text-left text-sm transition ${
+                className={`flex h-20 flex-col items-start justify-between rounded-[12px] border px-3 py-2 text-left text-sm transition ${
                   isSelected
                     ? "border-primary bg-primary/10 text-primary"
                     : hasSessions
@@ -383,7 +383,7 @@ export default function CalendarView({
         </div>
       </div>
 
-      <div className="rounded-3xl border border-border bg-surface p-6 shadow-sm">
+      <div className="student-panel px-5 py-5 sm:px-6">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.35em] text-muted">Detalle del dia</p>
@@ -391,7 +391,7 @@ export default function CalendarView({
               {selectedKey || "Selecciona un dia"}
             </h2>
           </div>
-          <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-xs text-muted">
+          <span className="inline-flex rounded-[999px] border border-border bg-surface-2 px-3 py-1 text-xs text-muted">
             {selectedSessions.length} clases
           </span>
         </div>
@@ -402,7 +402,7 @@ export default function CalendarView({
             const isLocked = billingKey && allowedMonthsSet.size ? !allowedMonthsSet.has(billingKey) : false;
             const calendarLink = !isLocked ? buildSessionCalendarLink(session, commission) : null;
             return (
-              <div key={session.id} className="rounded-2xl border border-border bg-surface-2 p-4">
+              <div key={session.id} className="student-panel-soft p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold text-foreground">{session.day_label || "Clase"}</p>
@@ -424,7 +424,7 @@ export default function CalendarView({
                         href={calendarLink}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="rounded-full border border-border bg-surface px-3 py-1 text-[11px] font-semibold text-foreground transition hover:border-primary hover:bg-surface-2"
+                        className="student-button-secondary px-3 py-1 text-[11px]"
                       >
                         Agregar a Google Calendar
                       </a>
@@ -432,7 +432,7 @@ export default function CalendarView({
                       <button
                         type="button"
                         disabled
-                        className="rounded-full border border-border bg-surface px-3 py-1 text-[11px] font-semibold text-muted disabled:cursor-not-allowed"
+                        className="inline-flex items-center justify-center rounded-[12px] border border-border bg-surface px-3 py-1 text-[11px] font-semibold text-muted disabled:cursor-not-allowed"
                       >
                         Agregar a Google Calendar
                       </button>
