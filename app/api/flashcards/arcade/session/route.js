@@ -3,9 +3,11 @@ import { resolveStudentFromRequest } from "@/lib/duolingo/api-auth";
 import { normalizeFlashcardGameMode } from "@/lib/flashcard-arcade/constants";
 import { createFlashcardGameSession, loadFlashcardDeck } from "@/lib/flashcard-arcade/service";
 import { ensureGamificationProfile } from "@/lib/gamification/profile";
+import { withSupabaseRequestTrace } from "@/lib/supabase-tracing";
 
 export async function POST(request) {
-  try {
+  return withSupabaseRequestTrace("api:POST /api/flashcards/arcade/session", async () => {
+    try {
     const body = await request.json().catch(() => ({}));
     const resolution = await resolveStudentFromRequest({ request, body });
     if (resolution.errorResponse) {
@@ -23,6 +25,7 @@ export async function POST(request) {
     const deck = await loadFlashcardDeck(resolution.db, {
       userId: resolution.profile.id,
       deckKey,
+      courseLevel: resolution.profile?.course_level || "",
     });
 
     if (!deck?.deckKey) {
@@ -47,12 +50,12 @@ export async function POST(request) {
       gameSession,
       gamification,
     });
-  } catch (error) {
-    console.error("POST /api/flashcards/arcade/session failed", error);
-    return NextResponse.json(
-      { error: error?.message || "No se pudo iniciar la sesion de flashcards." },
-      { status: 500 }
-    );
-  }
+    } catch (error) {
+      console.error("POST /api/flashcards/arcade/session failed", error);
+      return NextResponse.json(
+        { error: error?.message || "No se pudo iniciar la sesion de flashcards." },
+        { status: 500 }
+      );
+    }
+  });
 }
-

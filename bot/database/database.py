@@ -91,6 +91,10 @@ def delete_rows(table, filters):
     return _supabase_request("DELETE", table, params=params, prefer="return=minimal")
 
 
+def call_rpc(function_name, params=None):
+    return _supabase_request("POST", f"rpc/{function_name}", json=params or {}, prefer="return=representation")
+
+
 def get_db_connection():
     return None
 

@@ -10,7 +10,7 @@ export const revalidate = 0;
 export default async function AppLayout({ children }) {
   const requestHeaders = await headers();
   const isFlipbookRoute = requestHeaders.get("x-library-flipbook-route") === "1";
-  const { user, displayName, avatarUrl, isAdmin, role, studyWithMeUnlocked, studyWithMeLockMessage } =
+  const { user, displayName, avatarUrl, isAdmin, role, studentUiLanguage, studyWithMeUnlocked, studyWithMeLockMessage } =
     await getShellUser();
 
   if (!user) {
@@ -29,8 +29,9 @@ export default async function AppLayout({ children }) {
 
   return (
     <AppShell
-      pageTitle={role === USER_ROLES.NON_STUDENT ? "Mi matrícula" : "Dashboard"}
+      pageTitle={role === USER_ROLES.NON_STUDENT ? "Mi matrícula" : studentUiLanguage === "en" ? "Dashboard" : "Inicio"}
       role={role}
+      studentUiLanguage={studentUiLanguage}
       studyWithMeUnlocked={studyWithMeUnlocked}
       studyWithMeLockMessage={studyWithMeLockMessage}
       user={{ name: displayName, email: user.email, avatarUrl }}

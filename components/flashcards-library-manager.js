@@ -20,6 +20,8 @@ function createEmptyForm() {
     word: "",
     meaning: "",
     image: "",
+    cefrLevel: "A1",
+    themeTag: "",
     acceptedAnswers: "",
     audioUrl: "",
     audioR2Key: "",
@@ -36,6 +38,8 @@ function toFormValues(card = null) {
     word: String(card.word || "").trim(),
     meaning: String(card.meaning || "").trim(),
     image: String(card.image || "").trim(),
+    cefrLevel: String(card.cefrLevel || "A1").trim().toUpperCase() || "A1",
+    themeTag: String(card.themeTag || "").trim().toLowerCase(),
     acceptedAnswers: Array.isArray(card.acceptedAnswers) ? card.acceptedAnswers.join(", ") : "",
     audioUrl: String(card.audioUrl || "").trim(),
     audioR2Key: String(card.audioR2Key || "").trim(),
@@ -48,7 +52,7 @@ function toFormValues(card = null) {
 function matchesSearch(card, query) {
   const needle = String(query || "").trim().toLowerCase();
   if (!needle) return true;
-  return [card?.word, card?.meaning]
+  return [card?.word, card?.meaning, card?.cefrLevel, card?.themeTag]
     .map((value) => String(value || "").toLowerCase())
     .some((value) => value.includes(needle));
 }
@@ -319,6 +323,18 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
                   <p className="text-lg font-semibold text-foreground">{card.word || "Sin palabra"}</p>
                   <p className="text-sm text-muted">{card.meaning || "Sin significado"}</p>
                 </div>
+                <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]">
+                  {card.cefrLevel ? (
+                    <span className="rounded-full border border-primary/15 bg-primary/5 px-3 py-1 text-primary">
+                      {card.cefrLevel}
+                    </span>
+                  ) : null}
+                  {card.themeTag ? (
+                    <span className="rounded-full border border-border bg-surface-2 px-3 py-1 text-muted">
+                      {card.themeTag.replace(/_/g, " ")}
+                    </span>
+                  ) : null}
+                </div>
                 <div className="grid gap-2 text-xs text-muted">
                   <p>
                     Variantes: {card.acceptedAnswers?.length ? card.acceptedAnswers.join(", ") : "Sin extras"}
@@ -425,6 +441,39 @@ export default function FlashcardsLibraryManager({ initialCards = [] }) {
                 }}
               />
             </label>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Nivel CEFR</label>
+              <select
+                suppressHydrationWarning
+                name="cefrLevel"
+                value={formValues.cefrLevel}
+                onChange={(event) => setFormValues((previous) => ({ ...previous, cefrLevel: event.target.value }))}
+                className="w-full rounded-2xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+              >
+                {["A1", "A2", "B1", "B2", "C1"].map((level) => (
+                  <option key={level} value={level}>{level}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">Tema</label>
+              <input
+                suppressHydrationWarning
+                name="themeTag"
+                value={formValues.themeTag}
+                onChange={(event) =>
+                  setFormValues((previous) => ({
+                    ...previous,
+                    themeTag: event.target.value.toLowerCase().replace(/\s+/g, "_"),
+                  }))
+                }
+                className="w-full rounded-2xl border border-border bg-surface-2 px-3 py-2 text-sm text-foreground"
+                placeholder="introductions"
+              />
+            </div>
           </div>
 
           <div className="space-y-1">

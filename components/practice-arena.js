@@ -114,7 +114,12 @@ export default function PracticeArena({
   initialStudent,
   initialHubData,
   initialParams,
+  showHero = true,
+  showCompetitionSummary = true,
+  onGamificationChange,
+  onCompetitionChange,
 }) {
+  const allowedCefrLevel = initialHubData?.allowedCefrLevel || initialStudent?.cefrLevel || "";
   const [gamification, setGamification] = useState(initialHubData?.gamification || null);
   const [competition, setCompetition] = useState(initialHubData?.competition || null);
   const [activeSession, setActiveSession] = useState(null);
@@ -123,7 +128,7 @@ export default function PracticeArena({
   const [error, setError] = useState("");
   const [topicFilters, setTopicFilters] = useState({
     skill: initialParams?.skill || "",
-    cefrLevel: initialParams?.cefrLevel || "",
+    cefrLevel: allowedCefrLevel,
     categoryId: initialParams?.categoryId || "",
     theme: "",
     scenario: initialParams?.scenario || "",
@@ -159,7 +164,11 @@ export default function PracticeArena({
       }
 
       startTransition(() => {
-        setGamification(data?.gamification || gamification);
+        const nextGamification = data?.gamification || gamification;
+        setGamification(nextGamification);
+        if (data?.gamification) {
+          onGamificationChange?.(nextGamification);
+        }
         setCompletionSummary(null);
         setActiveSession({
           ...(data?.session || {}),
@@ -171,7 +180,7 @@ export default function PracticeArena({
     } finally {
       setLoadingSession(false);
     }
-  }, [gamification]);
+  }, [gamification, onGamificationChange]);
 
   useEffect(() => {
     if (autoStartedRef.current) return;
@@ -185,25 +194,29 @@ export default function PracticeArena({
       exerciseIds: initialParams?.exerciseIds || [],
       size: 12,
       sourceContext: "practice_route",
-      filters: {
-        skill: initialParams?.skill || "",
-        cefrLevel: initialParams?.cefrLevel || "",
-        categoryId: initialParams?.categoryId || "",
-        scenario: initialParams?.scenario || "",
-      },
+                  filters: {
+                    skill: initialParams?.skill || "",
+                    cefrLevel: allowedCefrLevel,
+                    categoryId: initialParams?.categoryId || "",
+                    scenario: initialParams?.scenario || "",
+                  },
     });
-  }, [initialParams, startSession]);
+  }, [allowedCefrLevel, initialParams, startSession]);
 
   if (activeSession) {
     return (
       <StudentPracticeSession
         session={activeSession}
         gamification={gamification}
-        onGamificationChange={setGamification}
+        onGamificationChange={(nextGamification) => {
+          setGamification(nextGamification);
+          onGamificationChange?.(nextGamification);
+        }}
         onExit={() => setActiveSession(null)}
         onCompleted={(summary) => {
           if (summary?.competition) {
             setCompetition(summary.competition);
+            onCompetitionChange?.(summary.competition);
           }
           setCompletionSummary(summary);
           setActiveSession(null);
@@ -222,45 +235,47 @@ export default function PracticeArena({
 
   return (
     <section className="space-y-6 text-foreground">
-      <header className="student-panel relative overflow-hidden px-6 py-7 sm:px-7">
-        <div className="pointer-events-none absolute inset-y-0 right-0 w-[42%] bg-[radial-gradient(circle_at_top_right,rgba(241,61,79,0.16),transparent_58%)]" />
-        <div className="pointer-events-none absolute inset-y-0 left-0 w-[48%] bg-[radial-gradient(circle_at_bottom_left,rgba(16,52,116,0.18),transparent_60%)]" />
-        <div className="relative grid gap-5 lg:grid-cols-[1.15fr_0.85fr] lg:items-end">
-          <div>
-            <p className="text-xs uppercase tracking-[0.34em] text-muted">Practice Arena</p>
-            <h1 className="mt-2 text-3xl font-semibold text-foreground">Train with real sessions, not just drills.</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
-              Build XP through focused practice, recover weak areas, and keep your account level moving with short server-generated sessions.
-            </p>
-          </div>
+      {showHero ? (
+        <header className="student-panel relative overflow-hidden px-6 py-7 sm:px-7">
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-[42%] bg-[radial-gradient(circle_at_top_right,rgba(241,61,79,0.16),transparent_58%)]" />
+          <div className="pointer-events-none absolute inset-y-0 left-0 w-[48%] bg-[radial-gradient(circle_at_bottom_left,rgba(16,52,116,0.18),transparent_60%)]" />
+          <div className="relative grid gap-5 lg:grid-cols-[1.15fr_0.85fr] lg:items-end">
+            <div>
+              <p className="text-xs uppercase tracking-[0.34em] text-muted">Practice Arena</p>
+              <h1 className="mt-2 text-3xl font-semibold text-foreground">Train with real sessions, not just drills.</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
+                Build XP through focused practice, recover weak areas, and keep your account level moving with short server-generated sessions.
+              </p>
+            </div>
 
-          <div className="student-panel-soft px-5 py-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Current level</p>
-                <h2 className="mt-2 text-3xl font-semibold text-foreground">Level {level}</h2>
-                <p className="mt-1 text-sm text-muted">{Number(gamification?.lifetimeXp || 0)} lifetime XP</p>
+            <div className="student-panel-soft px-5 py-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Current level</p>
+                  <h2 className="mt-2 text-3xl font-semibold text-foreground">Level {level}</h2>
+                  <p className="mt-1 text-sm text-muted">{Number(gamification?.lifetimeXp || 0)} lifetime XP</p>
+                </div>
+                <span className="rounded-full border border-[rgba(16,52,116,0.12)] bg-white/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#103474]">
+                  {initialStudent?.courseLevel || "Open track"}
+                </span>
               </div>
-              <span className="rounded-full border border-[rgba(16,52,116,0.12)] bg-white/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#103474]">
-                {initialStudent?.courseLevel || "Open track"}
-              </span>
-            </div>
-            <div className="mt-5">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium text-foreground">Progress to next level</span>
-                <span className="text-muted">{xpIntoLevel} XP in level</span>
+              <div className="mt-5">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-foreground">Progress to next level</span>
+                  <span className="text-muted">{xpIntoLevel} XP in level</span>
+                </div>
+                <div className="mt-3 h-3 w-full rounded-full bg-white">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                </div>
+                <p className="mt-3 text-sm text-muted">{xpToNextLevel} XP to reach Level {level + 1}</p>
               </div>
-              <div className="mt-3 h-3 w-full rounded-full bg-white">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
-                  style={{ width: `${progressPercent}%` }}
-                />
-              </div>
-              <p className="mt-3 text-sm text-muted">{xpToNextLevel} XP to reach Level {level + 1}</p>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
+      ) : null}
 
       {error ? (
         <div className="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
@@ -422,7 +437,7 @@ export default function PracticeArena({
         </aside>
       </div>
 
-      <CompetitionSummaryCard competition={competition} />
+      {showCompetitionSummary ? <CompetitionSummaryCard competition={competition} /> : null}
 
       <section className="space-y-4">
         <div>
@@ -444,7 +459,7 @@ export default function PracticeArena({
             description="Pulls from mistakes, overdue review, and your weakest recent skill."
             badge="Adaptive"
             accentClass="bg-[linear-gradient(180deg,#ffffff_0%,#fff7f8_100%)]"
-            onClick={() => startSession({ mode: PRACTICE_MODES.WEAKNESS, size: 12, sourceContext: "practice_weakness", filters: {} })}
+            onClick={() => startSession({ mode: PRACTICE_MODES.WEAKNESS, size: 12, sourceContext: "practice_weakness", filters: { cefrLevel: allowedCefrLevel } })}
             actionLabel={loadingSession ? "Loading..." : "Recover"}
           />
           <ModeCard
@@ -452,7 +467,7 @@ export default function PracticeArena({
             description="Balanced new + review session built from the existing adaptive planner."
             badge="Core mode"
             accentClass="bg-[linear-gradient(180deg,#ffffff_0%,#f8f8ff_100%)]"
-            onClick={() => startSession({ mode: PRACTICE_MODES.MIXED_REVIEW, size: 12, sourceContext: "practice_mixed", filters: {} })}
+            onClick={() => startSession({ mode: PRACTICE_MODES.MIXED_REVIEW, size: 12, sourceContext: "practice_mixed", filters: { cefrLevel: allowedCefrLevel } })}
             actionLabel={loadingSession ? "Loading..." : "Start review"}
           />
           <ModeCard
@@ -460,7 +475,7 @@ export default function PracticeArena({
             description="Short pressure round with compact item types, ready to feed ranked play later."
             badge="3 minutes"
             accentClass="bg-[linear-gradient(180deg,#ffffff_0%,#fffaf2_100%)]"
-            onClick={() => startSession({ mode: PRACTICE_MODES.TIMED, size: 12, timeLimitSec: 180, sourceContext: "practice_timed", filters: {} })}
+            onClick={() => startSession({ mode: PRACTICE_MODES.TIMED, size: 12, timeLimitSec: 180, sourceContext: "practice_timed", filters: { cefrLevel: allowedCefrLevel } })}
             actionLabel={loadingSession ? "Loading..." : "Beat the clock"}
           />
           {scenarios.length ? (
@@ -475,6 +490,7 @@ export default function PracticeArena({
                 sourceContext: "practice_scenario",
                 filters: {
                   scenario: topicFilters.scenario || scenarios[0]?.value || "",
+                  cefrLevel: allowedCefrLevel,
                 },
               })}
               actionLabel={loadingSession ? "Loading..." : "Start scenario"}
@@ -489,33 +505,17 @@ export default function PracticeArena({
             <p className="text-xs uppercase tracking-[0.3em] text-muted">Topic Drill</p>
             <h2 className="mt-2 text-2xl font-semibold text-foreground">Build a filtered practice session</h2>
             <p className="mt-3 text-sm leading-6 text-muted">
-              Pick the level, skill, and category you want to train. If category metadata is available, it becomes your theme anchor.
+              Start from your assigned level, then narrow the session by skill, category, or scenario. Empty filters only show content available for your current level.
             </p>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <label className="space-y-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">CEFR level</span>
-              <select
-                value={topicFilters.cefrLevel}
-                onChange={(event) =>
-                  setTopicFilters((current) => ({
-                    ...current,
-                    cefrLevel: event.target.value,
-                    categoryId: "",
-                  }))
-                }
-                className="w-full rounded-[14px] border border-border bg-surface px-4 py-3 text-sm text-foreground"
-              >
-                <option value="">Any level</option>
-                {["A1", "A2", "B1", "B2", "C1"].map((levelOption) => (
-                  <option key={levelOption} value={levelOption}>
-                    {levelOption}
-                  </option>
-                ))}
-              </select>
-            </label>
-
+            <div className="space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">Your practice level</span>
+              <div className="flex min-h-[52px] items-center rounded-[14px] border border-border bg-surface px-4 py-3 text-sm font-semibold text-foreground">
+                {allowedCefrLevel || "Open track"}
+              </div>
+            </div>
             <label className="space-y-2">
               <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">Skill</span>
               <select
@@ -594,7 +594,7 @@ export default function PracticeArena({
                 sourceContext: "practice_topic",
                 filters: {
                   skill: topicFilters.skill,
-                  cefrLevel: topicFilters.cefrLevel,
+                  cefrLevel: allowedCefrLevel,
                   categoryId: topicFilters.categoryId,
                 },
               })
@@ -614,7 +614,7 @@ export default function PracticeArena({
                 filters: {
                   scenario: topicFilters.scenario,
                   skill: topicFilters.skill,
-                  cefrLevel: topicFilters.cefrLevel,
+                  cefrLevel: allowedCefrLevel,
                 },
               })
             }

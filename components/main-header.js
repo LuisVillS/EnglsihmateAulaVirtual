@@ -17,15 +17,15 @@ function HeaderButton({ label, onClick, children }) {
   );
 }
 
-export default function MainHeader({ title, user, onToggleSidebar, compact = false }) {
+export default function MainHeader({ title, user, onToggleSidebar, compact = false, studentUiLanguage = "es" }) {
   const pathname = usePathname();
-  const routeMeta = getStudentRouteMeta(pathname, title);
+  const routeMeta = getStudentRouteMeta(pathname, title, studentUiLanguage);
 
   return (
     <header className="safe-area-top sticky top-0 z-30 border-b border-[rgba(15,23,42,0.08)] bg-[rgba(255,255,255,0.94)] backdrop-blur-xl">
       <div className={`safe-area-x flex items-center justify-between gap-3 px-4 ${compact ? "py-2.5" : "py-3 sm:px-5"}`}>
         <div className="flex min-w-0 items-center gap-2.5">
-          <HeaderButton label="Alternar menu lateral" onClick={onToggleSidebar}>
+          <HeaderButton label={studentUiLanguage === "en" ? "Toggle sidebar" : "Alternar menú lateral"} onClick={onToggleSidebar}>
             <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="4" y="5" width="4.5" height="14" rx="1.2" />
               <path d="M12 7h8M12 12h8M12 17h8" />

@@ -16,6 +16,7 @@ import {
   buildFlashcardLibraryMap,
   resolveAssignedFlashcardRow,
 } from "@/lib/flashcards";
+import { withSupabaseRequestTrace } from "@/lib/supabase-tracing";
 import {
   isMissingLessonQuizRestartColumnError,
   isMissingLessonQuizTableError,
@@ -479,6 +480,7 @@ function LockIcon() {
 }
 
 export default async function CourseGatePage() {
+  return withSupabaseRequestTrace("page:/app/curso", async () => {
   await autoDeactivateExpiredCommissions();
   const { supabase, user, role } = await getRequestUserContext();
   if (!user) redirect("/login");
@@ -796,4 +798,5 @@ export default async function CourseGatePage() {
       </section>
     </section>
   );
+  });
 }

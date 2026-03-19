@@ -4,6 +4,7 @@ import { calculatePracticeItemXp, calculatePracticeSessionBonus, calculateAccura
 import { ensureGamificationProfile } from "@/lib/gamification/profile";
 import { computeSpacedRepetitionUpdate } from "@/lib/duolingo/sr";
 import { recordCompetitionActivity } from "@/lib/competition/service";
+import { withSupabaseRequestTrace } from "@/lib/supabase-tracing";
 
 function toBoolean(value) {
   if (typeof value === "boolean") return value;
@@ -228,7 +229,8 @@ async function completePracticeSession(db, { sessionId, userId, mode, timeSpentS
 }
 
 export async function POST(request) {
-  try {
+  return withSupabaseRequestTrace("api:POST /api/progress", async () => {
+    try {
     const body = await request.json().catch(() => ({}));
     const resolution = await resolveStudentFromRequest({ request, body });
     if (resolution.errorResponse) {
@@ -306,14 +308,19 @@ export async function POST(request) {
         continue;
       }
 
-      const { data: existing } = await db
+      const { data: existing, error: existingProgressError } = await db
         .from("user_progress")
         .select(
           "id, interval_days, ease_factor, times_seen, times_correct, streak_count"
         )
         .eq("user_id", profile.id)
         .eq("exercise_id", exerciseId)
+        .is("lesson_id", null)
         .maybeSingle();
+
+      if (existingProgressError) {
+        throw new Error(existingProgressError.message || "No se pudo cargar progreso existente.");
+      }
 
       const srUpdate = computeSpacedRepetitionUpdate({
         prevIntervalDays: existing?.interval_days || 1,
@@ -338,12 +345,27 @@ export async function POST(request) {
         updated_at: new Date().toISOString(),
       };
 
-      const { error: upsertError } = await db
-        .from("user_progress")
-        .upsert(progressPayload, { onConflict: "user_id,exercise_id" });
+      if (existing?.id) {
+        const { error: updateProgressError } = await db
+          .from("user_progress")
+          .update(progressPayload)
+          .eq("id", existing.id);
 
-      if (upsertError) {
-        throw new Error(upsertError.message || "No se pudo actualizar progreso.");
+        if (updateProgressError) {
+          throw new Error(updateProgressError.message || "No se pudo actualizar progreso.");
+        }
+      } else {
+        const { error: insertProgressError } = await db
+          .from("user_progress")
+          .insert({
+            ...progressPayload,
+            created_at: new Date().toISOString(),
+            lesson_id: null,
+          });
+
+        if (insertProgressError) {
+          throw new Error(insertProgressError.message || "No se pudo guardar progreso.");
+        }
       }
 
       const gain = calculatePracticeItemXp({ isCorrect, attempts, mode });
@@ -449,11 +471,12 @@ export async function POST(request) {
         xp_delta: xpDelta + Math.max(0, Number(completedSession?.xpBonus || 0) || 0),
       },
     });
-  } catch (error) {
-    console.error("POST /api/progress failed", error);
-    return NextResponse.json(
-      { error: error?.message || "No se pudo registrar progreso." },
-      { status: 500 }
-    );
-  }
+    } catch (error) {
+      console.error("POST /api/progress failed", error);
+      return NextResponse.json(
+        { error: error?.message || "No se pudo registrar progreso." },
+        { status: 500 }
+      );
+    }
+  });
 }

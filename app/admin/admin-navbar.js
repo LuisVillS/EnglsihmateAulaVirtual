@@ -13,6 +13,7 @@ const NAV_LINKS = [
   { href: "/admin/exercises", label: "Exercises" },
   { href: "/admin/flashcards", label: "Flashcards" },
   { href: "/admin/library", label: "Library" },
+  { href: "/admin/discord", label: "Discord" },
 ];
 
 function isLinkActive(pathname, href) {

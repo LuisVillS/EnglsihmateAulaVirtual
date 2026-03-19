@@ -1,17 +1,15 @@
 import discord
 from discord.ext import commands
-from services.config import AUTO_ROLE_SYNC_ON_JOIN, TOKEN
+from services.config import ROLE_SYNC_REQUIRES_MEMBERS_INTENT, TOKEN
 
 intents = discord.Intents.default()
-if AUTO_ROLE_SYNC_ON_JOIN:
+if ROLE_SYNC_REQUIRES_MEMBERS_INTENT:
     intents.members = True
 bot = commands.Bot(intents=intents, command_prefix='/') 
 
 def setup():
     bot.load_extension("commands.verify")
-    bot.load_extension("commands.change")
-    bot.load_extension("commands.update")
-    bot.load_extension("commands.banquea.quiz_commands")
+    bot.load_extension("commands.practice")
     bot.load_extension("services.member_sync")
 
 if __name__ == "__main__":

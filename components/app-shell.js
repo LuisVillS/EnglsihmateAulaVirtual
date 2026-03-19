@@ -12,6 +12,7 @@ export default function AppShell({
   pageTitle,
   user,
   role = "non_student",
+  studentUiLanguage = "es",
   studyWithMeUnlocked = false,
   studyWithMeLockMessage = "Disponible solo para alumnos Premium.",
 }) {
@@ -65,6 +66,7 @@ export default function AppShell({
     <div className="flex h-[100dvh] overflow-hidden bg-[#f3f5f8] text-foreground">
       <Sidebar
         role={role}
+        studentUiLanguage={studentUiLanguage}
         studyWithMeUnlocked={studyWithMeUnlocked}
         studyWithMeLockMessage={studyWithMeLockMessage}
         desktopOpen={desktopSidebarOpen}
@@ -74,6 +76,7 @@ export default function AppShell({
       <div className="flex min-w-0 flex-1 flex-col border-l border-[rgba(15,23,42,0.04)]">
         <MainHeader
           title={pageTitle}
+          studentUiLanguage={studentUiLanguage}
           user={headerUser}
           onToggleSidebar={toggleSidebar}
           compact={isFlipbookRoute}

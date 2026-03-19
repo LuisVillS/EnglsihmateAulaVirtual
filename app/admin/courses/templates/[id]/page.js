@@ -1,6 +1,6 @@
 ﻿import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import {
   deleteTemplateSessionExerciseBatch,
   upsertTemplateSession,
@@ -167,18 +167,7 @@ function buildSlidePreviewUrl(url) {
 export default async function CourseTemplateDetailPage({ params: paramsPromise }) {
   const params = await paramsPromise;
   const templateId = params?.id?.toString();
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/admin/login");
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (!adminRecord?.id) redirect("/admin/login");
+  const { supabase } = await requireAdminPageAccess();
 
   const { data: template } = await supabase
     .from("course_templates")

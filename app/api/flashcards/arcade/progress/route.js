@@ -9,6 +9,7 @@ import {
 } from "@/lib/flashcard-arcade/progress";
 import { applyGamificationDelta } from "@/lib/gamification/mutations";
 import { recordCompetitionActivity } from "@/lib/competition/service";
+import { withSupabaseRequestTrace } from "@/lib/supabase-tracing";
 
 function toPlainObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -33,7 +34,8 @@ function normalizeCardResults(body) {
 }
 
 export async function POST(request) {
-  try {
+  return withSupabaseRequestTrace("api:POST /api/flashcards/arcade/progress", async () => {
+    try {
     const body = await request.json().catch(() => ({}));
     const resolution = await resolveStudentFromRequest({ request, body });
     if (resolution.errorResponse) {
@@ -255,11 +257,12 @@ export async function POST(request) {
         completed,
       },
     });
-  } catch (error) {
-    console.error("POST /api/flashcards/arcade/progress failed", error);
-    return NextResponse.json(
-      { error: error?.message || "No se pudo registrar el progreso de flashcards." },
-      { status: 500 }
-    );
-  }
+    } catch (error) {
+      console.error("POST /api/flashcards/arcade/progress failed", error);
+      return NextResponse.json(
+        { error: error?.message || "No se pudo registrar el progreso de flashcards." },
+        { status: 500 }
+      );
+    }
+  });
 }

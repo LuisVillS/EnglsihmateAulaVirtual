@@ -130,6 +130,20 @@ npm run dev
 npm run build && npm start
 ```
 
+## Acceso por red local
+- Para exponer la app a otros dispositivos en tu misma red local, inicia Next escuchando en todas las interfaces:
+  ```bash
+  npm run dev:lan
+  ```
+- Para produccion local:
+  ```bash
+  npm run build
+  npm run start:lan
+  ```
+- Luego abre desde otro dispositivo `http://IP_DE_TU_PC:3000`.
+- Si usas enlaces de correo, callbacks OAuth o redirecciones absolutas, configura `NEXT_PUBLIC_SITE_URL=http://IP_DE_TU_PC:3000` en `.env.local`.
+- En Windows, permite Node.js o el puerto `3000` en el firewall si la red local no logra conectarse.
+
 ## Uso diario
 1. Arranca `npm run dev`. Los alumnos entran por `/`, los administradores por `/admin` (tras login se redirige a `/admin/panel`).
 2. En `/admin/students` registra alumnos manualmente o por CSV; el sistema les asigna codigo, los habilita y envia el correo de bienvenida sin pasos extra.

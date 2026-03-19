@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { AdminCard, AdminPage, AdminPageHeader } from "@/components/admin-page";
+import FlashcardDecksManager from "@/components/flashcard-decks-manager";
 import FlashcardsLibraryManager from "@/components/flashcards-library-manager";
 import { mapLibraryFlashcardRow } from "@/lib/flashcards";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import { getSignedDownloadUrl } from "@/lib/r2";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
 
 export const metadata = {
   title: "Biblioteca de flashcards | Admin",
@@ -30,25 +30,15 @@ async function resolveFlashcardAudioUrl(row) {
 }
 
 export default async function AdminFlashcardsPage() {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/admin/login");
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (!adminRecord?.id) redirect("/admin/login");
+  const { supabase } = await requireAdminPageAccess();
 
   let cards = [];
+  let decks = [];
   let errorMessage = "";
 
   const flashcardsResult = await supabase
     .from("flashcards")
-    .select("id, word, meaning, image_url, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config")
+    .select("id, word, meaning, image_url, cefr_level, theme_tag, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config")
     .order("word", { ascending: true })
     .order("created_at", { ascending: true });
 
@@ -66,6 +56,49 @@ export default async function AdminFlashcardsPage() {
         })
       )
     );
+
+    const deckRowsResult = await supabase
+      .from("flashcard_decks")
+      .select("id, title, description, source_type, cefr_level, theme_tag, is_system, is_active")
+      .eq("is_system", true)
+      .order("cefr_level", { ascending: true })
+      .order("title", { ascending: true });
+
+    if (!deckRowsResult.error) {
+      const deckIds = (deckRowsResult.data || []).map((row) => row.id).filter(Boolean);
+      let itemsByDeck = new Map();
+      if (deckIds.length) {
+        const deckItemsResult = await supabase
+          .from("flashcard_deck_items")
+          .select("deck_id, position, flashcard:flashcards(id, word, meaning, image_url, cefr_level, theme_tag, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config)")
+          .in("deck_id", deckIds)
+          .order("position", { ascending: true });
+
+        if (!deckItemsResult.error) {
+          itemsByDeck = new Map();
+          for (const row of deckItemsResult.data || []) {
+            const deckId = String(row?.deck_id || "").trim();
+            if (!deckId || !row?.flashcard?.id) continue;
+            const list = itemsByDeck.get(deckId) || [];
+            list.push(mapLibraryFlashcardRow(row.flashcard));
+            itemsByDeck.set(deckId, list);
+          }
+        }
+      }
+
+      decks = (deckRowsResult.data || []).map((deck) => ({
+        id: String(deck.id || "").trim(),
+        title: String(deck.title || "").trim(),
+        description: String(deck.description || "").trim(),
+        cefrLevel: String(deck.cefr_level || "").trim().toUpperCase(),
+        themeTag: String(deck.theme_tag || "").trim().toLowerCase(),
+        sourceType: String(deck.source_type || "system").trim().toLowerCase(),
+        isActive: deck.is_active !== false,
+        cards: itemsByDeck.get(String(deck.id || "").trim()) || [],
+        cardIds: (itemsByDeck.get(String(deck.id || "").trim()) || []).map((card) => card.id),
+        totalCards: (itemsByDeck.get(String(deck.id || "").trim()) || []).length,
+      }));
+    }
   }
 
   return (
@@ -101,6 +134,12 @@ export default async function AdminFlashcardsPage() {
       <AdminCard className="p-4 sm:p-5">
         <FlashcardsLibraryManager initialCards={cards} />
       </AdminCard>
+
+      {!errorMessage ? (
+        <AdminCard className="p-4 sm:p-5">
+          <FlashcardDecksManager initialDecks={decks} availableCards={cards} />
+        </AdminCard>
+      ) : null}
     </AdminPage>
   );
 }

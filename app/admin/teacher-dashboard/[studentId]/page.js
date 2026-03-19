@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 import {
   closeStudentLevel,
@@ -127,23 +127,7 @@ function SkillBar({ label, value }) {
 }
 
 async function requireAdminDb() {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    redirect("/admin/login");
-  }
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (!adminRecord?.id) {
-    redirect("/admin/login");
-  }
+  const { supabase, user } = await requireAdminPageAccess();
 
   const db = hasServiceRoleClient() ? getServiceSupabaseClient() : supabase;
   return { db, user };

@@ -5,6 +5,7 @@ import { USER_ROLES } from "@/lib/roles";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { buildFrequencySessionDrafts } from "@/lib/course-sessions";
 import { loadStudentAppSkillSnapshot, normalizeLevelCode } from "@/lib/student-skills";
+import { withSupabaseRequestTrace } from "@/lib/supabase-tracing";
 
 const LIMA_TIME_ZONE = "America/Lima";
 const LIMA_OFFSET_HOURS = 5;
@@ -248,6 +249,7 @@ function formatNextClass(date) {
 }
 
 export default async function StudentDashboard() {
+  return withSupabaseRequestTrace("page:/app", async () => {
   await autoDeactivateExpiredCommissions();
   const { supabase, user, isAdmin, role } = await getRequestUserContext();
 
@@ -568,4 +570,5 @@ export default async function StudentDashboard() {
       </div>
     </section>
   );
+  });
 }

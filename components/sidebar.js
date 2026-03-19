@@ -5,13 +5,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  STUDENT_DASHBOARD_ITEM,
-  STUDENT_NAV_SECTIONS,
+  getStudentDashboardItem,
+  getStudentNavSections,
 } from "@/lib/student-navigation";
 
 const SUPPORT_URL = process.env.NEXT_PUBLIC_SUPPORT_WA_URL;
-const SIDEBAR_LOGO_SRC = "/brand/sidebar-logo-full.svg";
-const SIDEBAR_COLLAPSED_LOGO_SRC = "/brand/sidebar-logo-collapsed.svg";
+const SIDEBAR_LOGO_SRC = "/brand/Logo_Englishmate.svg";
+const SIDEBAR_COLLAPSED_LOGO_SRC = "/brand/EnglishMate_Escudo.svg";
 
 function Icon({ name }) {
   switch (name) {
@@ -114,14 +114,14 @@ function SidebarLogo() {
   const [imageFailed, setImageFailed] = useState(false);
 
   return (
-    <div className="flex h-10 items-center">
+    <div className="flex h-12 items-center px-1">
       {!imageFailed ? (
         <Image
           src={SIDEBAR_LOGO_SRC}
           alt="EnglishMate"
-          width={120}
-          height={24}
-          className="h-6 w-auto object-contain"
+          width={180}
+          height={40}
+          className="h-full w-auto max-w-full object-contain"
           onError={() => setImageFailed(true)}
         />
       ) : (
@@ -250,6 +250,7 @@ function SectionHeader({ label, collapsed = false }) {
 
 export default function Sidebar({
   role = "non_student",
+  studentUiLanguage = "es",
   desktopOpen,
   mobileOpen,
   onCloseMobile,
@@ -258,12 +259,14 @@ export default function Sidebar({
 }) {
   const pathname = usePathname();
   const isLockedRole = role === "non_student";
+  const dashboardItem = getStudentDashboardItem(studentUiLanguage);
+  const navSections = getStudentNavSections(studentUiLanguage);
   const [mobileLockedMessage, setMobileLockedMessage] = useState("");
   const [collapsedTooltip, setCollapsedTooltip] = useState(null);
 
   const isActive = (href) => {
     if (!href) return false;
-    if (isLockedRole && pathname?.startsWith("/app/matricula") && href === STUDENT_DASHBOARD_ITEM.href) {
+    if (isLockedRole && pathname?.startsWith("/app/matricula") && href === dashboardItem.href) {
       return true;
     }
     if (href === "/app") return pathname === "/app";
@@ -353,15 +356,15 @@ export default function Sidebar({
             ) : null}
 
             <NavItem
-              item={STUDENT_DASHBOARD_ITEM}
-              active={isActive(STUDENT_DASHBOARD_ITEM.href)}
+              item={dashboardItem}
+              active={isActive(dashboardItem.href)}
               disabled={false}
               onNavigate={handleNavigate}
               collapsed={isDesktopCollapsed}
               onTooltipChange={setCollapsedTooltip}
             />
 
-            {STUDENT_NAV_SECTIONS.map((section) => (
+            {navSections.map((section) => (
               <section key={section.id}>
                 <SectionHeader label={section.label} collapsed={isDesktopCollapsed} />
                 <div className="space-y-0.5">

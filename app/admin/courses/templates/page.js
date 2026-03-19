@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { deleteCourseTemplate } from "@/app/admin/actions";
 import {
   AdminBadge,
@@ -8,8 +7,8 @@ import {
   AdminPageHeader,
   AdminSectionHeader,
 } from "@/components/admin-page";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import { getFrequencyReference } from "@/lib/course-sessions";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
 
 export const metadata = {
   title: "Plantillas de curso | Admin",
@@ -33,19 +32,7 @@ function formatFrequencyLabel(value) {
 }
 
 export default async function CourseTemplatesPage() {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect("/admin/login");
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (!adminRecord?.id) redirect("/admin/login");
+  const { supabase } = await requireAdminPageAccess();
 
   let missingTable = false;
   const { data: templatesRows, error: templatesError } = await supabase

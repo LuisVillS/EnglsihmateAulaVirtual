@@ -139,10 +139,10 @@ export default function CompetitionHub({
             <p className="text-xs uppercase tracking-[0.24em] text-muted">{competition?.standing?.promotionLabel || "Weekly status"}</p>
             <p className="mt-2 text-sm leading-6 text-foreground">{competition?.standing?.promotionCopy || "Keep earning points this week."}</p>
             <div className="mt-4 flex flex-wrap gap-3">
-              <Link href="/app/practice" className="student-button-primary px-4 py-2.5 text-sm">
+              <Link href="/app/practice?tab=exercises" className="student-button-primary px-4 py-2.5 text-sm">
                 Open Practice Arena
               </Link>
-              <Link href="/app/flashcards" className="student-button-secondary px-4 py-2.5 text-sm">
+              <Link href="/app/practice?tab=flashcards" className="student-button-secondary px-4 py-2.5 text-sm">
                 Open Flashcard Arcade
               </Link>
             </div>
@@ -195,4 +195,3 @@ export default function CompetitionHub({
     </section>
   );
 }
-

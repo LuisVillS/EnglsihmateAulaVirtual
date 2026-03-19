@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FLASHCARD_GAME_MODES,
   FLASHCARD_GAME_MODE_LABELS,
@@ -271,6 +271,7 @@ export default function FlashcardArcadePlayer({
   deck,
   gamification = null,
   embedded = false,
+  initialMode = "",
   sourceContext = "flashcard_arcade",
   onGamificationChange,
   onCompetitionChange,
@@ -287,11 +288,13 @@ export default function FlashcardArcadePlayer({
   const timerRef = useRef(null);
   const finishRunRef = useRef(null);
   const playCardAudioRef = useRef(null);
+  const autoModeRef = useRef(false);
 
   useEffect(() => {
     setDeckState(deck);
     setActiveRun(null);
     setCompletionSummary(null);
+    autoModeRef.current = false;
   }, [deck]);
 
   useEffect(() => {
@@ -508,7 +511,7 @@ export default function FlashcardArcadePlayer({
     });
   }
 
-  async function beginMode(mode) {
+  const beginMode = useCallback(async (mode) => {
     if (!deckState?.deckKey || !cards.length) return;
     setError("");
     setLoadingMode(mode);
@@ -539,7 +542,16 @@ export default function FlashcardArcadePlayer({
     } finally {
       setLoadingMode("");
     }
-  }
+  }, [cards, deckState?.deckKey, sourceContext]);
+
+  useEffect(() => {
+    const normalizedMode = String(initialMode || "").trim().toLowerCase();
+    if (!normalizedMode || autoModeRef.current || !deckState?.deckKey || !cards.length || activeRun || completionSummary) {
+      return;
+    }
+    autoModeRef.current = true;
+    void beginMode(normalizedMode);
+  }, [activeRun, beginMode, cards.length, completionSummary, deckState?.deckKey, initialMode]);
 
   async function finishRun(run, { completed = true, silent = false } = {}) {
     if (!run?.gameSessionId) {

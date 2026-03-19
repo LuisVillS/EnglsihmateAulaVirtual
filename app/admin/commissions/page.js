@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { AdminPage } from "@/components/admin-page";
 import CommissionsWorkspace from "./commissions-workspace";
@@ -19,19 +18,7 @@ function getMissingColumnFromError(error) {
 }
 
 export default async function CommissionsPage() {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect("/admin/login");
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (!adminRecord?.id) redirect("/admin/login");
+  const { supabase } = await requireAdminPageAccess();
 
   await autoDeactivateExpiredCommissions();
 

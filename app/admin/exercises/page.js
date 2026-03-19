@@ -1,13 +1,12 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { AdminCard, AdminPage, AdminPageHeader } from "@/components/admin-page";
 import ExerciseLibraryManager from "@/components/exercise-library-manager";
+import { requireAdminPageAccess } from "@/lib/admin/access";
 import {
   mapExerciseCategoryRow,
   mapExerciseLibraryRow,
   sortExerciseLibrary,
 } from "@/lib/exercise-library";
-import { createSupabaseServerClient } from "@/lib/supabase-server";
 
 export const metadata = {
   title: "Biblioteca de ejercicios | Admin",
@@ -34,18 +33,7 @@ export default async function AdminExercisesPage({ searchParams: searchParamsPro
   const searchParams = await searchParamsPromise;
   const initialEditId = String(searchParams?.edit || "").trim();
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/admin/login");
-
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (!adminRecord?.id) redirect("/admin/login");
+  const { supabase } = await requireAdminPageAccess();
 
   let exercises = [];
   let categories = [];

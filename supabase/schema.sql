@@ -5,10 +5,7 @@ create extension if not exists "uuid-ossp";
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   email text not null unique,
-  first_name text,
-  last_name text,
   full_name text,
-  country text,
   role text not null default 'non_student' check (role in ('admin', 'student', 'non_student')),
   status text not null default 'pre_registered' check (status in ('pre_registered', 'enrolled')),
   password_set boolean not null default false,
@@ -31,10 +28,7 @@ create table if not exists public.profiles (
 create table if not exists public.admin_profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   email text not null unique,
-  first_name text,
-  last_name text,
   full_name text,
-  country text,
   invited boolean not null default false,
   password_set boolean not null default false,
   dni text,
@@ -42,15 +36,6 @@ create table if not exists public.admin_profiles (
 );
 
 create unique index if not exists admin_profiles_email_idx on public.admin_profiles (email);
-
-alter table public.admin_profiles
-  add column if not exists first_name text;
-
-alter table public.admin_profiles
-  add column if not exists last_name text;
-
-alter table public.admin_profiles
-  add column if not exists country text;
 
 alter table public.admin_profiles
   add column if not exists dni text;
@@ -66,12 +51,6 @@ alter table public.profiles
 
 alter table public.profiles
   add column if not exists email_verified_at timestamptz;
-
-alter table public.profiles
-  add column if not exists first_name text;
-
-alter table public.profiles
-  add column if not exists last_name text;
 
 alter table public.profiles
   add column if not exists student_code text;
@@ -96,9 +75,6 @@ alter table public.profiles
 
 alter table public.profiles
   add column if not exists preferred_hour smallint;
-
-alter table public.profiles
-  add column if not exists country text;
 
 alter table public.profiles
   add column if not exists status text not null default 'enrolled';

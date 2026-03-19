@@ -60,11 +60,10 @@ export default function CompetitionSummaryCard({ competition }) {
       ) : null}
 
       <div className="mt-5">
-        <Link href="/app/competition" className="student-button-secondary px-4 py-3 text-sm">
-          Open weekly competition
+        <Link href="/app/leaderboard" className="student-button-secondary px-4 py-3 text-sm">
+          Open leaderboard
         </Link>
       </div>
     </section>
   );
 }
-

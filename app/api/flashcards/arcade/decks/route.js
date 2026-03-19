@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { resolveStudentFromRequest } from "@/lib/duolingo/api-auth";
 import { loadFlashcardDeck } from "@/lib/flashcard-arcade/service";
+import { withSupabaseRequestTrace } from "@/lib/supabase-tracing";
 
 export async function GET(request) {
-  try {
+  return withSupabaseRequestTrace("api:GET /api/flashcards/arcade/decks", async () => {
+    try {
     const searchParams = new URL(request.url).searchParams;
     const deckKey = String(searchParams.get("deck_key") || searchParams.get("deckKey") || "").trim();
     if (!deckKey) {
@@ -18,6 +20,7 @@ export async function GET(request) {
     const deck = await loadFlashcardDeck(resolution.db, {
       userId: resolution.profile.id,
       deckKey,
+      courseLevel: resolution.profile?.course_level || "",
     });
 
     if (!deck?.deckKey) {
@@ -27,12 +30,12 @@ export async function GET(request) {
     return NextResponse.json({
       deck,
     });
-  } catch (error) {
-    console.error("GET /api/flashcards/arcade/decks failed", error);
-    return NextResponse.json(
-      { error: error?.message || "No se pudo cargar el deck de flashcards." },
-      { status: 500 }
-    );
-  }
+    } catch (error) {
+      console.error("GET /api/flashcards/arcade/decks failed", error);
+      return NextResponse.json(
+        { error: error?.message || "No se pudo cargar el deck de flashcards." },
+        { status: 500 }
+      );
+    }
+  });
 }
-

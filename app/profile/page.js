@@ -2,6 +2,7 @@
 import { redirect } from "next/navigation";
 import { getRequestUserContext } from "@/lib/request-user-context";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
+import { getDiscordIdentity } from "@/lib/discord-identity";
 import { loadViewerProfiles } from "@/lib/viewer-profiles";
 import ProviderLinkButton from "@/components/provider-link-button";
 
@@ -45,36 +46,20 @@ function formatCommissionStatus(commission) {
   return isActive ? "Activa" : "Inactiva";
 }
 
-function getDiscordIdentity(user) {
-  const discordIdentity = (user?.identities || []).find((identity) => identity?.provider === "discord");
-  if (!discordIdentity) return null;
-
-  const identityData = discordIdentity.identity_data || {};
-  const discordUserId =
-    identityData.sub ||
-    discordIdentity.provider_id ||
-    discordIdentity.id ||
-    null;
-  if (!discordUserId) return null;
-
-  const discordUsername =
-    identityData.global_name ||
-    identityData.preferred_username ||
-    identityData.username ||
-    null;
-
-  return {
-    id: discordUserId,
-    username: discordUsername,
-  };
-}
-
 function isMissingDiscordColumnError(error) {
   const message = String(error?.message || "").toLowerCase();
   return (
     message.includes("discord_user_id") ||
     message.includes("discord_username") ||
     message.includes("discord_connected_at")
+  );
+}
+
+function isDiscordLinkConflictError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    (message.includes("duplicate key") && message.includes("discord_user_id")) ||
+    message.includes("profiles_discord_user_id_idx")
   );
 }
 
@@ -104,6 +89,7 @@ export default async function ProfilePage({ searchParams: searchParamsPromise })
         !resolvedStudent.discord_connected_at
       )
   );
+  let discordSyncIssue = null;
   if (discordNeedsSync) {
     const discordPayload = {
       discord_user_id: discordIdentity.id,
@@ -118,7 +104,11 @@ export default async function ProfilePage({ searchParams: searchParamsPromise })
         .update(discordPayload)
         .eq("id", resolvedStudent.id);
       if (syncError && !isMissingDiscordColumnError(syncError)) {
-        console.error("No se pudo sincronizar Discord en el perfil", syncError);
+        if (isDiscordLinkConflictError(syncError)) {
+          discordSyncIssue = "This Discord account is already linked to another student profile.";
+        } else {
+          console.error("No se pudo sincronizar Discord en el perfil", syncError);
+        }
       }
     } else {
       const { error: syncError } = await supabase
@@ -126,7 +116,11 @@ export default async function ProfilePage({ searchParams: searchParamsPromise })
         .update(discordPayload)
         .eq("id", resolvedStudent.id);
       if (syncError && !isMissingDiscordColumnError(syncError)) {
-        console.error("No se pudo sincronizar Discord en el perfil", syncError);
+        if (isDiscordLinkConflictError(syncError)) {
+          discordSyncIssue = "This Discord account is already linked to another student profile.";
+        } else {
+          console.error("No se pudo sincronizar Discord en el perfil", syncError);
+        }
       }
     }
   }
@@ -191,6 +185,11 @@ export default async function ProfilePage({ searchParams: searchParamsPromise })
             {infoBanner}
           </div>
         ) : null}
+        {discordSyncIssue ? (
+          <div className="rounded-2xl border border-danger/35 bg-danger/10 px-4 py-3 text-sm text-danger">
+            {discordSyncIssue}
+          </div>
+        ) : null}
         <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
           <div className="space-y-6">
             <div className="rounded-3xl border border-border bg-surface p-6 backdrop-blur">
@@ -243,7 +242,7 @@ export default async function ProfilePage({ searchParams: searchParamsPromise })
                           <p className="text-xs text-muted">
                             {connected
                               ? provider.id === "discord"
-                                ? discordIdentity?.username || `ID ${discordIdentity?.id || "-"}`
+                                ? discordIdentity?.username || "Conectado"
                                 : "Conectado"
                               : "No conectado"}
                           </p>

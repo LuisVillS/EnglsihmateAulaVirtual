@@ -45,6 +45,7 @@ import {
   archiveExercisesIfOrphaned,
   runExerciseGarbageCollection,
 } from "@/lib/duolingo/exercise-lifecycle";
+import { normalizeStudentCefrLevel, normalizeStudentThemeTag } from "@/lib/student-levels";
 
 async function requireAdmin() {
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
@@ -2983,7 +2984,10 @@ function normalizeSessionItemType(value) {
 }
 
 const FLASHCARD_LIBRARY_SELECT =
-  "id, word, meaning, image_url, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config";
+  "id, word, meaning, image_url, cefr_level, theme_tag, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config";
+
+const FLASHCARD_DECK_SELECT =
+  "id, title, description, source_type, cefr_level, theme_tag, is_system, is_active, metadata, created_at, updated_at";
 
 function buildFlashcardsSchemaError(error) {
   const message = String(error?.message || "");
@@ -2994,6 +2998,9 @@ function buildFlashcardsSchemaError(error) {
   const missingColumn = getMissingColumnFromError(error);
   if (missingColumn === "flashcard_id") {
     return "Actualiza el SQL de flashcards: falta la columna flashcard_id en las tablas de asignacion.";
+  }
+  if (missingColumn === "cefr_level" || missingColumn === "theme_tag") {
+    return "Actualiza el SQL de flashcards: faltan las columnas nuevas de nivel y tema.";
   }
   if (/null value in column\s+"?(word|meaning|image_url)"?/i.test(message)) {
     return "Actualiza el SQL de flashcards: las tablas de asignacion aun requieren contenido embebido.";
@@ -3476,6 +3483,8 @@ export async function upsertFlashcardLibraryEntry(prevState, maybeFormData) {
   const word = getText(formData, "word");
   const meaning = getText(formData, "meaning");
   const image = getText(formData, "image");
+  const cefrLevel = normalizeStudentCefrLevel(getText(formData, "cefrLevel"));
+  const themeTag = normalizeStudentThemeTag(getText(formData, "themeTag"));
   const audioUrl = getText(formData, "audioUrl");
   const audioProvider = getText(formData, "audioProvider") || "elevenlabs";
   const voiceId = getText(formData, "voiceId");
@@ -3513,6 +3522,8 @@ export async function upsertFlashcardLibraryEntry(prevState, maybeFormData) {
     word,
     meaning,
     image_url: image,
+    cefr_level: cefrLevel || null,
+    theme_tag: themeTag || null,
     accepted_answers: acceptedAnswers,
     audio_url: audioUrl || null,
     audio_r2_key: getText(formData, "audioR2Key") || null,
@@ -3605,6 +3616,187 @@ export async function deleteFlashcardLibraryEntry(prevState, maybeFormData) {
   revalidatePath("/app/curso");
 
   return { success: true, message: "Flashcard eliminada." };
+}
+
+export async function upsertFlashcardDeck(prevState, maybeFormData) {
+  const formData = resolveFormDataArg(prevState, maybeFormData);
+  if (!formData) {
+    return { success: false, error: "No se recibieron datos del deck.", deck: null };
+  }
+
+  const supabase = await requireAdmin();
+  const deckId = getText(formData, "deckId");
+  const title = getText(formData, "title");
+  const description = getText(formData, "description");
+  const cefrLevel = normalizeStudentCefrLevel(getText(formData, "cefrLevel"));
+  const themeTag = normalizeStudentThemeTag(getText(formData, "themeTag"));
+  const isActive = getText(formData, "isActive") !== "false";
+
+  let cardIds = [];
+  try {
+    const parsed = JSON.parse(getText(formData, "cardIdsJson") || "[]");
+    cardIds = Array.from(
+      new Set(
+        (Array.isArray(parsed) ? parsed : [])
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      )
+    );
+  } catch {
+    return { success: false, error: "La seleccion de flashcards del deck no es valida.", deck: null };
+  }
+
+  if (!title) {
+    return { success: false, error: "El titulo del deck es obligatorio.", deck: null };
+  }
+
+  if (!cefrLevel) {
+    return { success: false, error: "Selecciona un nivel CEFR para el deck.", deck: null };
+  }
+
+  if (!cardIds.length) {
+    return { success: false, error: "Selecciona al menos una flashcard para el deck.", deck: null };
+  }
+
+  const { data: cards, error: cardsError } = await supabase
+    .from("flashcards")
+    .select("id, word, meaning, image_url, cefr_level, theme_tag")
+    .in("id", cardIds);
+
+  if (cardsError) {
+    return {
+      success: false,
+      error: buildFlashcardsSchemaError(cardsError) || cardsError.message || "No se pudo validar la biblioteca del deck.",
+      deck: null,
+    };
+  }
+
+  if ((cards || []).length !== cardIds.length) {
+    return { success: false, error: "Algunas flashcards seleccionadas ya no existen.", deck: null };
+  }
+
+  const payload = {
+    title,
+    description: description || null,
+    source_type: "system",
+    cefr_level: cefrLevel,
+    theme_tag: themeTag || null,
+    is_system: true,
+    is_active: isActive,
+    updated_at: new Date().toISOString(),
+  };
+
+  const deckResult = deckId
+    ? await supabase
+        .from("flashcard_decks")
+        .update(payload)
+        .eq("id", deckId)
+        .eq("is_system", true)
+        .select(FLASHCARD_DECK_SELECT)
+        .maybeSingle()
+    : await supabase
+        .from("flashcard_decks")
+        .insert(payload)
+        .select(FLASHCARD_DECK_SELECT)
+        .maybeSingle();
+
+  if (deckResult.error || !deckResult.data?.id) {
+    return {
+      success: false,
+      error: deckResult.error?.message || "No se pudo guardar el deck.",
+      deck: null,
+    };
+  }
+
+  const savedDeckId = String(deckResult.data.id || "").trim();
+  const deleteItemsResult = await supabase.from("flashcard_deck_items").delete().eq("deck_id", savedDeckId);
+  if (deleteItemsResult.error) {
+    return {
+      success: false,
+      error: deleteItemsResult.error.message || "No se pudo actualizar el contenido del deck.",
+      deck: null,
+    };
+  }
+
+  const insertItemsResult = await supabase
+    .from("flashcard_deck_items")
+    .insert(
+      cardIds.map((flashcardId, index) => ({
+        deck_id: savedDeckId,
+        flashcard_id: flashcardId,
+        position: index + 1,
+      }))
+    );
+
+  if (insertItemsResult.error) {
+    return {
+      success: false,
+      error: insertItemsResult.error.message || "No se pudieron guardar las flashcards del deck.",
+      deck: null,
+    };
+  }
+
+  const cardsById = buildFlashcardLibraryMap(cards || []);
+  revalidatePath("/admin/flashcards");
+  revalidatePath("/app/practice");
+  revalidatePath("/app/flashcards");
+
+  return {
+    success: true,
+    message: deckId ? "Deck actualizado." : "Deck creado.",
+    deck: {
+      id: savedDeckId,
+      title: deckResult.data.title || "Deck",
+      description: deckResult.data.description || "",
+      cefrLevel: deckResult.data.cefr_level || "",
+      themeTag: deckResult.data.theme_tag || "",
+      sourceType: deckResult.data.source_type || "system",
+      isActive: deckResult.data.is_active !== false,
+      cardIds,
+      cards: cardIds
+        .map((flashcardId) => cardsById.get(flashcardId))
+        .filter(Boolean),
+      totalCards: cardIds.length,
+    },
+  };
+}
+
+export async function deleteFlashcardDeck(prevState, maybeFormData) {
+  const formData = resolveFormDataArg(prevState, maybeFormData);
+  if (!formData) {
+    return { success: false, error: "No se recibio el deck a eliminar." };
+  }
+
+  const supabase = await requireAdmin();
+  const deckId = getText(formData, "deckId");
+  if (!deckId) {
+    return { success: false, error: "Deck invalido." };
+  }
+
+  const deckResult = await supabase
+    .from("flashcard_decks")
+    .select("id, is_system")
+    .eq("id", deckId)
+    .maybeSingle();
+
+  if (deckResult.error) {
+    return { success: false, error: deckResult.error.message || "No se pudo validar el deck." };
+  }
+
+  if (!deckResult.data?.id || deckResult.data.is_system !== true) {
+    return { success: false, error: "Solo se pueden eliminar decks del sistema desde esta vista." };
+  }
+
+  const deleteResult = await supabase.from("flashcard_decks").delete().eq("id", deckId);
+  if (deleteResult.error) {
+    return { success: false, error: deleteResult.error.message || "No se pudo eliminar el deck." };
+  }
+
+  revalidatePath("/admin/flashcards");
+  revalidatePath("/app/practice");
+  revalidatePath("/app/flashcards");
+
+  return { success: true, message: "Deck eliminado." };
 }
 
 export async function upsertExerciseLibraryEntry(prevState, maybeFormData) {
