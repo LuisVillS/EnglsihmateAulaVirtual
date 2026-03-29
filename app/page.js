@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { resolveAdminLandingPath } from "@/lib/crm/auth";
 import { createSupabaseServerClient, getCurrentSession } from "@/lib/supabase-server";
 import { USER_ROLES, resolveProfileRole } from "@/lib/roles";
 
@@ -54,14 +55,9 @@ export default async function HomePage({ searchParams }) {
   }
 
   const supabase = await createSupabaseServerClient();
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("id")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (adminRecord?.id) {
-    redirect("/admin");
+  const landingPath = await resolveAdminLandingPath(supabase, user.id);
+  if (landingPath) {
+    redirect(landingPath);
   }
 
   const { data: profile } = await supabase

@@ -23,12 +23,17 @@ function shouldBypassProxy(request) {
   return false;
 }
 
-function buildRequestHeaders(request, { isFlipbookRoute = false } = {}) {
+function buildRequestHeaders(request, { isFlipbookRoute = false, isCrmRoute = false } = {}) {
   const requestHeaders = new Headers(request.headers);
   if (isFlipbookRoute) {
     requestHeaders.set("x-library-flipbook-route", "1");
   } else {
     requestHeaders.delete("x-library-flipbook-route");
+  }
+  if (isCrmRoute) {
+    requestHeaders.set("x-admin-crm-route", "1");
+  } else {
+    requestHeaders.delete("x-admin-crm-route");
   }
   return requestHeaders;
 }
@@ -76,7 +81,8 @@ async function updateSession(request, requestHeaders = request.headers) {
 
 export async function proxy(request) {
   const isFlipbookRoute = request.nextUrl.pathname.startsWith("/app/library/flipbook/");
-  const requestHeaders = buildRequestHeaders(request, { isFlipbookRoute });
+  const isCrmRoute = request.nextUrl.pathname.startsWith("/admin/crm");
+  const requestHeaders = buildRequestHeaders(request, { isFlipbookRoute, isCrmRoute });
 
   if (!supabaseUrl || !supabaseAnonKey) {
     return NextResponse.next({

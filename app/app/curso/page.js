@@ -5,13 +5,10 @@ import {
   buildSessionDraftsFromCommission,
   buildFrequencySessionDrafts,
   buildLimaDateTimeIso,
-  formatSessionDateLabel,
 } from "@/lib/course-sessions";
-import CourseSessionList from "@/components/course-session-list";
 import { formatMonthKeyFromDate } from "@/lib/class-format";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
 import { buildWeightedCourseGrade } from "@/lib/course-grade";
-import CourseBreadcrumbs from "@/components/course-breadcrumbs";
 import {
   buildFlashcardLibraryMap,
   resolveAssignedFlashcardRow,
@@ -24,6 +21,7 @@ import {
 } from "@/lib/lesson-quiz";
 import { extractLessonIdFromQuizUrl } from "@/lib/lesson-quiz-assignments";
 import { getSignedDownloadUrl } from "@/lib/r2";
+import CourseBody from "./course-body";
 
 function getMissingTableName(error) {
   const message = String(error?.message || "");
@@ -461,26 +459,10 @@ async function loadSessionItemsForCoursePage(supabase, persistedSessionIds) {
   return { itemsBySession, sessionItemRows };
 }
 
-function ProgressBar({ value = 0 }) {
-  const safe = Math.max(0, Math.min(100, Number(value) || 0));
-  return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
-      <div className="h-full rounded-full bg-primary" style={{ width: `${safe}%` }} />
-    </div>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M7 10V7a5 5 0 1 1 10 0v3" />
-      <rect x="5" y="10" width="14" height="10" rx="2" />
-    </svg>
-  );
-}
-
-export default async function CourseGatePage() {
+export default async function CourseGatePage({ searchParams: searchParamsPromise }) {
   return withSupabaseRequestTrace("page:/app/curso", async () => {
+  const searchParams = (await searchParamsPromise) || {};
+  const initialFocusSessionId = String(searchParams?.session || "").trim() || null;
   await autoDeactivateExpiredCommissions();
   const { supabase, user, role } = await getRequestUserContext();
   if (!user) redirect("/login");
@@ -608,7 +590,6 @@ export default async function CourseGatePage() {
   }
 
   const firstSessionDate = sessions[0]?.session_date || commission.start_date;
-  const lastSessionDate = sessions[sessions.length - 1]?.session_date || commission.end_date;
 
   const persistedSessionIds = sessions
     .map((session) => session.id)
@@ -701,102 +682,19 @@ export default async function CourseGatePage() {
     quizAttemptRows,
     minQuizWeight: 0.5,
   });
-  const gradeValue = gradeSummary.finalGrade;
-  const gradeLabel = gradeValue == null ? "--/100" : `${gradeValue}/100`;
-  const quizWeightPercent = Math.round((gradeSummary.quizWeight || 0.5) * 100);
-  const baseWeightPercent = Math.max(0, 100 - quizWeightPercent);
-  let gradeHint = "Sin pruebas asignadas por clase. Se usa la nota base del curso.";
-  if (gradeSummary.quizGrade != null && gradeSummary.baseCourseGrade != null) {
-    gradeHint = `${quizWeightPercent}% pruebas (${gradeSummary.completedQuizCount}/${gradeSummary.assignedQuizCount} completadas) + ${baseWeightPercent}% nota admin.`;
-  } else if (gradeSummary.quizGrade != null) {
-    gradeHint = `Nota basada en pruebas (${gradeSummary.completedQuizCount}/${gradeSummary.assignedQuizCount} completadas).`;
-  }
-
   return (
-    <section className="space-y-6 text-foreground">
-      <CourseBreadcrumbs items={[{ label: "Curso", href: "/app/curso" }]} />
-      <header className="student-panel px-5 py-5 sm:px-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-2">
-            <p className="text-xs uppercase tracking-[0.35em] text-muted">Comision {commission.commission_number}</p>
-            <h1 className="text-3xl font-semibold">{commission.course_level}</h1>
-            <p className="text-sm text-muted">
-              Certificacion al finalizar el programa. Material y grabaciones disponibles por clase.
-            </p>
-            <p className="text-xs text-muted">
-              Inicio: {formatSessionDateLabel(firstSessionDate)} - Fin: {formatSessionDateLabel(lastSessionDate)}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex rounded-[999px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
-              Aula Virtual
-            </span>
-            {profile?.is_premium ? (
-              <span className="inline-flex rounded-[999px] border border-accent/35 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
-                Premium
-              </span>
-            ) : (
-              <span className="inline-flex rounded-[999px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
-                Regular
-              </span>
-            )}
-          </div>
-        </div>
-      </header>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <article className="student-panel px-5 py-5 shadow-none">
-          <p className="text-xs uppercase tracking-[0.3em] text-muted">Notas</p>
-          <p className="mt-3 text-4xl font-black text-primary">{gradeLabel}</p>
-          <p className="mt-2 text-xs text-muted">{gradeHint}</p>
-          <p className="mt-2 text-xs uppercase tracking-wide text-muted">Progreso de clases</p>
-          <div className="mt-2">
-            <ProgressBar value={metrics.progress} />
-          </div>
-          <p className="mt-3 text-xs text-muted">
-            Completadas: {metrics.completed} / {metrics.total}
-          </p>
-        </article>
-
-        <article className="student-panel px-5 py-5 shadow-none">
-          <p className="text-xs uppercase tracking-[0.3em] text-muted">Certificado</p>
-          <div className="mt-3 flex items-center gap-3">
-            <span className="inline-flex h-10 w-10 items-center justify-center rounded-[12px] border border-border bg-surface-2 text-muted">
-              <LockIcon />
-            </span>
-            <div>
-              <p className="text-lg font-semibold">Bloqueado</p>
-              <p className="text-sm text-muted">Disponible al finalizar el curso.</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            disabled
-            className="mt-4 inline-flex items-center justify-center rounded-[12px] border border-border px-4 py-2 text-sm font-semibold text-muted disabled:cursor-not-allowed"
-          >
-            Descargar certificado
-          </button>
-        </article>
-      </div>
-
-      <section className="space-y-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-muted">Programa</p>
-          <h2 className="text-2xl font-semibold">Clases por mes</h2>
-        </div>
-        <CourseSessionList
-          sessions={sessions}
-          itemsBySession={itemsBySession}
-          quizAttemptsByLesson={quizAttemptsByLesson}
-          commissionTimes={{
-            startTime: commission.start_time,
-            endTime: commission.end_time,
-          }}
-          nowIso={nowIso}
-          allowedMonths={Array.from(allowedMonths)}
-        />
-      </section>
-    </section>
+    <CourseBody
+      commission={commission}
+      firstSessionDate={firstSessionDate}
+      sessions={sessions}
+      itemsBySession={itemsBySession}
+      quizAttemptsByLesson={quizAttemptsByLesson}
+      metrics={metrics}
+      gradeSummary={gradeSummary}
+      nowIso={nowIso}
+      allowedMonths={Array.from(allowedMonths)}
+      initialFocusSessionId={initialFocusSessionId}
+    />
   );
   });
 }

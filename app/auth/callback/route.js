@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
-import { USER_ROLES } from "@/lib/roles";
+import { getCrmAccessState } from "@/lib/crm/auth";
 
 const NOT_ALLOWED_MESSAGE = "Este correo no se encuentra registrado en el aula virtual";
 const GOOGLE_ERROR_MESSAGE = "No se pudo iniciar sesion con Google.";
@@ -43,34 +43,37 @@ export async function GET(request) {
     return buildErrorRedirect(request, GOOGLE_ERROR_MESSAGE);
   }
 
-  const { data: adminRecord } = await supabase
-    .from("admin_profiles")
-    .select("invited, email")
-    .eq("id", user.id)
-    .maybeSingle();
+  const accessState = await getCrmAccessState(supabase, user.id);
 
-  if (adminRecord?.invited === false) {
-    if (hasServiceRoleClient()) {
-      try {
-        const service = getServiceSupabaseClient();
-        await service.auth.admin.deleteUser(user.id);
-      } catch (error) {
-        console.error("No se pudo eliminar usuario no autorizado", error);
+  if (accessState?.isClassicAdmin) {
+    if (accessState.adminProfile?.invited === false) {
+      if (hasServiceRoleClient()) {
+        try {
+          const service = getServiceSupabaseClient();
+          await service.auth.admin.deleteUser(user.id);
+        } catch (error) {
+          console.error("No se pudo eliminar usuario no autorizado", error);
+        }
       }
+
+      await supabase.auth.signOut();
+      return buildErrorRedirect(request, NOT_ALLOWED_MESSAGE);
     }
 
-    await supabase.auth.signOut();
-    return buildErrorRedirect(request, NOT_ALLOWED_MESSAGE);
-  }
-
-  if (adminRecord?.invited) {
-    if (!adminRecord.email || adminRecord.email.toLowerCase() !== user.email?.toLowerCase()) {
+    if (
+      !accessState.adminProfile?.email ||
+      accessState.adminProfile.email.toLowerCase() !== user.email?.toLowerCase()
+    ) {
       await supabase
         .from("admin_profiles")
-        .update({ email: user.email?.toLowerCase() || adminRecord.email })
+        .update({ email: user.email?.toLowerCase() || accessState.adminProfile?.email })
         .eq("id", user.id);
     }
     return buildRedirect(request, "/admin");
+  }
+
+  if (accessState?.isCrmRole) {
+    return buildRedirect(request, "/admin/crm");
   }
 
   let { data: profile, error: profileError } = await supabase
@@ -113,7 +116,7 @@ export async function GET(request) {
       .eq("id", user.id);
   }
 
-  if (profile?.role === USER_ROLES.ADMIN) {
+  if (profile?.role === "admin") {
     await supabase.auth.signOut();
     return buildErrorRedirect(request, "No tienes acceso admin desde este portal.");
   }

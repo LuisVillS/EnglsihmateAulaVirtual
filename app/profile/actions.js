@@ -1,11 +1,11 @@
 "use server";
 
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getAuthenticatedUser } from "@/lib/auth-monitor";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
+import { resolveCanonicalAppUrl } from "@/lib/security/env";
 
 function normalizeText(value) {
   return value?.toString().trim() || "";
@@ -108,12 +108,7 @@ export async function startLinkProviderAction(formData) {
   }
 
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
-  const headerStore = await headers();
-  const forwardedProto = headerStore.get("x-forwarded-proto");
-  const forwardedHost = headerStore.get("x-forwarded-host") || headerStore.get("host");
-  const derivedOrigin =
-    forwardedHost && forwardedProto ? `${forwardedProto}://${forwardedHost}` : null;
-  const origin = derivedOrigin || process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  const origin = resolveCanonicalAppUrl();
 
   const { data, error } = await supabase.auth.linkIdentity({
     provider,

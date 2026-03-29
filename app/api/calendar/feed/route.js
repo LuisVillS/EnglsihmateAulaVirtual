@@ -102,9 +102,16 @@ export async function GET(request) {
     return new Response("Configura SUPABASE_SERVICE_ROLE_KEY.", { status: 500 });
   }
 
-  const { searchParams } = new URL(request.url);
-  const token = searchParams.get("token");
-  const tokenCheck = verifyCalendarFeedToken(token);
+  let tokenCheck;
+  try {
+    const { searchParams } = new URL(request.url);
+    const token = searchParams.get("token");
+    tokenCheck = verifyCalendarFeedToken(token);
+  } catch (error) {
+    console.error("[CalendarFeed] token verification failed", error);
+    return new Response("Configura CALENDAR_FEED_SECRET.", { status: 500 });
+  }
+
   if (!tokenCheck.valid || !tokenCheck.userId) {
     return new Response("Token invalido.", { status: 401 });
   }

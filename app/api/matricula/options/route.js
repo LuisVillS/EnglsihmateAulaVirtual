@@ -85,13 +85,13 @@ export async function GET(request) {
     const service = getServiceSupabaseClient();
     let { data: profile, error: profileError } = await service
       .from("profiles")
-      .select("id, email_verified_at, status")
+      .select("id, email_verified_at, status, phone")
       .eq("id", userId)
       .maybeSingle();
     if (profileError && String(profileError.message || "").toLowerCase().includes("status")) {
       const fallback = await service
         .from("profiles")
-        .select("id, email_verified_at")
+        .select("id, email_verified_at, phone")
         .eq("id", userId)
         .maybeSingle();
       profile = fallback.data;
@@ -141,6 +141,7 @@ export async function GET(request) {
     if (!effectiveStartMonth) {
       return NextResponse.json({
         preEnrollment,
+        profilePhone: profile?.phone || "",
         startMonths,
         levels: [],
         frequencies: [],
@@ -152,6 +153,7 @@ export async function GET(request) {
     if (!level) {
       return NextResponse.json({
         preEnrollment,
+        profilePhone: profile?.phone || "",
         startMonths,
         levels: levelsForMonth,
         frequencies: [],
@@ -175,6 +177,7 @@ export async function GET(request) {
     if (level && !frequency) {
       return NextResponse.json({
         preEnrollment,
+        profilePhone: profile?.phone || "",
         startMonths,
         levels: levelsForMonth,
         frequencies: frequenciesForLevel,
@@ -212,6 +215,7 @@ export async function GET(request) {
 
     return NextResponse.json({
       preEnrollment,
+      profilePhone: profile?.phone || "",
       startMonths,
       levels: levelsForMonth,
       frequencies: frequenciesForLevel,

@@ -7,18 +7,25 @@ import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-s
 import { authInitialState } from "@/lib/auth-state";
 import { DEFAULT_ADMIN_EMAIL, ensureDefaultAdminUser, findAuthUserByEmail } from "@/lib/default-admin";
 import { requestPasswordRecovery, verifyRecoveryCodeAndResetPassword } from "@/lib/password-recovery";
-import { selectAdminByEmail, selectAdminById } from "@/lib/admins";
 import { verifyEmailOtp } from "@/lib/pre-enrollment";
 import { USER_ROLES, resolveProfileRole } from "@/lib/roles";
+import { fetchCrmAccessProfileByEmail, resolveAdminLandingPath } from "@/lib/crm/auth";
+import {
+  ADMIN_LOGIN_LOCK_MESSAGE,
+  GENERIC_AUTH_ERROR_MESSAGE,
+  clearAdminLoginFailures,
+  getAdminLoginLockState,
+  recordFailedAdminLogin,
+  resolveRequestIp,
+} from "@/lib/auth-security";
+import { resolveCanonicalAppUrl } from "@/lib/security/env";
 
-const NOT_REGISTERED_MESSAGE = "Este correo no se encuentra registrado en el aula virtual.";
-const ADMIN_ONLY_MESSAGE = "Este acceso es solo para administradores.";
-const ADMIN_USE_ADMIN_LOGIN = "Usa el acceso admin en /admin.";
+const GENERIC_LOOKUP_ERROR = GENERIC_AUTH_ERROR_MESSAGE;
 
 ensureDefaultAdminUser();
 
 function looksLikeEmail(value) {
-  return value.includes("@");
+  return Boolean(value && value.includes("@"));
 }
 
 async function fetchStudentProfileByIdentifier(identifier) {
@@ -89,12 +96,30 @@ async function fetchStudentProfileByIdentifier(identifier) {
 }
 
 async function fetchAdminProfileByEmail(identifier) {
-  if (!hasServiceRoleClient()) return null;
   const normalizedEmail = normalizeEmail(identifier);
   if (!normalizedEmail) return null;
-  const service = getServiceSupabaseClient();
-  const adminProfile = await selectAdminByEmail(service, normalizedEmail);
-  return adminProfile ? { ...adminProfile, role: "admin" } : null;
+
+  const accessProfile = await fetchCrmAccessProfileByEmail(normalizedEmail);
+  if (!accessProfile?.isClassicAdmin && !accessProfile?.isCrmRole) return null;
+
+  return {
+    id: accessProfile.userId,
+    email: accessProfile.email,
+    full_name:
+      accessProfile.adminProfile?.full_name ||
+      accessProfile.crmOperatorProfile?.full_name ||
+      accessProfile.crmUserRole?.email ||
+      "",
+    invited: accessProfile.isClassicAdmin ? Boolean(accessProfile.adminProfile?.invited) : true,
+    password_set: accessProfile.isClassicAdmin ? Boolean(accessProfile.adminProfile?.password_set) : true,
+    role: accessProfile.isClassicAdmin ? USER_ROLES.ADMIN : accessProfile.crmRole,
+    crmRole: accessProfile.crmRole,
+    isClassicAdmin: Boolean(accessProfile.isClassicAdmin),
+    isCrmRole: Boolean(accessProfile.isCrmRole),
+    isCrmAdmin: Boolean(accessProfile.isCrmAdmin),
+    isCrmOperator: Boolean(accessProfile.isCrmOperator),
+    landingPath: accessProfile.landingPath,
+  };
 }
 
 async function redirectByRole(supabase, user) {
@@ -104,9 +129,9 @@ async function redirectByRole(supabase, user) {
     redirect("/");
   }
 
-  const adminRecord = await selectAdminById(supabase, resolvedUser.id, "id");
-  if (adminRecord?.id) {
-    redirect("/admin");
+  const landingPath = await resolveAdminLandingPath(supabase, resolvedUser.id);
+  if (landingPath) {
+    redirect(landingPath);
   }
 
   let { data: profile, error: profileError } = await supabase
@@ -178,7 +203,7 @@ async function handleLookup(formData, context, requireOtp) {
   if (!hasServiceRoleClient()) {
     return {
       ...withContext(authInitialState, context, requireOtp),
-      error: "Configura SUPABASE_SERVICE_ROLE_KEY para validar correos.",
+      error: GENERIC_LOOKUP_ERROR,
     };
   }
 
@@ -188,7 +213,7 @@ async function handleLookup(formData, context, requireOtp) {
   if (!identifier) {
     return {
       ...withContext(authInitialState, context, requireOtp),
-      error: "Ingresa un correo o codigo valido.",
+      error: GENERIC_LOOKUP_ERROR,
     };
   }
 
@@ -197,7 +222,7 @@ async function handleLookup(formData, context, requireOtp) {
     if (!looksLikeEmail(identifier)) {
       return {
         ...withContext(authInitialState, context, requireOtp),
-        error: "Usa un correo admin autorizado.",
+        error: GENERIC_LOOKUP_ERROR,
       };
     }
     profile = await fetchAdminProfileByEmail(identifier);
@@ -216,19 +241,9 @@ async function handleLookup(formData, context, requireOtp) {
   }
 
   if (!profile?.id) {
-    if (
-      context === "student" &&
-      looksLikeEmail(identifier) &&
-      (await fetchAdminProfileByEmail(identifier))
-    ) {
-      return {
-        ...withContext(authInitialState, context, requireOtp),
-        error: ADMIN_USE_ADMIN_LOGIN,
-      };
-    }
     return {
       ...withContext(authInitialState, context, requireOtp),
-      error: NOT_REGISTERED_MESSAGE,
+      error: GENERIC_LOOKUP_ERROR,
     };
   }
 
@@ -241,33 +256,9 @@ async function handleLookup(formData, context, requireOtp) {
   }
 
   if (!profile.invited) {
-    if (
-      context === "student" &&
-      looksLikeEmail(identifier) &&
-      (await fetchAdminProfileByEmail(identifier))
-    ) {
-      return {
-        ...withContext(authInitialState, context, requireOtp),
-        error: ADMIN_USE_ADMIN_LOGIN,
-      };
-    }
     return {
       ...withContext(authInitialState, context, requireOtp),
-      error: NOT_REGISTERED_MESSAGE,
-    };
-  }
-
-  if (context === "admin" && profile.role !== "admin") {
-    return {
-      ...withContext(authInitialState, context, requireOtp),
-      error: ADMIN_ONLY_MESSAGE,
-    };
-  }
-
-  if (context === "student" && profile.role === "admin") {
-    return {
-      ...withContext(authInitialState, context, requireOtp),
-      error: ADMIN_USE_ADMIN_LOGIN,
+      error: GENERIC_LOOKUP_ERROR,
     };
   }
 
@@ -284,7 +275,7 @@ async function handleLookup(formData, context, requireOtp) {
         email: identifier,
         identifier,
         step: "email",
-        error: "Ingresa el OTP enviado a tu correo para continuar.",
+        error: "Ingresa el Codigo de Acceso enviado a tu correo para continuar.",
       };
     }
 
@@ -296,7 +287,7 @@ async function handleLookup(formData, context, requireOtp) {
         email: identifier,
         identifier,
         step: "email",
-        error: error?.message || "OTP invalido o expirado.",
+        error: error?.message || "Codigo de Acceso invalido o expirado.",
       };
     }
   }
@@ -339,22 +330,55 @@ async function handleLookup(formData, context, requireOtp) {
 async function handlePasswordLogin(prevState, formData, context, requireOtp) {
   const email = normalizeEmail(formData.get("email")) || prevState.email;
   const password = formData.get("password")?.toString() || "";
+  const loginState = {
+    ...prevState,
+    context,
+    requireOtp,
+    step: "login",
+  };
 
   if (!email) {
     return {
       ...withContext(authInitialState, context, requireOtp),
-      error: "Primero valida tu correo.",
+      error: GENERIC_AUTH_ERROR_MESSAGE,
     };
   }
 
   if (!password) {
     return {
-      ...prevState,
-      context,
-      requireOtp,
-      step: "login",
-      error: "Ingresa tu contrasena.",
+      ...loginState,
+      error: GENERIC_AUTH_ERROR_MESSAGE,
     };
+  }
+
+  const headerStore = await headers();
+  const requestIp = resolveRequestIp(headerStore);
+  const service = hasServiceRoleClient() ? getServiceSupabaseClient() : null;
+  let adminProfile = null;
+
+  if (context === "admin") {
+    if (!service) {
+      return {
+        ...withContext(authInitialState, context, requireOtp),
+        error: GENERIC_AUTH_ERROR_MESSAGE,
+      };
+    }
+
+    adminProfile = await fetchAdminProfileByEmail(email);
+    if (!adminProfile?.id) {
+      return {
+        ...withContext(authInitialState, context, requireOtp),
+        error: GENERIC_AUTH_ERROR_MESSAGE,
+      };
+    }
+
+    const lockState = await getAdminLoginLockState({ email, service });
+    if (lockState.locked) {
+      return {
+        ...loginState,
+        error: ADMIN_LOGIN_LOCK_MESSAGE,
+      };
+    }
   }
 
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
@@ -364,12 +388,28 @@ async function handlePasswordLogin(prevState, formData, context, requireOtp) {
   } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
+    if (context === "admin" && adminProfile?.id && service) {
+      const failureState = await recordFailedAdminLogin({
+        email,
+        ipAddress: requestIp,
+        service,
+      });
+      if (failureState.locked) {
+        return {
+          ...loginState,
+          error: ADMIN_LOGIN_LOCK_MESSAGE,
+        };
+      }
+    }
+
     return {
-      ...prevState,
-      context,
-      step: "login",
-      error: "Contrasena incorrecta o caducada.",
+      ...loginState,
+      error: GENERIC_AUTH_ERROR_MESSAGE,
     };
+  }
+
+  if (context === "admin" && adminProfile?.id && service) {
+    await clearAdminLoginFailures({ email, service });
   }
 
   await redirectByRole(supabase, user);
@@ -458,12 +498,22 @@ async function handleSetPassword(prevState, formData, context, requireOtp) {
 
 async function handleGoogleLogin(prevState, context, requireOtp) {
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
-  const headerStore = await headers();
-  const origin = headerStore.get("origin") || process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  let canonicalAppUrl = "";
+  try {
+    canonicalAppUrl = resolveCanonicalAppUrl();
+  } catch (error) {
+    return {
+      ...prevState,
+      context,
+      requireOtp,
+      error: error?.message || "No se pudo iniciar sesion con Google.",
+    };
+  }
+
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
-      redirectTo: `${origin}/auth/callback`,
+      redirectTo: `${canonicalAppUrl}/auth/callback`,
     },
   });
 

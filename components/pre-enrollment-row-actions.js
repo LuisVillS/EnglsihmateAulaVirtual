@@ -3,7 +3,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { approvePreEnrollment, rejectPreEnrollment } from "@/app/admin/prematriculas/actions";
+import {
+  approvePreEnrollment,
+  deletePreEnrollment,
+  rejectPreEnrollment,
+} from "@/app/admin/prematriculas/actions";
 import AppModal from "@/components/app-modal";
 
 const MENU_WIDTH = 220;
@@ -38,6 +42,7 @@ export default function PreEnrollmentRowActions({ preEnrollmentId }) {
   const [open, setOpen] = useState(false);
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [reviewNotes, setReviewNotes] = useState("");
   const [actionError, setActionError] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -133,6 +138,12 @@ export default function PreEnrollmentRowActions({ preEnrollmentId }) {
     setRejectOpen(true);
   };
 
+  const handleDelete = () => {
+    closeMenu();
+    setActionError("");
+    setDeleteOpen(true);
+  };
+
   const confirmReject = () => {
     startTransition(async () => {
       const formData = new FormData();
@@ -148,6 +159,21 @@ export default function PreEnrollmentRowActions({ preEnrollmentId }) {
       setActionError("");
       setReviewNotes("");
       setRejectOpen(false);
+      router.refresh();
+    });
+  };
+
+  const confirmDelete = () => {
+    startTransition(async () => {
+      const formData = new FormData();
+      formData.append("preEnrollmentId", preEnrollmentId);
+      const result = await deletePreEnrollment(formData);
+      if (result?.error) {
+        setActionError(result.error);
+        return;
+      }
+      setActionError("");
+      setDeleteOpen(false);
       router.refresh();
     });
   };
@@ -181,6 +207,14 @@ export default function PreEnrollmentRowActions({ preEnrollmentId }) {
               className="mt-1 block w-full rounded-xl px-3 py-2 text-left text-[#b91c1c] transition hover:bg-[rgba(239,68,68,0.08)] disabled:cursor-not-allowed disabled:opacity-60"
             >
               Rechazar...
+            </button>
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={handleDelete}
+              className="mt-1 block w-full rounded-xl px-3 py-2 text-left text-[#991b1b] transition hover:bg-[rgba(239,68,68,0.12)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Eliminar...
             </button>
           </div>,
           document.body
@@ -279,6 +313,40 @@ export default function PreEnrollmentRowActions({ preEnrollmentId }) {
               className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#b91c1c] px-4 text-sm font-semibold text-white transition hover:bg-[#991b1b] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isPending ? "Rechazando..." : "Confirmar rechazo"}
+            </button>
+          </div>
+        </div>
+      </AppModal>
+      <AppModal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title="Eliminar pre-matricula"
+        widthClass="max-w-xl"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-[#475569]">
+            Esta accion elimina la fila de pre-matricula y su comprobante asociado si existe. No elimina automaticamente el perfil ni la cuenta de acceso.
+          </p>
+          {actionError ? (
+            <p className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+              {actionError}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setDeleteOpen(false)}
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={confirmDelete}
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#b91c1c] px-4 text-sm font-semibold text-white transition hover:bg-[#991b1b] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPending ? "Eliminando..." : "Confirmar eliminacion"}
             </button>
           </div>
         </div>

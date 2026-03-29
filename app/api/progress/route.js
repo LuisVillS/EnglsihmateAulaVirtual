@@ -1,5 +1,4 @@
-import { NextResponse } from "next/server";
-import { resolveStudentFromRequest } from "@/lib/duolingo/api-auth";
+import { assertOwnedPracticeItem, resolveStudentFromRequest } from "@/lib/duolingo/api-auth";
 import { calculatePracticeItemXp, calculatePracticeSessionBonus, calculateAccuracyPercent, deriveRecommendedNextMode } from "@/lib/duolingo/practice-progress";
 import { ensureGamificationProfile } from "@/lib/gamification/profile";
 import { computeSpacedRepetitionUpdate } from "@/lib/duolingo/sr";
@@ -46,6 +45,15 @@ function normalizeResults(body) {
   }
 
   return [];
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+    },
+  });
 }
 
 async function applyXpDelta(db, { userId, legacyXpTotal, xpDelta }) {
@@ -243,7 +251,7 @@ export async function POST(request) {
     const shouldCompleteSession = toBoolean(body?.complete_session || body?.completeSession);
 
     if (!results.length && !shouldCompleteSession) {
-      return NextResponse.json({ error: "No se enviaron resultados de ejercicios." }, { status: 400 });
+      return jsonResponse({ error: "No se enviaron resultados de ejercicios." }, 400);
     }
 
     let xpDelta = 0;
@@ -281,17 +289,16 @@ export async function POST(request) {
 
       let existingPracticeItem = null;
       if (practiceItemId) {
-        const practiceItemResult = await db
-          .from("practice_session_items")
-          .select("id, practice_session_id, answered_at, xp_earned")
-          .eq("id", practiceItemId)
-          .maybeSingle();
+        const practiceItemResult = await assertOwnedPracticeItem(db, {
+          practiceItemId,
+          userId: profile.id,
+        });
 
-        if (practiceItemResult.error) {
-          throw new Error(practiceItemResult.error.message || "No se pudo cargar el item de practica.");
+        if (practiceItemResult.errorResponse) {
+          return practiceItemResult.errorResponse;
         }
 
-        existingPracticeItem = practiceItemResult.data || null;
+        existingPracticeItem = practiceItemResult.practiceItem || null;
         if (existingPracticeItem?.practice_session_id) {
           touchedSessionIds.add(existingPracticeItem.practice_session_id);
         }
@@ -455,7 +462,7 @@ export async function POST(request) {
       }
     }
 
-    return NextResponse.json({
+    return jsonResponse({
       student: {
         id: profile.id,
         student_code: profile.student_code,
@@ -473,10 +480,7 @@ export async function POST(request) {
     });
     } catch (error) {
       console.error("POST /api/progress failed", error);
-      return NextResponse.json(
-        { error: error?.message || "No se pudo registrar progreso." },
-        { status: 500 }
-      );
+      return jsonResponse({ error: error?.message || "No se pudo registrar progreso." }, 500);
     }
   });
 }

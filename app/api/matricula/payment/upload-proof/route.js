@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isPeruvianMobileNumber, validateCrmPhoneInput } from "@/lib/crm/phones";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import { resolvePreEnrollmentUserId } from "@/lib/pre-enrollment-session";
 import { ensureReservationStatus, getPreEnrollment } from "@/lib/pre-enrollment";
@@ -61,8 +62,23 @@ export async function POST(request) {
     const operationCode = normalizeText(formData.get("operationCode"));
     const payerName = normalizeText(formData.get("payerName"));
     const payerPhone = normalizeText(formData.get("payerPhone"));
+    const payerPhoneCountryCode = normalizeText(formData.get("payerPhoneCountryCode"));
+    const payerPhoneNationalNumber = normalizeText(formData.get("payerPhoneNationalNumber"));
+    const payerPhoneDialable = normalizeText(formData.get("payerPhoneDialable"));
     const file = formData.get("file");
     const hasFile = file instanceof File && file.size > 0;
+    const payerPhoneValidation = validateCrmPhoneInput(
+      {
+        phone: payerPhoneDialable || payerPhone,
+        phoneCountryCode: payerPhoneCountryCode,
+        phoneNationalNumber: payerPhoneNationalNumber,
+        phoneE164: payerPhoneDialable,
+      },
+      {
+        required: paymentMethod === "YAPE_PLIN" && confirmationMode === "OPERATION",
+        defaultCountryCode: "+51",
+      }
+    );
 
     if (hasFile && !isAllowedProofMime(file.type)) {
       return NextResponse.json({ error: "Solo se permiten imagenes o PDF." }, { status: 400 });
@@ -75,6 +91,22 @@ export async function POST(request) {
     ) {
       return NextResponse.json(
         { error: "En Yape/Plin el nombre y telefono del pagador son obligatorios." },
+        { status: 400 }
+      );
+    }
+    if (!payerPhoneValidation.isValid) {
+      return NextResponse.json(
+        { error: payerPhoneValidation.validationErrors[0] || "Telefono de pagador invalido." },
+        { status: 400 }
+      );
+    }
+    if (
+      paymentMethod === "YAPE_PLIN" &&
+      (payerPhoneValidation.phoneCountryCode !== "+51" ||
+        !isPeruvianMobileNumber(payerPhoneValidation.phoneNationalNumber))
+    ) {
+      return NextResponse.json(
+        { error: "En Yape/Plin solo se aceptan celulares peruanos validos." },
         { status: 400 }
       );
     }
@@ -122,7 +154,11 @@ export async function POST(request) {
       ...previousMeta,
       operation_code: operationCode || null,
       payer_name: payerName || null,
-      payer_phone: payerPhone || null,
+      payer_phone: payerPhoneValidation.phoneE164 || null,
+      payer_phone_country_code: payerPhoneValidation.phoneCountryCode || null,
+      payer_phone_national_number: payerPhoneValidation.phoneNationalNumber || null,
+      payer_phone_e164: payerPhoneValidation.phoneE164 || null,
+      payer_phone_raw_input: payerPhone || null,
       confirmation_mode: confirmationMode,
       method: paymentMethod,
       storage: "supabase",

@@ -1,27 +1,24 @@
 import { NextResponse } from "next/server";
-import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 import { processUpcomingZoomReminderEmails } from "@/lib/course-email-automations";
+import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
+import { runCourseEmailRemindersJob } from "@/lib/jobs/internal-job-handlers";
 
-async function handleReminderJob() {
-  try {
-    if (!hasServiceRoleClient()) {
-      return NextResponse.json({ error: "Configura SUPABASE_SERVICE_ROLE_KEY." }, { status: 500 });
-    }
-
-    const service = getServiceSupabaseClient();
-    const summary = await processUpcomingZoomReminderEmails({ service });
-    return NextResponse.json({ ok: true, ...summary });
-  } catch (error) {
-    console.error("[Jobs] course-email-reminders", error);
-    const message = error instanceof Error ? error.message : "No se pudieron procesar recordatorios.";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+export async function POST(request) {
+  const service = hasServiceRoleClient() ? getServiceSupabaseClient() : null;
+  const result = await runCourseEmailRemindersJob({
+    request,
+    service,
+    runJob: processUpcomingZoomReminderEmails,
+  });
+  return NextResponse.json(result.body, { status: result.status });
 }
 
-export async function POST() {
-  return handleReminderJob();
-}
-
-export async function GET() {
-  return handleReminderJob();
+export async function GET(request) {
+  const service = hasServiceRoleClient() ? getServiceSupabaseClient() : null;
+  const result = await runCourseEmailRemindersJob({
+    request,
+    service,
+    runJob: processUpcomingZoomReminderEmails,
+  });
+  return NextResponse.json(result.body, { status: result.status });
 }

@@ -3,6 +3,7 @@ import { sendPreEnrollmentOtpEmail } from "@/lib/brevo";
 import { resolvePreEnrollmentUserId } from "@/lib/pre-enrollment-session";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import { createEmailVerificationToken } from "@/lib/pre-enrollment";
+import { resolveCanonicalAppUrl } from "@/lib/security/env";
 
 export async function POST(request) {
   try {
@@ -21,8 +22,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "Cuenta invalida." }, { status: 400 });
     }
 
-    const origin =
-      request.headers.get("origin") || process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+    const origin = resolveCanonicalAppUrl();
     const studentCode = profile.student_code || "";
     const loginUrl = `${origin}/login/access?code=${encodeURIComponent(studentCode)}&otp=1`;
     const { code: otpCode } = await createEmailVerificationToken(userId);

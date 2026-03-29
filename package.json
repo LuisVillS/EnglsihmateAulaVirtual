@@ -9,7 +9,7 @@
     "start": "next start",
     "start:lan": "next start --hostname 0.0.0.0 --port 3000",
     "lint": "eslint",
-    "test": "node --experimental-default-type=module --experimental-specifier-resolution=node tests/run-duolingo-tests.mjs",
+    "test": "node --experimental-default-type=module --experimental-specifier-resolution=node tests/run-duolingo-tests.mjs && node --experimental-default-type=module --experimental-specifier-resolution=node tests/run-security-tests.mjs",
     "supabase:repair-history": "node scripts/supabase-repair-history.mjs"
   },
   "dependencies": {

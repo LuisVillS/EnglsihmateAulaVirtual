@@ -1,154 +1,319 @@
-﻿# Aula Virtual
+# EnglishMateApp
 
-Next.js + Supabase + Cloudflare R2 para un aula virtual privada: login institucional, panel admin y vista alumno sin sobrecarga LMS.
+Private English-learning platform built with Next.js App Router and Supabase. The repository currently contains:
 
-## Flujo y rutas
-- `/` - pantalla principal de login (flujo email-first privado). Si ya hay sesion: redirige a `/app` (student) o `/admin/panel` (admin).
-- `/app` - dashboard del alumno con cursos y lecciones asignadas.
-- `/app/practice` - Practice Lab (Duolingo-like): sesiones new/review + feedback + XP/streak.
-- `/admin` - login exclusivo para administradores.
-- `/admin/panel` - tablero admin para CRUD (cursos, unidades, lecciones, ejercicios con audio) y gestion de alumnos (roles, asignacion manual, import CSV rapido).
-- `/admin/courses/templates/:id` - editor de plantilla por clase: materiales + ejercicios Duolingo-like (crear/asignar varios por clase).
-- `/admin/teacher-dashboard` - mÃ©tricas docentes (accuracy, errores por lecciÃ³n/tipo/tema, hardest exercises).
-- `/admin/students` - vista dedicada a alumnos: formulario, import masivo, tabla con codigo y estado.
-- `/admin/seed` - crea contenido demo A1 (solo admins).
-- `/auth/callback` - handler OAuth para Google; solo admite correos ya registrados.
+- A student web app with dashboard, course access, academic path, practice arena, flashcards, competitions, calendar, enrollment, and library reading.
+- An admin area for students, commissions, templates, exercises, flashcards, library management, Discord linking, pre-enrollments, and teacher analytics.
+- A Supabase schema and migration history that power most of the product behavior.
+- A separate Python Discord bot under `bot/`.
 
-## Modulo Duolingo-like
-### Migracion SQL
+## Stack
 
-- Ejecuta `supabase/migrations/20260222000200_duolingo_module.sql`.
-- Ejecuta `supabase/migrations/20260222000300_template_session_exercises.sql` para enlazar ejercicios por clase (`exercise_id` en `template_session_items` y `session_items`).
-- La migracion agrega/extiende:
-  - `profiles.id_document`, `profiles.xp_total`, `profiles.current_streak`.
-  - `lesson_subjects`, `vocabulary`, `exercise_vocabulary`, `user_progress`, `audio_cache`.
-  - campos nuevos en `lessons` (`status`, `ordering`, `level`, `subject_id`) y `exercises` (`type`, `content_json`, `status`, `revision`, auditoria).
-  - politicas para lectura solo `published` en student side.
+- Next.js 16
+- React 19
+- Tailwind CSS 4
+- Supabase SSR + Supabase JS
+- Cloudflare R2 / S3-compatible storage
+- EPUB / flipbook reader stack: `epubjs`, `@intity/epub-js`, `page-flip`
 
-### Endpoints del modulo
-- Student:
-  - `POST /api/auth/student`
-  - `GET /api/session` (acepta `exercise_id` o `exercise_ids` para sesiones enfocadas por clase)
-  - `POST /api/progress`
-- Admin Editor:
-  - `POST|PUT|DELETE /api/admin/vocabulary`
-  - `POST|PUT|DELETE /api/admin/lessons`
-  - `POST|PUT|DELETE /api/admin/exercises`
-  - `POST /api/admin/exercises/validate`
-  - `GET /api/admin/exercises/:id/preview`
-- Teacher:
-  - `GET /api/admin/teacher-dashboard`
+## Main app areas
 
-### Audio ElevenLabs con cache
-- El audio no se genera al presionar Play.
-- Se genera al guardar/publicar (`generate_audio=true`) y se reutiliza por hash deterministico (`language + voice + model + text_normalized`).
-- Variables requeridas:
-  - `ELEVENLABS_API_KEY`
-  - `ELEVENLABS_VOICE_ID`
-  - `ELEVENLABS_MODEL_ID` (opcional, default `eleven_multilingual_v2`)
+### Public and auth-facing routes
 
-### Nota del curso (peso ejercicios)
-- Los ejercicios asignados por clase en plantilla se copian a `session_items.exercise_id`.
-- La nota visible al alumno usa ponderacion minima de 50% ejercicios asignados y 50% nota base del curso cuando ambas existen.
+- `/` redirects authenticated users to `/app`, `/admin`, `/admin/crm`, or `/app/matricula` depending on access role/status.
+- `/login` student login.
+- `/admin/login` shared admin entrypoint for classic admins and CRM-role users.
+- `/account/register` and `/api/account/*` account registration and verification flows.
+- `/auth/callback` auth callback route.
+- `/prematricula` and `/prematricula/checkout` pre-enrollment flow.
 
-## Acceso privado y roles
-- No existe signup publico. Todo alumno se registra desde `/admin/students` (formulario o CSV). Cada registro crea/alinea un usuario en Supabase Auth, genera `student_code`, habilita el perfil (tabla `profiles`) y dispara el correo automatizado via Brevo. Los administradores viven en la tabla `admin_profiles` para no mezclarse con los alumnos.
-- Login en `/` (alumnos):
-  1. El usuario ingresa correo o su `student_code` (EYYYY####) -> el backend (via `SUPABASE_SERVICE_ROLE_KEY`) resuelve el perfil en `profiles`.
-  2. Si no existe o `invited = false` -> mensaje **"Este correo no se encuentra registrado en el aula virtual"**.
-  3. Si `password_set = false` -> se muestra el paso para crear la contrasena inicial.
-  4. Si `password_set = true` -> se pide solo contrasena.
-  5. Google OAuth: tras el callback se valida el email; si no estaba invitado se elimina el usuario de Auth y se muestra el mismo error.
-- Login en `/admin` (admins): solo admite correos que existan en `admin_profiles`. Si un admin intenta entrar por `/` se le indica usar `/admin`.
-- Se asegura un admin inicial (`luisvill99sa@gmail.com`) usando la service role; puedes cambiarlo con `DEFAULT_ADMIN_EMAIL`.
-- Credenciales actuales del admin inicial:
-  email: `luisvill99sa@gmail.com`
-  password: `182011`
-- Roles permitidos: `student` y `admin`. El panel permite promover un alumno a admin (lo mueve a `admin_profiles`), ver estado de contrasena/invitacion y asignar cursos.
+### Student routes
 
-## Supabase
-1. Crea el proyecto y ejecuta `supabase/schema.sql` para definir tablas, funciones, trigger `handle_new_user` y datos base (incluido flag `invited`).
-2. Variables imprescindibles en `.env.local`:
-   ```bash
-   NEXT_PUBLIC_SUPABASE_URL=...
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-   SUPABASE_SERVICE_ROLE_KEY=...
-   DEFAULT_ADMIN_EMAIL=luisvill99sa@gmail.com # opcional si quieres otro correo
-   SMTP_HOST=smtp.tudominio.com # o usa RESEND_API_KEY si prefieres Resend
-   ```
-3. La `service_role key` se usa en:
-   - Validacion del login privado (lookups).
-   - Creacion/actualizacion de usuarios desde `/admin/panel` (formularios y CSV).
-   - Flujo de contrasenas iniciales y recuperacion.
-4. Configura Brevo (Sendinblue) para los correos transaccionales: `BREVO_API_KEY`, `BREVO_SMTP_USER`, `BREVO_SMTP_PASSWORD`, `BREVO_SMTP_HOST`, `BREVO_SMTP_PORT`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_TEMPLATE_RECOVERY_ID` (reset), `BREVO_TEMPLATE_ENROLLMENT_ID` (inscripcion, template 335) y, si lo usas, `BREVO_TEMPLATE_WELCOME_ID`. El schema ya incluye `password_recovery_codes` para almacenar los codigos.
-5. Manten RLS habilitado (incluido en el schema) y no expongas la service role fuera del backend.
+- `/app` student dashboard.
+- `/app/curso` active course workspace.
+- `/app/practice` practice arena / Duolingo-like session flow.
+- `/app/flashcards` flashcard area.
+- `/app/competition` weekly competition area.
+- `/app/leaderboard` rankings.
+- `/app/calendario` student calendar.
+- `/app/library` library browser.
+- `/app/library/book/[slug]` library detail page.
+- `/app/library/flipbook/[slug]` primary in-app reader.
+- `/app/ruta-academica` academic path.
+- `/app/matricula` enrollment workspace for non-student or pending users.
+- `/profile` profile and security settings.
 
-## Gestion de alumnos
-- `/admin/students` centraliza el alta y edicion: formulario con campos academicos (dni, course_level, level_number, premium, fechas) y permite reusar el `student_code`.
-- Cada alumno puede registrar un horario preferido (`preferred_hour`) entre las 06:00 y las 23:30 (intervalos de 30â€¯min). El formulario incluye un selector y el listado permite filtrar por curso, nivel, texto u hora disponible.
-- El `student_code` se genera automaticamente (formato `EYYYY####`) al crear/importar, valida colisiones y queda con constraint `UNIQUE`.
-- Cada alumno nuevo recibe automaticamente un correo de inscripcion (Brevo template 335) con su codigo, curso asignado, horario preferido y una contrasena temporal de 8 caracteres. Los alumnos existentes no reciben correos duplicados y se les sigue forzando el cambio de contrasena en el primer login.
-- Import masivo: usa el mismo formulario o el CSV (descargable desde `/api/admin/students/template`). Columnas soportadas: `full_name,email,dni,course_level,level_number,is_premium,start_month,enrollment_date,preferred_hour`. Correos existentes se actualizan, nuevos generan codigo y usuario. Todos reciben correo automatico.
-- La tabla soporta filtros por curso/nivel/horario, busqueda por nombre/email/DNI/codigo, muestra el estado de la contrasena y permite descargar la lista filtrada en CSV desde el boton `Descargar lista`.
+### Admin routes
 
-## Cloudflare R2
-1. Crea un bucket para audios (publicos o privados).
-2. Genera Access/Secret Keys y un endpoint publico (CDN) para `NEXT_PUBLIC_R2_PUBLIC_BASE_URL` si sirves audios estaticos.
+- `/admin` admin dashboard.
+- `/admin/crm` CRM overview and control room.
+- `/admin/crm/kanban` CRM stage board with server-backed stage moves.
+- `/admin/crm/callinghub` CRM queue surface with dropdown-based stage and source filters, a focused campaign workspace, `tel:` launch only, and server-backed outcomes.
+- `/admin/crm/leads` CRM lead list with filters and server-backed navigation.
+- `/admin/crm/leads/[id]` CRM lead detail with timeline, payment summary, stage moves, and note capture.
+- `/admin/crm/statistics` CRM release-facing reporting, webhook health, and automation visibility.
+- `/admin/panel` operations panel.
+- `/admin/students` student management and CSV import/export.
+- `/admin/commissions` commission management.
+- `/admin/courses` and `/admin/courses/templates` course/template management.
+- `/admin/exercises` exercise library.
+- `/admin/flashcards` flashcard management.
+- `/admin/library` library ingestion, staging, duplicate review, and publishing.
+- `/admin/teacher-dashboard` teacher analytics.
+- `/admin/discord` Discord linking/admin tools.
+- `/admin/prematriculas` pre-enrollment review.
+- `/admin/seed` demo data/bootstrap actions.
 
-## Recuperacion de contrasena
-- `POST /api/auth/recover`: recibe `email`, valida que exista en `profiles` (alumnos) o `admin_profiles` (admins), aplica rate limit por correo, genera un codigo de 6 digitos (10 minutos de vigencia) y envia el template Brevo (ID 334) con los parametros `name` y `code`. Responde `Te enviamos un codigo a tu correo`.
-- `POST /api/auth/verify-recovery-code`: recibe `email`, `code` y `newPassword`. Verifica que el codigo siga activo, marca todos los codigos previos del mismo correo como usados, actualiza la contrasena via Supabase Admin API y responde `Contrasena actualizada correctamente` (actualiza la tabla correspondiente: `profiles` o `admin_profiles`).
-- Los formularios de `/` y `/admin` usan estos endpoints via server actions; los mensajes de error visibles son `Este correo no se encuentra registrado en el aula virtual` y `Codigo invalido o expirado`.
+### API route groups
 
-## Variables de entorno completas (`.env.local`)
+Under `app/api` the repo currently exposes route groups for:
+
+- `account`
+- `admin`
+- `auth`
+- `calendar`
+- `crm`
+- `flashcards`
+- `jobs`
+- `library`
+- `matricula`
+- `payments`
+- `progress`
+- `r2`
+- `session`
+- `study-with-me`
+
+CRM-specific API endpoints currently include:
+
+- `/api/leads/submit`
+- `/api/webhooks/meta/leads`
+- `/api/crm/webhooks/meta`
+- `/api/crm/webhooks/formspree` `deprecated`
+- `/api/crm/automations/run`
+- `/api/crm/simulate/meta`
+- `/api/crm/simulate/web-form`
+- `/api/crm/simulate/formspree` `deprecated`
+
+## Important directories
+
+- `app/`: App Router pages, layouts, and API handlers.
+- `components/`: UI components, including the flipbook reader stack in `components/flipbook/`.
+- `lib/`: business logic and integrations.
+- `lib/duolingo/`: practice session generation, evaluation, spaced repetition, analytics.
+- `lib/library/`: library auth, repository, embed, TTS, EPUB source handling.
+- `lib/flipbook-core/` and `lib/flipbook-services/`: manifest generation, pagination, progress, session tokens.
+- `supabase/`: schema, migrations, and local Supabase config.
+- `tests/`: custom Node-based test runner and domain tests.
+- `scripts/`: maintenance scripts.
+- `bot/`: separate Python Discord bot.
+- `docs/`: operational notes and audits.
+
+## Development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run locally:
+
+```bash
+npm run dev
+```
+
+Expose on local network:
+
+```bash
+npm run dev:lan
+```
+
+Production build:
+
+```bash
+npm run build
+npm run start
+```
+
+Production build on local network:
+
+```bash
+npm run build
+npm run start:lan
+```
+
+Lint:
+
+```bash
+npm run lint
+```
+
+Tests:
+
+```bash
+npm test
+```
+
+Notes:
+
+- `npm test` runs `tests/run-duolingo-tests.mjs`, a custom Node assertion suite. It is not configured as Jest or Vitest.
+- `playwright` is installed as a dependency, but no standard Playwright test directory is currently wired into `package.json`.
+
+## Environment variables
+
+The app will not boot correctly without Supabase env vars. `lib/supabase-server.js` throws if they are missing.
+
+Minimum app variables:
+
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
-DEFAULT_ADMIN_EMAIL=luisvill99sa@gmail.com
-BREVO_API_KEY=tu_api_key
-BREVO_SMTP_USER=tu_usuario_smtp
-BREVO_SMTP_PASSWORD=tu_password_smtp
-BREVO_SMTP_HOST=smtp-relay.brevo.com
-BREVO_SMTP_PORT=587
-BREVO_SENDER_EMAIL="no-reply@tudominio.com"
-BREVO_SENDER_NAME="Englishmate Aula Virtual"
-BREVO_TEMPLATE_RECOVERY_ID=334
-BREVO_TEMPLATE_WELCOME_ID=335
-BREVO_TEMPLATE_ENROLLMENT_ID=335
+DEFAULT_ADMIN_EMAIL=...
+```
+
+Common mail / auth / storage variables used across the repo:
+
+```bash
+BREVO_API_KEY=...
+BREVO_SMTP_USER=...
+BREVO_SMTP_PASSWORD=...
+BREVO_SMTP_HOST=...
+BREVO_SMTP_PORT=...
+BREVO_SENDER_EMAIL=...
+BREVO_SENDER_NAME=...
+BREVO_TEMPLATE_RECOVERY_ID=...
+BREVO_TEMPLATE_WELCOME_ID=...
+BREVO_TEMPLATE_ENROLLMENT_ID=...
+
 R2_ACCOUNT_ID=...
 R2_ACCESS_KEY_ID=...
 R2_SECRET_ACCESS_KEY=...
 R2_BUCKET=...
-NEXT_PUBLIC_R2_PUBLIC_BASE_URL=https://cdn.tu-dominio.com # opcional
+NEXT_PUBLIC_R2_PUBLIC_BASE_URL=...
+
+NEXT_PUBLIC_SITE_URL=...
+FLIPBOOK_SESSION_SECRET=...
 ```
 
-## Scripts
+CRM webhook and automation variables:
+
 ```bash
-npm install
-npm run dev
-npm run build && npm start
+TURNSTILE_SECRET_KEY=...
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=...
+META_APP_ID=...
+META_APP_SECRET=...
+META_WEBHOOK_VERIFY_TOKEN=...
+META_PAGE_ACCESS_TOKEN=...
+META_GRAPH_API_VERSION=...
+
+# Legacy compatibility only; active ingestion no longer depends on Formspree
+CRM_META_WEBHOOK_SECRET=...
+CRM_FORMSPREE_WEBHOOK_SECRET=...
+CRM_AUTOMATION_RUN_SECRET=...
+CRM_AUTOMATIONS_SAFE_MODE=true
+
+# Optional pattern for CRM automation template lookup
+BREVO_TEMPLATE_<TEMPLATE_KEY>_ID=...
 ```
 
-## Acceso por red local
-- Para exponer la app a otros dispositivos en tu misma red local, inicia Next escuchando en todas las interfaces:
-  ```bash
-  npm run dev:lan
-  ```
-- Para produccion local:
-  ```bash
-  npm run build
-  npm run start:lan
-  ```
-- Luego abre desde otro dispositivo `http://IP_DE_TU_PC:3000`.
-- Si usas enlaces de correo, callbacks OAuth o redirecciones absolutas, configura `NEXT_PUBLIC_SITE_URL=http://IP_DE_TU_PC:3000` en `.env.local`.
-- En Windows, permite Node.js o el puerto `3000` en el firewall si la red local no logra conectarse.
+There are additional feature-specific variables in the codebase for external integrations. Before enabling a new flow, search the relevant route or library module and document any new env var here in the same change.
 
-## Uso diario
-1. Arranca `npm run dev`. Los alumnos entran por `/`, los administradores por `/admin` (tras login se redirige a `/admin/panel`).
-2. En `/admin/students` registra alumnos manualmente o por CSV; el sistema les asigna codigo, los habilita y envia el correo de bienvenida sin pasos extra.
-3. Verifica estados: `No autorizado`, `Contrasena pendiente` o `Activo`. Ajusta roles/asignaciones desde `/admin/panel` y consulta/filtra/exporta el padron en `/admin/students`.
-4. Comparte con cada alumno su correo institucional. Entran por `/`, validan correo, crean contrasena si aplica o usan Google (solo si el correo ya esta invitado). Si olvidan la contrasena, pueden usar el enlace "?Olvidaste tu contrasena?" (envia un codigo al correo) disponible tanto en `/` como en `/admin` para restablecerla.
-5. Los alumnos solo pueden ver `/app`. Los admins mantienen cursos/audio en `/admin/panel` y pueden rellenar `/admin/seed` para datos demo.
+## Supabase
 
-Respeta las claves privadas, manten las politicas RLS activas y usa `/admin/panel` para gestionar todo el aula.
+The database is central to the app. The repo includes:
+
+- Base schema: `supabase/schema.sql`
+- Migrations: `supabase/migrations/*.sql`
+- Local config: `supabase/config.toml`
+
+Recent migration history shows active development across:
+
+- student roles and enrollment
+- Duolingo-like practice
+- flashcards and competitions
+- library ingestion and flipbook reading
+- schema cleanup and scaling indexes
+- CRM role storage, CRM core tables, queue claim RPCs, approval sync, and approved-payment revenue rollups
+
+CRM-specific notes:
+
+- `crm_roles` migration adds the additive CRM role tables used by `/admin/login` and `/admin/crm`.
+- `crm_core` migration adds the CRM lead/stage/interactions/automation/webhook tables plus row-level security.
+- The web-form/Meta ingestion migration adds `crm_inbound_events` for raw event storage plus `crm_lead_touchpoints` for submission history and expands `crm_leads` with source/site/form/page attribution fields.
+- `/admin/crm` is the CRM control room and links into Kanban, Calling Hub, and lead management.
+- The CRM expansion also covers operator settings, stage management, stage-to-template Brevo template ID mapping, source-aware Brevo ignore rules, lead source visibility, safe archive/delete behavior, and drag-and-drop stage movement in the CRM UI.
+- CRM lead ingestion preserves external raw source metadata when the matching database columns exist, including Meta, internal WebForm, classroom/pre-enrollment, and manual sources.
+- CRM external ingestion now also preserves canonical phone candidates when possible, including `phone_country_code`, `phone_national_number`, `phone_e164`, `phone_dialable`, and phone validation metadata if the destination columns exist.
+- CRM lead ingestion now deduplicates by phone number and merges additional source tags onto the same canonical lead, up to three source tags per lead.
+- CRM automation delivery can switch to a stage-triggered Brevo template when a lead enters a configured stage, while still honoring source-aware ignore rules and the generic template lookup rules.
+- `/admin/crm/statistics` reports approved revenue, webhook activity, automation job health, and release-readiness signals.
+- Queue ownership is server-controlled through SQL using `FOR UPDATE SKIP LOCKED`.
+- The Calling Hub uses `tel:` launch only; call outcomes stay manual and are persisted through server actions.
+- The Calling Hub now opens with dropdown selectors for stage and source, then transitions into a focused campaign workspace instead of exposing separate `Current lead`, `Context`, and `Queue preview` panels as the main experience.
+- `/admin/crm/kanban` now uses optimistic stage moves and bottom-positioned horizontal board navigation so the board stays responsive without wrapping or redirect churn.
+- CRM cards now keep only approved source tags plus the `Student` tag visible so merged acquisition history stays readable without internal status chips.
+- Public web-form intake is handled by `/api/leads/submit`, which validates Turnstile server-side, stores raw inbound events before normalizing CRM leads, and preserves `site_key` identity for `main_site` and `virtual_site`.
+- Meta lead intake is handled by `/api/webhooks/meta/leads`, which supports `GET` verification, `POST` webhook intake, signature validation, raw event storage, and Graph API lead retrieval by `leadgen_id`.
+- The CRM home surface exposes temporary admin-only Meta and internal WebForm lead-simulation buttons for source-preview testing.
+- `/admin/crm/settings/integrations` now provides a low-code integrations setup page with webhook URLs, secret-status visibility, accepted header names, and admin setup guidance for Meta and the internal WebForm flow.
+- Any CRM integrations/configuration area should stay minimal and only expose setup that the repo can actually support without code changes.
+- CRM dialing should use the canonical dialable phone value when available so links render as `tel:+<countrycode><number>`.
+- Pre-registration now uses a split country-code and national-number selector, with browser-locale country preselection and Peru fallback.
+- `/account/register` now shows only flag plus country code in the selector, and the shared selector generates flags at runtime instead of relying on stored glyph literals.
+- `/app/matricula` now treats the Yape or Plin payer phone as Peru-only, hides the country selector there, and can prefill it from the account phone when the account phone is already Peruvian.
+- Classroom and CRM phone writes now converge on canonical `phone_country_code`, `phone_national_number`, and `phone_e164` fields while keeping the legacy raw `phone` column for compatibility.
+- CRM lead delete is a hard delete of the live row with a tombstone snapshot stored in `crm_deleted_leads` for audit and recovery context.
+- `/admin/crm/kanban` now keeps all stages in one horizontal row with sideways scroll and still uses drag-and-drop as the primary movement pattern.
+- Calling Hub now supports campaign selection, leave-campaign flow, Save, and Save and Next while still using `tel:` launch only.
+- Approval-to-won synchronization is tied to the discovered pre-enrollment approval path where `pre_enrollments.status = 'APPROVED'` and `payments.status = 'approved'`.
+- CRM revenue fields are derived from approved payment records only.
+- CRM webhook ingestion is now split between public intake routes and compatibility routes: `/api/leads/submit` for internal WebForm intake, `/api/webhooks/meta/leads` for Meta webhook verification and lead retrieval, and `app/api/crm/webhooks/*` for compatibility.
+- Temporary admin-only CRM simulation routes exist at `app/api/crm/simulate/*` for Meta and internal WebForm source preview/testing.
+- CRM automation delivery is asynchronous, Brevo-backed, and can be exercised through `/api/crm/automations/run` in safe mode.
+
+Useful command:
+
+```bash
+npm run supabase:repair-history
+```
+
+## Reader and library
+
+The current primary reader route is:
+
+- `/app/library/flipbook/[slug]`
+
+Supporting API endpoints include:
+
+- `/api/library/books/[slug]/flipbook-manifest`
+- `/api/library/books/[slug]/flipbook-pages`
+- `/api/library/books/[slug]/flipbook-progress`
+- `/api/library/books/[slug]/asset`
+- `/api/library/books/[slug]/tts`
+
+The older EPUB/read routes still exist as redirect surfaces, but the maintained in-app reading experience is the flipbook stack.
+
+## Discord bot
+
+The `bot/` directory contains a separate Python Discord bot with commands and services for verification, practice, member sync, and role sync. It has its own environment/config surface and should be treated as a separate runtime from the Next.js app.
+
+## Known operational characteristics
+
+- The app is heavily coupled to Supabase tables, policies, and service-role-backed server actions.
+- `app/layout.js` ensures a default admin user during root layout execution.
+- Route coverage is broader than the older project description: payments, pre-enrollment, calendar feeds, library/flipbook, flashcards, and competition features are active in the codebase.
+- Local secret-bearing files such as `.env.local` and files under `bot/` should remain out of version control and out of shared documentation.
+
+## README maintenance
+
+This README should be updated in the same pull request whenever a code change affects any of the following:
+
+- scripts in `package.json`
+- routes under `app/`
+- API groups under `app/api/`
+- required environment variables
+- setup, deployment, or operational behavior
+- major feature areas or directory responsibilities
+
+Practical rule: if a change would make a fresh developer run the wrong command, miss a required env var, or look in the wrong route/module, update this file before merging.

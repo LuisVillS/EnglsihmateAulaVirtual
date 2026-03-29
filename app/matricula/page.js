@@ -2,6 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatEnrollmentFrequencyLabel } from "@/lib/frequency-labels";
+import PayerPhoneField, {
+  buildStructuredPayerPhone,
+  DEFAULT_PHONE_COUNTRY,
+  detectLikelyPhoneCountry,
+  splitStoredPayerPhone,
+  validatePeruvianPhone,
+  validateStructuredPhone,
+} from "./payer-phone-field";
 
 const SUPPORT_URL = process.env.NEXT_PUBLIC_SUPPORT_WA_URL || "https://wa.me/";
 
@@ -227,7 +235,9 @@ export default function MatriculaPage() {
   const [paymentConfirmationMode, setPaymentConfirmationMode] = useState("");
   const [operationCode, setOperationCode] = useState("");
   const [payerName, setPayerName] = useState("");
-  const [payerPhone, setPayerPhone] = useState("");
+  const [profilePhoneFromAccount, setProfilePhoneFromAccount] = useState("");
+  const [payerPhoneCountryCode, setPayerPhoneCountryCode] = useState(DEFAULT_PHONE_COUNTRY.dialCode);
+  const [payerPhoneNationalNumber, setPayerPhoneNationalNumber] = useState("");
   const [openingCheckout, setOpeningCheckout] = useState(false);
   const [reserveCountdown, setReserveCountdown] = useState(null);
   const optionsCacheRef = useRef(new Map());
@@ -246,6 +256,26 @@ export default function MatriculaPage() {
     if (preEnrollment?.price_total != null) return Number(preEnrollment.price_total) || 0;
     return selection.courseType === "premium" ? 139 : 99;
   }, [summary?.price_total, preEnrollment?.price_total, selection.courseType]);
+  const payerPhone = useMemo(
+    () => buildStructuredPayerPhone(payerPhoneCountryCode, payerPhoneNationalNumber),
+    [payerPhoneCountryCode, payerPhoneNationalNumber]
+  );
+  const payerPhoneError = useMemo(
+    () => {
+      if (paymentMethod === "YAPE_PLIN") {
+        return validatePeruvianPhone(payerPhoneNationalNumber, {
+          required: paymentConfirmationMode === "OPERATION",
+        });
+      }
+
+      return validateStructuredPhone({
+        countryCode: payerPhoneCountryCode,
+        nationalNumber: payerPhoneNationalNumber,
+        required: paymentMethod === "YAPE_PLIN" && paymentConfirmationMode === "OPERATION",
+      });
+    },
+    [payerPhoneCountryCode, payerPhoneNationalNumber, paymentMethod, paymentConfirmationMode]
+  );
   const activeStepIndex = Math.max(
     0,
     STEPS.findIndex((item) => item.key === step)
@@ -254,6 +284,9 @@ export default function MatriculaPage() {
   const applyOptionsPayload = useCallback((payload, { preservePreEnrollment = false } = {}) => {
     if (!preservePreEnrollment) {
       setPreEnrollment(payload.preEnrollment || null);
+    }
+    if (typeof payload.profilePhone === "string") {
+      setProfilePhoneFromAccount(payload.profilePhone);
     }
     setStartMonths(payload.startMonths || []);
     setLevels(payload.levels || []);
@@ -319,6 +352,18 @@ export default function MatriculaPage() {
     }
   }, [applyOptionsPayload]);
 
+  const fillPeruvianPayerPhoneFromAccount = useCallback(() => {
+    if (!profilePhoneFromAccount) return false;
+    const parsedPhone = splitStoredPayerPhone(profilePhoneFromAccount, "+51");
+    if (!parsedPhone.nationalNumber) return false;
+    if (validatePeruvianPhone(parsedPhone.nationalNumber, { required: true })) {
+      return false;
+    }
+    setPayerPhoneCountryCode("+51");
+    setPayerPhoneNationalNumber(parsedPhone.nationalNumber);
+    return true;
+  }, [profilePhoneFromAccount]);
+
   useEffect(() => {
     loadOptions()
       .catch((err) => setError(err.message))
@@ -357,6 +402,21 @@ export default function MatriculaPage() {
   }, [preEnrollment?.status, preEnrollment?.reservation_expires_at, reserveCountdown, resettingExpiredReservation]);
 
   useEffect(() => {
+    const detectedCountry = detectLikelyPhoneCountry();
+    setPayerPhoneCountryCode((current) =>
+      current === DEFAULT_PHONE_COUNTRY.dialCode ? detectedCountry.dialCode : current
+    );
+  }, []);
+
+  useEffect(() => {
+    if (paymentMethod !== "YAPE_PLIN") return;
+    setPayerPhoneCountryCode("+51");
+    if (!payerPhoneNationalNumber) {
+      fillPeruvianPayerPhoneFromAccount();
+    }
+  }, [fillPeruvianPayerPhoneFromAccount, payerPhoneNationalNumber, paymentMethod]);
+
+  useEffect(() => {
     if (!preEnrollment) return;
     if (preEnrollment.payment_method) {
       setPaymentMethod(preEnrollment.payment_method);
@@ -370,8 +430,19 @@ export default function MatriculaPage() {
     }
     setOperationCode(meta.operation_code || preEnrollment.mp_payment_id || "");
     setPayerName(meta.payer_name || "");
-    setPayerPhone(meta.payer_phone || "");
-  }, [preEnrollment]);
+    const fallbackCountryCode =
+      preEnrollment.payment_method === "YAPE_PLIN"
+        ? "+51"
+        : detectLikelyPhoneCountry().dialCode;
+    const sourcePhone = meta.payer_phone || profilePhoneFromAccount || "";
+    const parsedPhone = splitStoredPayerPhone(sourcePhone, fallbackCountryCode);
+    setPayerPhoneCountryCode(
+      meta.payer_phone_country_code ||
+        (preEnrollment.payment_method === "YAPE_PLIN" ? "+51" : parsedPhone.dialCode) ||
+        fallbackCountryCode
+    );
+    setPayerPhoneNationalNumber(meta.payer_phone_national_number || parsedPhone.nationalNumber || "");
+  }, [preEnrollment, profilePhoneFromAccount]);
 
   async function handleLevelChange(value) {
     setError("");
@@ -515,7 +586,7 @@ export default function MatriculaPage() {
     setUploadMessage("");
     const cleanOperationCode = operationCode.trim();
     const cleanPayerName = payerName.trim();
-    const cleanPayerPhone = payerPhone.trim();
+    const cleanPayerPhone = payerPhone;
 
     if (!paymentMethod) {
       setError("Selecciona un metodo de pago para continuar.");
@@ -536,6 +607,21 @@ export default function MatriculaPage() {
       return;
     }
 
+    if (payerPhoneError) {
+      setError(payerPhoneError);
+      return;
+    }
+    if (paymentMethod === "YAPE_PLIN") {
+      setPayerPhoneCountryCode("+51");
+      const peruvianPhoneError = validatePeruvianPhone(payerPhoneNationalNumber, {
+        required: paymentConfirmationMode === "OPERATION",
+      });
+      if (peruvianPhoneError) {
+        setError(peruvianPhoneError);
+        return;
+      }
+    }
+
     if (paymentConfirmationMode === "OPERATION" && paymentMethod === "MERCADOPAGO" && !cleanOperationCode) {
       setError("Ingresa el numero de operacion para confirmar el pago.");
       return;
@@ -553,6 +639,9 @@ export default function MatriculaPage() {
       formData.append("operationCode", cleanOperationCode);
       formData.append("payerName", cleanPayerName);
       formData.append("payerPhone", cleanPayerPhone);
+      formData.append("payerPhoneCountryCode", payerPhoneCountryCode);
+      formData.append("payerPhoneNationalNumber", payerPhoneNationalNumber);
+      formData.append("payerPhoneDialable", cleanPayerPhone);
       if (paymentFile) {
         formData.append("file", paymentFile);
       }
@@ -593,7 +682,8 @@ export default function MatriculaPage() {
       setPaymentConfirmationMode("");
       setOperationCode("");
       setPayerName("");
-      setPayerPhone("");
+      setPayerPhoneCountryCode(detectLikelyPhoneCountry().dialCode);
+      setPayerPhoneNationalNumber("");
       setPaymentFile(null);
 
       await loadOptions();
@@ -617,9 +707,11 @@ export default function MatriculaPage() {
       ? false
       : !paymentConfirmationMode
       ? false
+      : Boolean(payerPhoneError)
+      ? false
       : paymentMethod === "YAPE_PLIN" &&
         paymentConfirmationMode === "OPERATION" &&
-        (!payerName.trim() || !payerPhone.trim())
+        (!payerName.trim() || !payerPhone)
       ? false
       : paymentConfirmationMode === "OPERATION"
       ? paymentMethod === "MERCADOPAGO"
@@ -1128,16 +1220,22 @@ export default function MatriculaPage() {
                           className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-primary"
                         />
                       </Field>
-                      <Field label={paymentMethod === "YAPE_PLIN" ? "Telefono del pagador (obligatorio)" : "Telefono del pagador (opcional)"}>
-                        <input
-                          type="tel"
-                          value={payerPhone}
-                          onChange={(event) => setPayerPhone(event.target.value)}
-                          placeholder="9xxxxxxxx"
-                          required={paymentMethod === "YAPE_PLIN"}
-                          className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-primary"
-                        />
-                      </Field>
+                      <PayerPhoneField
+                        label={paymentMethod === "YAPE_PLIN" ? "Telefono del pagador (obligatorio)" : "Telefono del pagador (opcional)"}
+                        required={paymentMethod === "YAPE_PLIN"}
+                        countryCode={payerPhoneCountryCode}
+                        nationalNumber={payerPhoneNationalNumber}
+                        lockedCountryCode={paymentMethod === "YAPE_PLIN" ? "+51" : ""}
+                        showCountryName={paymentMethod !== "YAPE_PLIN"}
+                        helperText={
+                          paymentMethod === "YAPE_PLIN"
+                            ? "Se autocompleta desde tu Numero y puedes ajustarlo si hace falta."
+                            : "Separa el codigo de pais del numero."
+                        }
+                        onCountryCodeChange={setPayerPhoneCountryCode}
+                        onNationalNumberChange={setPayerPhoneNationalNumber}
+                        error={payerPhoneError}
+                      />
                     </div>
                   </>
                 ) : null}
@@ -1153,15 +1251,21 @@ export default function MatriculaPage() {
                         className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-primary"
                       />
                     </Field>
-                    <Field label="Telefono del pagador (opcional)">
-                      <input
-                        type="tel"
-                        value={payerPhone}
-                        onChange={(event) => setPayerPhone(event.target.value)}
-                        placeholder="9xxxxxxxx"
-                        className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-primary"
-                      />
-                    </Field>
+                    <PayerPhoneField
+                      label="Telefono del pagador (opcional)"
+                      countryCode={payerPhoneCountryCode}
+                      nationalNumber={payerPhoneNationalNumber}
+                      lockedCountryCode={paymentMethod === "YAPE_PLIN" ? "+51" : ""}
+                      showCountryName={paymentMethod !== "YAPE_PLIN"}
+                      helperText={
+                        paymentMethod === "YAPE_PLIN"
+                          ? "Se autocompleta desde tu Numero y puedes ajustarlo si hace falta."
+                          : "Separa el codigo de pais del numero."
+                      }
+                      onCountryCodeChange={setPayerPhoneCountryCode}
+                      onNationalNumberChange={setPayerPhoneNationalNumber}
+                      error={payerPhoneError}
+                    />
                   </div>
                 ) : null}
 

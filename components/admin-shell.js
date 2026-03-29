@@ -17,6 +17,16 @@ function Icon({ name }) {
           <rect x="13.5" y="17.5" width="7" height="3" rx="1.2" />
         </svg>
       );
+    case "crm":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+          <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h11A2.5 2.5 0 0 1 20 8.5v7A2.5 2.5 0 0 1 17.5 18h-11A2.5 2.5 0 0 1 4 15.5Z" />
+          <path d="M8 10h3" />
+          <path d="M8 14h5" />
+          <path d="M15.5 9.5h.01" />
+          <path d="M15.5 13h.01" />
+        </svg>
+      );
     case "students":
       return (
         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
@@ -99,6 +109,8 @@ function AdminNavItem({ item, active, onNavigate }) {
     <Link
       href={item.href}
       onClick={onNavigate}
+      target={item.newWindow ? "_blank" : undefined}
+      rel={item.newWindow ? "noopener noreferrer" : undefined}
       className={`flex min-h-10 items-center gap-2.5 rounded-2xl px-3 py-2 text-sm font-medium transition ${
         active
           ? "bg-[#103474] text-white shadow-[0_10px_24px_rgba(16,52,116,0.18)]"
@@ -113,6 +125,11 @@ function AdminNavItem({ item, active, onNavigate }) {
         <Icon name={item.icon} />
       </span>
       <span className="truncate">{item.label}</span>
+      {item.newWindow ? (
+        <span className={`ml-auto text-[10px] ${active ? "text-white/70" : "text-[#94a3b8]"}`}>
+          New
+        </span>
+      ) : null}
     </Link>
   );
 }

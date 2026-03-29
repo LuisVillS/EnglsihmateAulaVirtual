@@ -297,3 +297,50 @@ export async function rejectPreEnrollment(formData) {
   revalidatePath(`/admin/prematriculas/${preEnrollmentId}`);
   return { success: true };
 }
+
+export async function deletePreEnrollment(formData) {
+  const preEnrollmentId = formData.get("preEnrollmentId")?.toString();
+  if (!preEnrollmentId) {
+    return { error: "Pre-matricula invalida." };
+  }
+
+  await requireAdmin();
+  if (!hasServiceRoleClient()) {
+    return { error: "Configura SUPABASE_SERVICE_ROLE_KEY para eliminar." };
+  }
+
+  const service = getServiceSupabaseClient();
+  const { data: preEnrollment, error: loadError } = await service
+    .from("pre_enrollments")
+    .select("id, payment_proof_url")
+    .eq("id", preEnrollmentId)
+    .maybeSingle();
+
+  if (loadError) {
+    return { error: loadError.message || "No se pudo cargar la pre-matricula." };
+  }
+  if (!preEnrollment?.id) {
+    return { error: "Pre-matricula no encontrada." };
+  }
+
+  if (preEnrollment.payment_proof_url && isSupabaseStorageKey(preEnrollment.payment_proof_url)) {
+    try {
+      await deletePaymentProof(preEnrollment.payment_proof_url);
+    } catch (storageError) {
+      console.warn("No se pudo eliminar comprobante al borrar pre-matricula", storageError);
+    }
+  }
+
+  const { error: deleteError } = await service
+    .from("pre_enrollments")
+    .delete()
+    .eq("id", preEnrollmentId);
+
+  if (deleteError) {
+    return { error: deleteError.message || "No se pudo eliminar la pre-matricula." };
+  }
+
+  revalidatePath("/admin/prematriculas");
+  revalidatePath(`/admin/prematriculas/${preEnrollmentId}`);
+  return { success: true };
+}

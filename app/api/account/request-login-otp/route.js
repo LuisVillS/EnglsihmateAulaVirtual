@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import { createEmailVerificationToken } from "@/lib/pre-enrollment";
 import { sendPreEnrollmentOtpEmail } from "@/lib/brevo";
+import { resolveCanonicalAppUrl } from "@/lib/security/env";
 
 function normalizeIdentifier(value) {
   return value?.toString().trim() || "";
@@ -46,8 +47,7 @@ export async function POST(request) {
     }
 
     const { code: otpCode } = await createEmailVerificationToken(profile.id);
-    const origin =
-      request.headers.get("origin") || process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+    const origin = resolveCanonicalAppUrl();
     const loginUrl = `${origin}/login/access?code=${encodeURIComponent(profile.student_code || "")}&otp=1`;
 
     await sendPreEnrollmentOtpEmail({
@@ -63,6 +63,9 @@ export async function POST(request) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[PreEnrollment] request login otp error", error);
-    return NextResponse.json({ error: error.message || "No se pudo enviar OTP." }, { status: 400 });
+    return NextResponse.json(
+      { error: error.message || "No se pudo enviar el Codigo de Acceso." },
+      { status: 400 }
+    );
   }
 }

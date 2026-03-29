@@ -1,31 +1,28 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getDbClient } from "@/lib/duolingo/api-auth";
 import { ensureGamificationProfile } from "@/lib/gamification/profile";
 import { resolveStudentIdentity } from "@/lib/duolingo/student-upsert";
 
-export async function POST(request) {
+export async function POST() {
   try {
-    const body = await request.json().catch(() => ({}));
     const { supabase, db } = await getDbClient();
 
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
+    if (!user?.id) {
+      return NextResponse.json({ error: "No autorizado." }, { status: 401 });
+    }
+
     const profile = await resolveStudentIdentity({
-      userId: user?.id || null,
-      studentCode: body?.student_code || body?.studentCode,
-      idDocument: body?.id_document || body?.idDocument,
-      fullName: body?.full_name || body?.fullName,
-      email: body?.email,
+      userId: user.id,
+      userEmail: user.email || null,
       serviceClient: db,
     });
 
     if (!profile?.id) {
-      return NextResponse.json(
-        { error: "No se pudo autenticar por student_code. Verifica los datos." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No se pudo resolver el alumno." }, { status: 404 });
     }
 
     const gamification = await ensureGamificationProfile(db, {
@@ -44,7 +41,7 @@ export async function POST(request) {
         current_streak: Number(profile.current_streak || 0) || 0,
       },
       gamification,
-      source: user?.id ? "session-or-code" : "student_code",
+      source: "session",
     });
   } catch (error) {
     console.error("POST /api/auth/student failed", error);

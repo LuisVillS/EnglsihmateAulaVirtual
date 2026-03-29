@@ -1,23 +1,14 @@
-import { NextResponse } from "next/server";
-import { getServiceSupabaseClient } from "@/lib/supabase-service";
+import { NextResponse } from "next/server.js";
+import { requirePrivateServerEnv } from "../../../../lib/security/env.js";
 import {
   STUDY_WITH_ME_SESSION_MINUTES,
   getLimaWeekStartKey,
-} from "@/lib/study-with-me-access";
-
-function isAuthorizedWebhook(request) {
-  const configuredSecret = process.env.CALENDLY_WEBHOOK_SECRET;
-  if (!configuredSecret) return true;
-
-  const { searchParams } = new URL(request.url);
-  const querySecret = searchParams.get("secret") || "";
-  const headerSecret =
-    request.headers.get("x-study-with-me-secret") ||
-    request.headers.get("x-webhook-secret") ||
-    "";
-
-  return querySecret === configuredSecret || headerSecret === configuredSecret;
-}
+} from "../../../../lib/webhooks/calendly.js";
+import { resolveWebhookService } from "../../../../lib/webhooks/service.js";
+import {
+  verifyCalendlyWebhookSignature,
+  verifyLegacyWebhookSecret,
+} from "../../../../lib/webhooks/security.js";
 
 function toSafeLower(value) {
   return String(value || "").trim().toLowerCase();
@@ -51,6 +42,27 @@ async function findStudentProfileByEmail(service, email) {
   return data;
 }
 
+async function findExistingSession(service, { eventUri, inviteeUri }) {
+  if (!eventUri && !inviteeUri) return null;
+
+  let query = service
+    .from("study_with_me_sessions")
+    .select("id, status, starts_at, ends_at, calendly_event_uri, calendly_invitee_uri");
+
+  if (eventUri) {
+    query = query.eq("calendly_event_uri", eventUri).maybeSingle();
+  } else {
+    query = query.eq("calendly_invitee_uri", inviteeUri).maybeSingle();
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(error.message || "No se pudo revisar la sesion existente.");
+  }
+
+  return data || null;
+}
+
 async function markCancelledSession({ service, eventUri, inviteeUri }) {
   const payload = { status: "cancelled", updated_at: new Date().toISOString() };
   if (eventUri) {
@@ -61,27 +73,63 @@ async function markCancelledSession({ service, eventUri, inviteeUri }) {
   }
 }
 
-export async function POST(request) {
+export async function handleCalendlyWebhook(request, { service = null, env = process.env } = {}) {
   try {
-    if (!isAuthorizedWebhook(request)) {
-      return NextResponse.json({ error: "Firma invalida." }, { status: 401 });
-    }
+    const secret = requirePrivateServerEnv("CALENDLY_WEBHOOK_SECRET", {
+      env,
+      label: "CALENDLY_WEBHOOK_SECRET",
+    });
 
-    const body = await request.json();
+    const rawBody = await request.text();
+    const body = rawBody ? JSON.parse(rawBody) : {};
     const webhookEvent = String(body?.event || "").toLowerCase();
     const payload = body?.payload || {};
     const invitee = payload?.invitee || {};
     const calendlyEvent = payload?.event || {};
-
     const inviteeEmail = toSafeLower(invitee?.email || invitee?.email_address);
     const calendlyEventUri = String(calendlyEvent?.uri || payload?.event_uri || "").trim();
     const calendlyInviteeUri = String(invitee?.uri || payload?.invitee_uri || "").trim();
 
-    const service = getServiceSupabaseClient();
+    const signatureHeader =
+      request.headers.get("calendly-webhook-signature") ||
+      request.headers.get("x-calendly-webhook-signature") ||
+      request.headers.get("x-calendly-signature") ||
+      "";
+
+    if (signatureHeader) {
+      const signatureCheck = verifyCalendlyWebhookSignature({
+        signatureHeader,
+        rawBody,
+        secret,
+      });
+      if (!signatureCheck.valid) {
+        return NextResponse.json({ error: "Firma invalida." }, { status: 401 });
+      }
+    } else {
+      const legacyCheck = verifyLegacyWebhookSecret({
+        request,
+        expectedSecret: secret,
+        headerNames: ["x-study-with-me-secret", "x-webhook-secret"],
+        queryParamNames: ["secret"],
+      });
+      if (!legacyCheck.valid) {
+        return NextResponse.json({ error: "Firma invalida." }, { status: 401 });
+      }
+    }
+
+    const db = await resolveWebhookService(service);
 
     if (webhookEvent === "invitee.canceled") {
+      const existing = await findExistingSession(db, {
+        eventUri: calendlyEventUri,
+        inviteeUri: calendlyInviteeUri,
+      });
+      if (existing?.status === "cancelled") {
+        return NextResponse.json({ ok: true, deduped: true, status: "cancelled" });
+      }
+
       await markCancelledSession({
-        service,
+        service: db,
         eventUri: calendlyEventUri,
         inviteeUri: calendlyInviteeUri,
       });
@@ -92,7 +140,7 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, ignored: true });
     }
 
-    const student = await findStudentProfileByEmail(service, inviteeEmail);
+    const student = await findStudentProfileByEmail(db, inviteeEmail);
     if (!student?.id) {
       return NextResponse.json({ ok: true, ignored: true, reason: "student-not-found" });
     }
@@ -129,9 +177,27 @@ export async function POST(request) {
       updated_at: new Date().toISOString(),
     };
 
+    const existing = await findExistingSession(db, {
+      eventUri: calendlyEventUri,
+      inviteeUri: calendlyInviteeUri,
+    });
+
+    if (
+      existing &&
+      existing.status === "scheduled" &&
+      String(existing.calendly_event_uri || "") === String(row.calendly_event_uri || "") &&
+      String(existing.calendly_invitee_uri || "") === String(row.calendly_invitee_uri || "") &&
+      String(existing.starts_at || "") === String(row.starts_at || "") &&
+      String(existing.ends_at || "") === String(row.ends_at || "")
+    ) {
+      return NextResponse.json({ ok: true, deduped: true, status: "scheduled" });
+    }
+
     const result = calendlyEventUri
-      ? await service.from("study_with_me_sessions").upsert(row, { onConflict: "calendly_event_uri" })
-      : await service.from("study_with_me_sessions").insert(row);
+      ? await db.from("study_with_me_sessions").upsert(row, { onConflict: "calendly_event_uri" })
+      : existing?.id
+        ? await db.from("study_with_me_sessions").update(row).eq("id", existing.id)
+        : await db.from("study_with_me_sessions").insert(row);
 
     if (result.error) {
       const missingTable = getMissingTableName(result.error);
@@ -150,7 +216,17 @@ export async function POST(request) {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
+    if (error instanceof SyntaxError) {
+      return NextResponse.json({ error: "Webhook payload invalido." }, { status: 400 });
+    }
+
     console.error("[StudyWithMe] webhook error", error);
-    return NextResponse.json({ error: "Webhook error" }, { status: 400 });
+    const message = error?.message || "Webhook error";
+    const status = message.includes("no esta configurada") ? 500 : 400;
+    return NextResponse.json({ error: message }, { status });
   }
+}
+
+export async function POST(request) {
+  return handleCalendlyWebhook(request);
 }

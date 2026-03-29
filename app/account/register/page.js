@@ -2,6 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import PayerPhoneField, {
+  buildStructuredPayerPhone,
+  DEFAULT_PHONE_COUNTRY,
+  detectLikelyPhoneCountry,
+  validateStructuredPhone,
+} from "@/app/matricula/payer-phone-field";
+import TurnstileWidget from "@/components/turnstile-widget";
 
 const MONTH_NAMES = [
   "Enero",
@@ -470,15 +477,31 @@ function MobileBirthDatePicker({ value, onChange, minDate, maxDate }) {
 export default function PreEnrollmentRegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
-    phone: "",
+    phoneCountryCode: DEFAULT_PHONE_COUNTRY.dialCode,
+    phoneNationalNumber: "",
     birthDate: "",
   });
   const [emailSuggestions, setEmailSuggestions] = useState([]);
 
   const maxBirthDate = useMemo(() => getMaxBirthDateForMinimumAge(MINIMUM_REGISTER_AGE), []);
+  const structuredPhone = useMemo(
+    () => buildStructuredPayerPhone(formData.phoneCountryCode, formData.phoneNationalNumber),
+    [formData.phoneCountryCode, formData.phoneNationalNumber]
+  );
+  const phoneError = useMemo(
+    () =>
+      validateStructuredPhone({
+        countryCode: formData.phoneCountryCode,
+        nationalNumber: formData.phoneNationalNumber,
+        required: true,
+      }),
+    [formData.phoneCountryCode, formData.phoneNationalNumber]
+  );
+  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
 
   useEffect(() => {
     const cached = window.localStorage.getItem("pre_enroll_email_history");
@@ -493,6 +516,15 @@ export default function PreEnrollmentRegisterPage() {
     }
   }, []);
 
+  useEffect(() => {
+    const detectedCountry = detectLikelyPhoneCountry();
+    setFormData((current) =>
+      current.phoneCountryCode === DEFAULT_PHONE_COUNTRY.dialCode
+        ? { ...current, phoneCountryCode: detectedCountry.dialCode }
+        : current
+    );
+  }, []);
+
   async function handleRegister(event) {
     event.preventDefault();
     setLoading(true);
@@ -502,15 +534,41 @@ export default function PreEnrollmentRegisterPage() {
       setLoading(false);
       return;
     }
+    if (phoneError) {
+      setError(phoneError);
+      setLoading(false);
+      return;
+    }
+    if (!turnstileToken) {
+      setError("Completa la verificacion anti-spam.");
+      setLoading(false);
+      return;
+    }
     try {
+      const searchParams = new URLSearchParams(window.location.search);
+      const host = window.location.host || "";
       const response = await fetch("/api/account/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fullName: formData.fullName,
           email: formData.email,
-          phone: formData.phone,
+          phone: structuredPhone,
+          phoneCountryCode: formData.phoneCountryCode,
+          phoneNationalNumber: formData.phoneNationalNumber,
           birthDate: formData.birthDate,
+          turnstileToken,
+          siteKey: host === "virtual.englishmate.com.pe" ? "virtual_site" : "main_site",
+          formKey: "pre_enrollment_register",
+          formLabel: "Pre-enrollment Register",
+          pagePath: "/account/register",
+          landingUrl: window.location.href,
+          referrerUrl: document.referrer || null,
+          utmSource: searchParams.get("utm_source"),
+          utmMedium: searchParams.get("utm_medium"),
+          utmCampaign: searchParams.get("utm_campaign"),
+          utmTerm: searchParams.get("utm_term"),
+          utmContent: searchParams.get("utm_content"),
         }),
       });
       const payload = await response.json();
@@ -590,13 +648,22 @@ export default function PreEnrollmentRegisterPage() {
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-wide text-muted">Celular</label>
-                <input
-                  type="tel"
+                <PayerPhoneField
+                  label="Celular"
                   required
-                  value={formData.phone}
-                  onChange={(event) => setFormData({ ...formData, phone: event.target.value })}
-                  className="w-full rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground"
+                  countryCode={formData.phoneCountryCode}
+                  nationalNumber={formData.phoneNationalNumber}
+                  compact
+                  showCountryName={false}
+                  preferredCountryCode={formData.phoneCountryCode}
+                  helperText="Selecciona tu codigo y escribe tu numero."
+                  onCountryCodeChange={(value) =>
+                    setFormData((current) => ({ ...current, phoneCountryCode: value }))
+                  }
+                  onNationalNumberChange={(value) =>
+                    setFormData((current) => ({ ...current, phoneNationalNumber: value }))
+                  }
+                  error={phoneError}
                 />
               </div>
               <div className="space-y-2">
@@ -618,6 +685,15 @@ export default function PreEnrollmentRegisterPage() {
             >
               {loading ? "Creando acceso..." : "Enviar pre-matricula"}
             </button>
+            {turnstileSiteKey ? (
+              <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3">
+                <TurnstileWidget siteKey={turnstileSiteKey} onTokenChange={setTurnstileToken} />
+              </div>
+            ) : (
+              <p className="text-xs text-danger">
+                Falta configurar NEXT_PUBLIC_TURNSTILE_SITE_KEY para el formulario publico.
+              </p>
+            )}
             <div className="text-center text-sm text-muted">
               Ya registre mis datos.{" "}
               <Link href="/login/access" className="font-semibold text-primary hover:underline">

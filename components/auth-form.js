@@ -81,11 +81,11 @@ function EmailForm({ formAction, context, state }) {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload.error || "No se pudo reenviar OTP.");
+        throw new Error(payload.error || "No se pudo reenviar el Codigo de Acceso.");
       }
-      setOtpMessage("OTP reenviado a tu correo.");
+      setOtpMessage("Codigo de Acceso reenviado a tu correo.");
     } catch (error) {
-      setOtpError(error?.message || "No se pudo reenviar OTP.");
+      setOtpError(error?.message || "No se pudo reenviar el Codigo de Acceso.");
     } finally {
       setSendingOtp(false);
     }
@@ -113,7 +113,7 @@ function EmailForm({ formAction, context, state }) {
       {requireOtp ? (
         <>
           <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">OTP de correo</label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Codigo de Acceso</label>
             <input
               type="text"
               name="otp"
@@ -131,7 +131,7 @@ function EmailForm({ formAction, context, state }) {
               disabled={sendingOtp}
               className="w-full rounded-2xl border border-border bg-surface px-4 py-2.5 text-xs font-semibold text-foreground hover:bg-surface-2 disabled:opacity-50"
             >
-              {sendingOtp ? "Reenviando OTP..." : "Reenviar OTP"}
+              {sendingOtp ? "Reenviando Codigo de Acceso..." : "Reenviar Codigo de Acceso"}
             </button>
             {otpMessage ? <p className="text-xs text-success">{otpMessage}</p> : null}
             {otpError ? <p className="text-xs text-danger">{otpError}</p> : null}
@@ -386,6 +386,5 @@ export default function PrivateLoginCard({
     </div>
   );
 }
-
 
 

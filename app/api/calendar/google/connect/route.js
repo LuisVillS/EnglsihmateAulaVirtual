@@ -1,4 +1,3 @@
-import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import {
@@ -6,7 +5,7 @@ import {
   createGoogleOAuthState,
   hasGoogleCalendarOAuthConfig,
   resolveGoogleRedirectUri,
-  resolveOriginFromHeaders,
+  resolveCanonicalAppOrigin,
 } from "@/lib/google-calendar-oauth";
 
 function asSafeReturnTo(value) {
@@ -35,8 +34,7 @@ export async function GET(request) {
     return NextResponse.redirect(new URL("/app/calendario?google=state_error", request.url));
   }
 
-  const headerStore = await headers();
-  const origin = resolveOriginFromHeaders(headerStore);
+  const origin = resolveCanonicalAppOrigin();
   const redirectUri = resolveGoogleRedirectUri(origin);
   const authUrl = buildGoogleOAuthUrl({ state, redirectUri });
   return NextResponse.redirect(authUrl);

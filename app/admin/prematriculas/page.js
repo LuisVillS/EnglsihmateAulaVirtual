@@ -13,15 +13,13 @@ const STATUS_OPTIONS = [
   { value: "", label: "Todas" },
   { value: "PAYMENT_SUBMITTED", label: "Pago enviado" },
   { value: "PAID_AUTO", label: "Pago confirmado" },
-  { value: "APPROVED", label: "Aprobado" },
-  { value: "REJECTED", label: "Rechazado" },
   { value: "RESERVED", label: "Reserva activa" },
   { value: "IN_PROGRESS", label: "En progreso" },
   { value: "EMAIL_VERIFIED", label: "Correo verificado" },
   { value: "PENDING_EMAIL_VERIFICATION", label: "Pendiente verificacion" },
-  { value: "EXPIRED", label: "Expirado" },
-  { value: "ABANDONED", label: "Abandonado" },
 ];
+const ACTIVE_STATUS_VALUES = new Set(STATUS_OPTIONS.map((option) => option.value).filter(Boolean));
+const TERMINAL_HIDDEN_STATUSES = ["APPROVED", "REJECTED", "EXPIRED", "ABANDONED"];
 
 const STEP_OPTIONS = [
   { value: "", label: "Todos los pasos" },
@@ -126,7 +124,8 @@ export default async function PreEnrollmentsPage({ searchParams }) {
   const resolvedSearchParams = await Promise.resolve(searchParams);
   const { supabase } = await requireAdminPageAccess();
 
-  const status = resolvedSearchParams?.status?.toString() || "";
+  const requestedStatus = resolvedSearchParams?.status?.toString() || "";
+  const status = ACTIVE_STATUS_VALUES.has(requestedStatus) ? requestedStatus : "";
   const step = resolvedSearchParams?.step?.toString() || "";
   const period = resolvedSearchParams?.period?.toString() || "";
 
@@ -134,11 +133,16 @@ export default async function PreEnrollmentsPage({ searchParams }) {
     .from("pre_enrollments")
     .select("id, user_id, period, status, step, selected_schedule_id, payment_method, payment_proof_url, payment_submitted_at, reservation_expires_at, created_at")
     .order("created_at", { ascending: false });
-  if (status) query = query.eq("status", status);
+  if (status) {
+    query = query.eq("status", status);
+  } else {
+    query = query.not("status", "in", `(${TERMINAL_HIDDEN_STATUSES.join(",")})`);
+  }
   if (step) query = query.eq("step", step);
   if (period) query = query.eq("period", period);
 
   let queueCountsQuery = supabase.from("pre_enrollments").select("status");
+  queueCountsQuery = queueCountsQuery.not("status", "in", `(${TERMINAL_HIDDEN_STATUSES.join(",")})`);
   if (step) queueCountsQuery = queueCountsQuery.eq("step", step);
   if (period) queueCountsQuery = queueCountsQuery.eq("period", period);
 
@@ -257,7 +261,9 @@ export default async function PreEnrollmentsPage({ searchParams }) {
             ))}
           </div>
         ) : (
-          <p className="text-xs text-[#64748b]">Sin filtros activos. La bandeja muestra todos los registros.</p>
+          <p className="text-xs text-[#64748b]">
+            Sin filtros activos. La bandeja muestra solo los registros activos y pendientes.
+          </p>
         )}
       </AdminCard>
 

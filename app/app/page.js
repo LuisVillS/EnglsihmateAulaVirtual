@@ -1,9 +1,9 @@
-﻿import Link from "next/link";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getRequestUserContext } from "@/lib/request-user-context";
 import { USER_ROLES } from "@/lib/roles";
 import { autoDeactivateExpiredCommissions, getLimaTodayISO, resolveCommissionStatus } from "@/lib/commissions";
-import { buildFrequencySessionDrafts } from "@/lib/course-sessions";
+import { buildFrequencySessionDrafts, buildSessionDraftsFromCommission } from "@/lib/course-sessions";
 import { loadStudentAppSkillSnapshot, normalizeLevelCode } from "@/lib/student-skills";
 import { withSupabaseRequestTrace } from "@/lib/supabase-tracing";
 
@@ -14,561 +14,548 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function parseScore(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return null;
-  return clamp(parsed, 0, 100);
-}
-
-function normalizeCourseLevel(raw) {
-  if (!raw) return null;
-  return raw.toUpperCase().replace(/\s+/g, " ").trim();
-}
-
-function parseCourseLevel(raw) {
-  const normalized = normalizeCourseLevel(raw);
-  if (!normalized) return { tier: "Advanced", code: "C1", normalized: null };
-
-  const codeMatch = normalized.match(/[ABC]\d/);
-  const code = codeMatch ? codeMatch[0] : null;
-  let tier = "Advanced";
-
-  if (normalized.includes("BASICO")) {
-    tier = "Basic";
-  } else if (normalized.includes("INTERMEDIO")) {
-    tier = "Intermediate";
-  }
-
-  return { tier, code, normalized };
-}
-
-function formatMonthYear(value) {
-  if (!value) return "TBD";
-  const date = value instanceof Date ? value : parseDateOnly(value) || new Date(value);
-  if (Number.isNaN(date.getTime())) return "TBD";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    year: "numeric",
-    timeZone: LIMA_TIME_ZONE,
-  }).format(date);
+function parseDateTime(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function parseDateOnly(value) {
   if (!value) return null;
-  const [year, month, day] = value.split("-").map(Number);
+  const raw = String(value).slice(0, 10);
+  const [year, month, day] = raw.split("-").map(Number);
   if (!year || !month || !day) return null;
   return new Date(Date.UTC(year, month - 1, day, LIMA_OFFSET_HOURS, 0, 0, 0));
 }
 
-function getLimaParts(date) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: LIMA_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(date);
-  const lookup = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-  return {
-    year: Number(lookup.year),
-    month: Number(lookup.month),
-    day: Number(lookup.day),
-    hour: Number(lookup.hour),
-    minute: Number(lookup.minute),
-  };
-}
-
-function limaPartsToUtcDate({ year, month, day, hour = 0, minute = 0 }) {
-  return new Date(Date.UTC(year, month - 1, day, hour + LIMA_OFFSET_HOURS, minute, 0, 0));
-}
-
-function formatDaysFull(days) {
-  if (!Array.isArray(days) || !days.length) return "Days TBD";
-  const map = {
-    1: "Monday",
-    2: "Tuesday",
-    3: "Wednesday",
-    4: "Thursday",
-    5: "Friday",
-    6: "Saturday",
-    7: "Sunday",
-  };
-  return days.map((day) => map[day] || day).join(", ");
-}
-
-function getNextClassDate({ daysOfWeek, startTime, startDate, endDate }) {
-  if (!Array.isArray(daysOfWeek) || !daysOfWeek.length || !startTime) return null;
-
-  const now = new Date();
-  const nowParts = getLimaParts(now);
-  const nowLimaUtc = limaPartsToUtcDate(nowParts);
-  const baseDate = startDate && startDate > nowLimaUtc
-    ? startDate
-    : limaPartsToUtcDate({ year: nowParts.year, month: nowParts.month, day: nowParts.day });
-
-  for (let i = 0; i < 21; i += 1) {
-    const candidate = new Date(Date.UTC(
-      baseDate.getUTCFullYear(),
-      baseDate.getUTCMonth(),
-      baseDate.getUTCDate() + i,
-      LIMA_OFFSET_HOURS,
-      0,
-      0,
-      0
-    ));
-    if (endDate && candidate > endDate) return null;
-
-    const weekday = candidate.getUTCDay();
-    const normalized = weekday === 0 ? 7 : weekday;
-
-    if (!daysOfWeek.includes(normalized)) continue;
-
-    const [hours, minutes] = startTime.split(":").map(Number);
-    candidate.setUTCHours((hours || 0) + LIMA_OFFSET_HOURS, minutes || 0, 0, 0);
-
-    if (candidate >= nowLimaUtc) {
-      return candidate;
-    }
+function normalizeDateInput(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
   }
-
-  return null;
+  return parseDateTime(value) || parseDateOnly(value);
 }
 
-function resolveNextClassFromRows(rows, nowMs) {
-  if (!Array.isArray(rows) || !rows.length) return null;
-  const normalized = rows
-    .map((row) => {
-      const startsAt = row?.starts_at ? new Date(row.starts_at) : null;
-      const ms = startsAt && !Number.isNaN(startsAt.getTime()) ? startsAt.getTime() : Number.NaN;
-      return { ms, startsAt };
-    })
-    .filter((entry) => Number.isFinite(entry.ms))
-    .sort((a, b) => a.ms - b.ms);
-
-  const upcoming = normalized.find((entry) => entry.ms >= nowMs);
-  return upcoming?.startsAt || null;
-}
-
-function resolveDraftRangeAndNext(commission, nowMs) {
-  if (!commission) return { startDate: null, endDate: null, nextClass: null };
-  const startMonth = commission.start_month || commission.start_date;
-  const durationMonths = Number(commission.duration_months || 4);
-  const modalityKey = commission.modality_key;
-  const startTime = commission.start_time;
-  const endTime = commission.end_time;
-  if (!startMonth || !durationMonths || !modalityKey || !startTime || !endTime) {
-    return { startDate: null, endDate: null, nextClass: null };
-  }
-
-  const rows = buildFrequencySessionDrafts({
-    commissionId: null,
-    frequency: modalityKey,
-    startMonth,
-    durationMonths,
-    startTime,
-    endTime,
-    status: "scheduled",
-  });
-
-  return {
-    startDate: rows[0]?.session_date || null,
-    endDate: rows[rows.length - 1]?.session_date || null,
-    nextClass: resolveNextClassFromRows(rows, nowMs),
-  };
-}
-
-function parseTimeParts(value) {
-  if (!value || typeof value !== "string") return null;
-  const [hours, minutes] = value.split(":").map(Number);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-  return { hours, minutes };
-}
-
-function countClassesBetween({ startDate, endDate, daysOfWeek, startTime, today = new Date() }) {
-  if (!startDate || !endDate || !Array.isArray(daysOfWeek) || !daysOfWeek.length) {
-    return { total: 0, completed: 0 };
-  }
-
-  const todayParts = getLimaParts(today);
-  const todayLimaUtc = limaPartsToUtcDate(todayParts);
-  const timeParts = parseTimeParts(startTime);
-  const totalDays = Math.max(0, Math.floor((endDate - startDate) / 86400000) + 1);
-  let total = 0;
-  let completed = 0;
-
-  for (let i = 0; i < totalDays; i += 1) {
-    const current = new Date(Date.UTC(
-      startDate.getUTCFullYear(),
-      startDate.getUTCMonth(),
-      startDate.getUTCDate() + i,
-      LIMA_OFFSET_HOURS,
-      0,
-      0,
-      0
-    ));
-    const weekday = current.getUTCDay();
-    const normalized = weekday === 0 ? 7 : weekday;
-    if (!daysOfWeek.includes(normalized)) continue;
-
-    total += 1;
-    if (timeParts) {
-      current.setUTCHours(timeParts.hours + LIMA_OFFSET_HOURS, timeParts.minutes, 0, 0);
-    }
-    if (current <= todayLimaUtc) {
-      completed += 1;
-    }
-  }
-
-  return { total, completed };
-}
-
-function computeProgressFromSchedule({ startDate, endDate, daysOfWeek, startTime }) {
-  const { total, completed } = countClassesBetween({ startDate, endDate, daysOfWeek, startTime });
-  if (!total) return 0;
-  const percent = Math.round((completed / total) * 100);
-  return clamp(percent, 0, 100);
-}
-
-function formatNextClass(date) {
-  if (!date) return "TBD";
-  const dateLabel = new Intl.DateTimeFormat("en-US", {
+function formatDateLabel(date, locale = "en-US") {
+  const normalized = normalizeDateInput(date);
+  if (!normalized) return "TBD";
+  return new Intl.DateTimeFormat(locale, {
     weekday: "long",
     day: "2-digit",
     month: "short",
     timeZone: LIMA_TIME_ZONE,
+  }).format(normalized);
+}
+
+function formatMonthYear(value, locale = "en-US") {
+  const date = normalizeDateInput(value);
+  if (!date) return "TBD";
+  return new Intl.DateTimeFormat(locale, {
+    month: "short",
+    year: "numeric",
+    timeZone: LIMA_TIME_ZONE,
   }).format(date);
-  const timeLabel = new Intl.DateTimeFormat("en-US", {
+}
+
+function formatTimeLabel(date, locale = "en-US") {
+  const normalized = normalizeDateInput(date);
+  if (!normalized) return "TBD";
+  return new Intl.DateTimeFormat(locale, {
     hour: "2-digit",
     minute: "2-digit",
     timeZone: LIMA_TIME_ZONE,
-  }).format(date);
-  return `${dateLabel} - ${timeLabel}`;
+  }).format(normalized);
+}
+
+function formatNextClass(date) {
+  if (!date) return "Schedule pending";
+  return `${formatDateLabel(date)} - ${formatTimeLabel(date)}`;
+}
+
+function formatLevelBadge(level) {
+  const raw = String(level || "").trim();
+  if (!raw) return "Course pending";
+  return raw.toUpperCase();
+}
+
+function getFirstName(name) {
+  return String(name || "").trim().split(/\s+/).filter(Boolean)[0] || "Luis";
+}
+
+function formatMinutesToHours(minutes) {
+  const safe = Number(minutes);
+  if (!Number.isFinite(safe) || safe <= 0) return "0h";
+  const rounded = Math.round((safe / 60) * 10) / 10;
+  return Number.isInteger(rounded) ? `${rounded}h` : `${rounded}h`;
+}
+
+function getSessionStart(row) {
+  return parseDateTime(row?.starts_at) || parseDateOnly(row?.session_date);
+}
+
+function getSessionEnd(row) {
+  return parseDateTime(row?.ends_at) || getSessionStart(row);
+}
+
+function resolveNextSession(rows, nowMs) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => ({ row, startsAt: getSessionStart(row) }))
+    .filter((entry) => entry.startsAt && !Number.isNaN(entry.startsAt.getTime()))
+    .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime())
+    .find((entry) => entry.startsAt.getTime() >= nowMs) || null;
+}
+
+function countScheduleMetrics(rows, nowMs) {
+  const normalized = (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      const start = getSessionStart(row);
+      const end = getSessionEnd(row) || start;
+      if (!start) return null;
+      return {
+        startMs: start.getTime(),
+        endMs: end ? end.getTime() : start.getTime(),
+        durationMinutes: end ? Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000)) : 0,
+      };
+    })
+    .filter(Boolean);
+
+  const total = normalized.length;
+  const completed = normalized.filter((entry) => entry.endMs < nowMs).length;
+  const practiceMinutes = normalized.reduce((sum, entry) => sum + entry.durationMinutes, 0);
+  return { total, completed, practiceMinutes };
+}
+
+function buildDraftSessions(commission) {
+  if (!commission) return [];
+
+  const frequencyRows = commission.start_month && commission.modality_key && commission.start_time && commission.end_time
+    ? buildFrequencySessionDrafts({
+        commissionId: commission.id || null,
+        frequency: commission.modality_key,
+        startMonth: commission.start_month || commission.start_date,
+        durationMonths: Number(commission.duration_months || 4),
+        startTime: commission.start_time,
+        endTime: commission.end_time,
+        status: "scheduled",
+      })
+    : [];
+
+  if (frequencyRows.length) return frequencyRows;
+
+  return buildSessionDraftsFromCommission({
+    startDate: commission.start_date,
+    endDate: commission.end_date,
+    daysOfWeek: commission.days_of_week,
+  }).map((draft, index) => ({
+    id: `draft-${index + 1}`,
+    cycle_month: draft.session_date?.slice(0, 7) ? `${draft.session_date.slice(0, 7)}-01` : null,
+    session_index: index + 1,
+    session_in_cycle: index + 1,
+    session_date: draft.session_date,
+    starts_at: null,
+    ends_at: null,
+    day_label: draft.day_label,
+    live_link: null,
+  }));
+}
+
+function groupSessionsIntoModules(rows, nowMs) {
+  const sessions = [...(Array.isArray(rows) ? rows : [])].sort((a, b) => {
+    const aMs = getSessionStart(a)?.getTime() || 0;
+    const bMs = getSessionStart(b)?.getTime() || 0;
+    return aMs - bMs;
+  });
+
+  if (!sessions.length) return [];
+
+  const chunkSize = Math.max(1, Math.ceil(sessions.length / 3));
+  const groups = [];
+
+  for (let i = 0; i < 3; i += 1) {
+    const startIndex = i * chunkSize;
+    const groupRows = sessions.slice(startIndex, startIndex + chunkSize);
+    if (!groupRows.length) continue;
+
+    const first = groupRows[0];
+    const last = groupRows[groupRows.length - 1];
+    const completed = groupRows.filter((row) => {
+      const end = getSessionEnd(row);
+      return end ? end.getTime() < nowMs : false;
+    }).length;
+    const minutes = groupRows.reduce((sum, row) => {
+      const start = getSessionStart(row);
+      const end = getSessionEnd(row) || start;
+      return sum + (start && end ? Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000)) : 0);
+    }, 0);
+
+    groups.push({
+      step: String(i + 1).padStart(2, "0"),
+      title: formatMonthYear(first?.cycle_month || first?.session_date || first?.starts_at),
+      subtitle: `${groupRows.length} Lessons • ${formatMinutesToHours(minutes)} Practice Hours`,
+      progress: groupRows.length ? clamp(Math.round((completed / groupRows.length) * 100), 0, 100) : 0,
+      range: `${formatDateLabel(first?.starts_at || first?.session_date)} - ${formatDateLabel(last?.starts_at || last?.session_date)}`,
+      href: first?.live_link || "/app/curso",
+    });
+  }
+
+  return groups.slice(0, 3);
+}
+
+function ProgressRing({ value = 0 }) {
+  const safeValue = clamp(Math.round(Number(value) || 0), 0, 100);
+  const radius = 58;
+  const circumference = 2 * Math.PI * radius;
+
+  return (
+    <div className="relative mx-auto flex h-[170px] w-[170px] items-center justify-center">
+      <svg viewBox="0 0 140 140" className="h-full w-full -rotate-90">
+        <circle cx="70" cy="70" r={radius} fill="none" stroke="rgba(16,52,116,0.12)" strokeWidth="10" />
+        <circle
+          cx="70"
+          cy="70"
+          r={radius}
+          fill="none"
+          stroke="#103474"
+          strokeWidth="10"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference - (safeValue / 100) * circumference}
+        />
+      </svg>
+      <div className="absolute inset-4 rounded-full bg-white/95" />
+      <div className="absolute text-center">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">Progress</p>
+        <p className="mt-2 text-4xl font-semibold tracking-tight text-primary">{safeValue}%</p>
+      </div>
+    </div>
+  );
+}
+
+function MetricTile({ label, value }) {
+  return (
+    <div className="rounded-[18px] border border-[rgba(16,52,116,0.08)] bg-white/85 px-4 py-4 shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">{label}</p>
+      <p className="mt-2 text-lg font-semibold leading-tight text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function SkillBar({ label, value }) {
+  const safeValue = clamp(Number(value) || 0, 0, 100);
+  return (
+    <div className="space-y-4">
+      <div className="flex items-end justify-between gap-4">
+        <span className="text-sm font-semibold text-primary">{label}</span>
+        <span className="text-sm font-medium text-muted">{Math.round(safeValue)}%</span>
+      </div>
+      <div className="h-3 w-full overflow-hidden rounded-full bg-[#dbe5ff]">
+        <div className="h-full rounded-full bg-[#c9d7ff]" style={{ width: `${safeValue}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ArrowRightIcon({ className = "h-5 w-5" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2.2">
+      <path d="M5 12h14" />
+      <path d="M13 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon({ className = "h-5 w-5" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2.2">
+      <path d="M9 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+function ModuleCard({ step, title, subtitle, progress, range, href }) {
+  const isExternal = String(href || "").startsWith("http");
+  const actionClassName =
+    "mt-6 inline-flex min-h-11 w-full items-center justify-center rounded-[16px] border border-[rgba(16,52,116,0.10)] bg-white px-4 py-3 text-sm font-semibold text-primary transition hover:bg-[#f8fbff]";
+
+  return (
+    <article className="rounded-[24px] border border-[rgba(16,52,116,0.08)] bg-white p-6 shadow-[0px_12px_32px_rgba(0,25,67,0.04)]">
+      <div className="flex items-start gap-4">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[16px] bg-[#eef4ff] text-lg font-semibold text-primary">
+          {step}
+        </div>
+        <div className="min-w-0">
+          <h3 className="text-xl font-semibold leading-tight text-foreground">{title}</h3>
+          <p className="mt-1 text-sm text-muted">{subtitle}</p>
+        </div>
+      </div>
+
+      <div className="mt-8">
+        <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">
+          <span>Progress</span>
+          <span>{Math.round(progress)}%</span>
+        </div>
+        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-[#edf0f5]">
+          <div className="h-full rounded-full bg-[#e3e7ee]" style={{ width: `${clamp(Number(progress) || 0, 0, 100)}%` }} />
+        </div>
+      </div>
+
+      <p className="mt-6 text-xs text-muted">{range}</p>
+
+      {isExternal ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" className={actionClassName}>
+          Start Module
+        </a>
+      ) : (
+        <Link href={href} className={actionClassName}>
+          Start Module
+        </Link>
+      )}
+    </article>
+  );
+}
+
+async function loadCourseSessions(supabase, commissionId) {
+  if (!commissionId) return [];
+
+  let columns = [
+    "id",
+    "cycle_month",
+    "session_index",
+    "session_in_cycle",
+    "session_date",
+    "starts_at",
+    "ends_at",
+    "day_label",
+    "live_link",
+    "recording_link",
+    "recording_passcode",
+  ];
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const query = supabase.from("course_sessions").select(columns.join(",")).eq("commission_id", commissionId);
+    if (columns.includes("starts_at")) query.order("starts_at", { ascending: true, nullsFirst: false });
+    if (columns.includes("session_date")) query.order("session_date", { ascending: true });
+
+    const result = await query;
+    if (!result.error) return result.data || [];
+
+    const missingColumn = String(result.error?.message || "").match(
+      /(?:could not find the '([^']+)' column|column\s+\w+\.([a-zA-Z0-9_]+)\s+does not exist|column\s+([a-zA-Z0-9_]+)\s+does not exist)/i
+    );
+    const missing = missingColumn?.[1] || missingColumn?.[2] || missingColumn?.[3] || null;
+    if (!missing || !columns.includes(missing)) break;
+    columns = columns.filter((column) => column !== missing);
+  }
+
+  return [];
 }
 
 export default async function StudentDashboard() {
   return withSupabaseRequestTrace("page:/app", async () => {
-  await autoDeactivateExpiredCommissions();
-  const { supabase, user, isAdmin, role } = await getRequestUserContext();
+    await autoDeactivateExpiredCommissions();
+    const { supabase, user, isAdmin, role } = await getRequestUserContext();
 
-  if (!user) {
-    redirect("/");
-  }
+    if (!user) redirect("/");
+    if (isAdmin) redirect("/admin/panel");
+    if (role === USER_ROLES.NON_STUDENT) redirect("/app/matricula?locked=1");
 
-  if (isAdmin) {
-    redirect("/admin/panel");
-  }
-  if (role === USER_ROLES.NON_STUDENT) {
-    redirect("/app/matricula?locked=1");
-  }
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select(
+        "full_name, course_level, commission:course_commissions (id, course_level, commission_number, start_date, end_date, start_month, duration_months, modality_key, days_of_week, start_time, end_time, status, is_active)"
+      )
+      .eq("id", user.id)
+      .maybeSingle();
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select(
-      "full_name, course_level, start_month, enrollment_date, preferred_hour, commission_id, commission:course_commissions (id, course_level, commission_number, start_date, end_date, start_month, duration_months, modality_key, days_of_week, start_time, end_time, status, is_active)"
-    )
-    .eq("id", user.id)
-    .maybeSingle();
+    const name = profile?.full_name || user.user_metadata?.full_name || user.email || "Student";
+    const commission = profile?.commission || null;
+    const hasActiveEnrollment = Boolean(commission?.id && resolveCommissionStatus(commission, getLimaTodayISO()) === "active");
+    const nowMs = Date.now();
 
-  const name = profile?.full_name || user.user_metadata?.full_name || user.email || "Student";
-  const commission = profile?.commission || null;
-  const todayIso = getLimaTodayISO();
-  const commissionStatus = commission ? resolveCommissionStatus(commission, todayIso) : "inactive";
-  const hasActiveEnrollment = Boolean(commission?.id && commissionStatus === "active");
-  const now = new Date();
-  const nowMs = now.getTime();
+    const rawSessions = hasActiveEnrollment ? await loadCourseSessions(supabase, commission.id) : [];
+    const draftSessions = !rawSessions.length && hasActiveEnrollment ? buildDraftSessions(commission) : [];
+    const sessionRows = rawSessions.length ? rawSessions : draftSessions;
 
-  let derivedStartDate = commission?.start_date || null;
-  let derivedEndDate = commission?.end_date || null;
-  let derivedNextClassDate = null;
+    const nextSession = hasActiveEnrollment ? resolveNextSession(sessionRows, nowMs) : null;
+    const resolvedCourseLevel = hasActiveEnrollment ? commission?.course_level : profile?.course_level || null;
+    const resolvedLevelCode = normalizeLevelCode(resolvedCourseLevel || "");
+    const skillSnapshot = await loadStudentAppSkillSnapshot({
+      db: supabase,
+      userId: user.id,
+      currentLevel: resolvedLevelCode,
+    });
 
-  const fallbackDraft = hasActiveEnrollment ? resolveDraftRangeAndNext(commission, nowMs) : null;
+    const skillCards = [
+      { label: "Speaking", value: skillSnapshot?.combined?.speaking },
+      { label: "Reading", value: skillSnapshot?.combined?.reading },
+      { label: "Grammar", value: skillSnapshot?.combined?.grammar },
+      { label: "Listening", value: skillSnapshot?.combined?.listening },
+    ];
 
-  if (hasActiveEnrollment && commission?.id) {
-    const nowIso = now.toISOString();
+    const metrics = countScheduleMetrics(sessionRows, nowMs);
+    const courseProgress = metrics.total ? clamp(Math.round((metrics.completed / metrics.total) * 100), 0, 100) : 0;
+    const moduleCards = groupSessionsIntoModules(sessionRows, nowMs);
+    const firstName = getFirstName(name);
+    const courseBadge = formatLevelBadge(resolvedCourseLevel || commission?.course_level || "");
+    const nextClassLabel = hasActiveEnrollment
+      ? nextSession?.row?.live_link
+        ? "Join Class"
+        : "Go to Course"
+      : "Open Enrollment";
+    const nextClassHref = hasActiveEnrollment ? nextSession?.row?.live_link || "/app/curso" : "/app/matricula";
+    const nextClassExternal = Boolean(hasActiveEnrollment && nextSession?.row?.live_link);
+    const academicTip = !hasActiveEnrollment
+      ? "Complete enrollment first so your class schedule, course path, and skill indicators can populate here."
+      : skillCards.filter((skill) => skill.value != null).every((skill) => Number(skill.value) === 0)
+        ? "Consistency is key in language acquisition. Dedicate at least 15 minutes daily to your Reading exercises."
+        : "Keep your weakest skill in view before the next class and review your course rhythm regularly.";
 
-    const { data: nextRows, error: nextError } = await supabase
-      .from("course_sessions")
-      .select("starts_at")
-      .eq("commission_id", commission.id)
-      .gte("starts_at", nowIso)
-      .order("starts_at", { ascending: true, nullsFirst: false })
-      .limit(1);
-
-    if (!nextError) {
-      derivedNextClassDate = resolveNextClassFromRows(nextRows || [], nowMs);
-    }
-
-    const { data: firstRows, error: firstError } = await supabase
-      .from("course_sessions")
-      .select("session_date")
-      .eq("commission_id", commission.id)
-      .order("session_date", { ascending: true })
-      .limit(1);
-
-    if (!firstError && firstRows?.[0]?.session_date) {
-      derivedStartDate = firstRows[0].session_date;
-    }
-
-    const { data: lastRows, error: lastError } = await supabase
-      .from("course_sessions")
-      .select("session_date")
-      .eq("commission_id", commission.id)
-      .order("session_date", { ascending: false })
-      .limit(1);
-
-    if (!lastError && lastRows?.[0]?.session_date) {
-      derivedEndDate = lastRows[0].session_date;
-    }
-  }
-
-  if (hasActiveEnrollment && !derivedStartDate) derivedStartDate = fallbackDraft?.startDate || null;
-  if (hasActiveEnrollment && !derivedEndDate) derivedEndDate = fallbackDraft?.endDate || null;
-  if (hasActiveEnrollment && !derivedNextClassDate) derivedNextClassDate = fallbackDraft?.nextClass || null;
-
-  const resolvedCourseLevel = hasActiveEnrollment ? commission?.course_level : profile?.course_level || null;
-  const resolvedLevelCode = normalizeLevelCode(resolvedCourseLevel || "");
-  const skillSnapshot = await loadStudentAppSkillSnapshot({
-    db: supabase,
-    userId: user.id,
-    currentLevel: resolvedLevelCode,
-  });
-  const skillCards = [
-    { label: "Speaking", value: parseScore(skillSnapshot?.combined?.speaking) },
-    { label: "Reading", value: parseScore(skillSnapshot?.combined?.reading) },
-    { label: "Grammar", value: parseScore(skillSnapshot?.combined?.grammar) },
-    { label: "Listening", value: parseScore(skillSnapshot?.combined?.listening) },
-  ];
-  const levelInfo = parseCourseLevel(resolvedCourseLevel);
-  const courseTitle = hasActiveEnrollment && resolvedCourseLevel
-    ? `English ${levelInfo.code || "C1"}`
-    : "No active course assigned";
-  const courseStageLabel = hasActiveEnrollment ? resolvedCourseLevel || `${levelInfo.tier} track` : "Enrollment required";
-
-  const courseProgress = hasActiveEnrollment
-    ? computeProgressFromSchedule({
-    startDate: parseDateOnly(derivedStartDate || commission?.start_date),
-    endDate: parseDateOnly(derivedEndDate || commission?.end_date),
-    daysOfWeek: commission?.days_of_week,
-    startTime: commission?.start_time,
-      })
-    : 0;
-  const globalProgress = courseProgress;
-  const remainingProgress = clamp(100 - globalProgress, 0, 100);
-
-  const startLabel = hasActiveEnrollment && derivedStartDate ? formatMonthYear(derivedStartDate) : "TBD";
-  const endLabel = hasActiveEnrollment && derivedEndDate ? formatMonthYear(derivedEndDate) : "TBD";
-
-  const scheduleRange = hasActiveEnrollment && commission?.start_time && commission?.end_time
-    ? `${commission.start_time} to ${commission.end_time}`
-    : "Hours TBD";
-
-  const classDays = hasActiveEnrollment ? formatDaysFull(commission?.days_of_week) : "Days TBD";
-
-  const nextClassDate = hasActiveEnrollment
-    ? derivedNextClassDate ||
-      getNextClassDate({
-        daysOfWeek: commission?.days_of_week,
-        startTime: commission?.start_time,
-        startDate: parseDateOnly(derivedStartDate || commission?.start_date),
-        endDate: parseDateOnly(derivedEndDate || commission?.end_date),
-      })
-    : null;
-
-  return (
-    <section className="space-y-6 text-foreground">
-      <header className="student-panel px-5 py-5 sm:px-6">
-        <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
-          <div>
-            <p className="text-xs uppercase tracking-[0.38em] text-muted">Dashboard</p>
-            <h1 className="mt-2 text-3xl font-semibold text-foreground">Welcome back, {name}.</h1>
-            <p className="mt-2 max-w-2xl text-sm text-muted">
-              Track your current course, upcoming class, academic path, and core skills from one place.
+    return (
+      <section className="space-y-10 text-foreground">
+        <header className="grid gap-8 xl:grid-cols-[minmax(0,1.1fr)_minmax(380px,0.9fr)] xl:items-start">
+          <article className="pt-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-muted">Bienvenido de nuevo</p>
+            <h1 className="mt-4 max-w-[14ch] text-4xl font-semibold leading-[1.02] tracking-[-0.03em] text-[#103474] sm:text-[3.25rem]">
+              ¡Hola, {firstName}! Qué bueno verte de nuevo.
+            </h1>
+            <p className="mt-6 max-w-2xl text-[18px] leading-[1.6] text-[#535866]">
+              Continue your academic journey in the language atelier. Your customized learning path is ready for exploration.
             </p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="student-panel-soft px-4 py-4">
-              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Current level</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{hasActiveEnrollment ? courseStageLabel : "Pending"}</p>
-            </div>
-            <div className="student-panel-soft px-4 py-4">
-              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Next class</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{nextClassDate ? "Scheduled" : "Waiting"}</p>
-            </div>
-            <div className="student-panel-soft px-4 py-4">
-              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Progress</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{hasActiveEnrollment ? `${courseProgress}%` : "Locked"}</p>
-            </div>
-          </div>
-        </div>
-      </header>
+          </article>
 
-      <div className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
-        <article className="student-panel px-5 py-5 sm:px-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-muted">Current course</p>
-              <h2 className="mt-2 text-3xl font-semibold text-foreground">{courseTitle}</h2>
-              <p className="mt-2 text-sm text-muted">{courseStageLabel}</p>
-            </div>
-            {hasActiveEnrollment && commission?.commission_number ? (
-              <span className="rounded-[10px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-muted">
-                Commission #{commission.commission_number}
-              </span>
-            ) : null}
-          </div>
-
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
-            <div className="student-panel-soft px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.24em] text-muted">Course window</p>
-              <p className="mt-2 text-sm font-medium text-foreground">{startLabel} to {endLabel}</p>
-            </div>
-            <div className="student-panel-soft px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.24em] text-muted">Study days</p>
-              <p className="mt-2 text-sm font-medium text-foreground">{classDays}</p>
-            </div>
-            <div className="student-panel-soft px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.24em] text-muted">Schedule</p>
-              <p className="mt-2 text-sm font-medium text-foreground">{scheduleRange}</p>
-            </div>
-          </div>
-
-          <div className="mt-6 rounded-[12px] border border-[rgba(16,52,116,0.1)] bg-[#f7faff] px-4 py-4">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium text-foreground">Course completion</span>
-              <span className="font-semibold text-foreground">{hasActiveEnrollment ? `${courseProgress}%` : "Locked"}</span>
-            </div>
-            <div className="mt-3 h-2.5 w-full rounded-full bg-surface-2">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
-                style={{ width: `${courseProgress}%` }}
-              />
-            </div>
-            <p className="mt-3 text-sm text-muted">
-              {hasActiveEnrollment
-                ? "Your current commission is active and ready to continue."
-                : "Complete enrollment to unlock your current course workspace."}
-            </p>
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-3">
-            <Link href={hasActiveEnrollment ? "/app/curso" : "/app/matricula"} className="student-button-primary px-4 py-2.5 text-sm">
-              {hasActiveEnrollment ? "Go to course" : "Open enrollment"}
-            </Link>
-            <Link href="/app/ruta-academica" className="student-button-secondary px-4 py-2.5 text-sm">
-              View academic path
-            </Link>
-          </div>
-        </article>
-
-        <aside className="student-panel px-5 py-5 sm:px-6">
-          <div className="student-panel-soft px-4 py-4">
-            <p className="text-xs uppercase tracking-[0.3em] text-muted">Next class</p>
-            <h2 className="mt-2 text-2xl font-semibold text-foreground">{formatNextClass(nextClassDate)}</h2>
-            <p className="mt-2 text-sm text-muted">
-              {hasActiveEnrollment
-                ? "Keep your schedule visible and jump straight into the live course workspace."
-                : "Your next live class will appear here once your enrollment is active."}
-            </p>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            <div className="student-panel-soft px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.24em] text-muted">Course access</p>
-              <p className="mt-2 text-sm font-medium text-foreground">{hasActiveEnrollment ? "Open and available" : "Pending enrollment"}</p>
-            </div>
-            <div className="student-panel-soft px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.24em] text-muted">Recommendation</p>
-              <p className="mt-2 text-sm text-foreground">
-                {hasActiveEnrollment ? "Review the class list and upcoming materials before your next session." : "Complete enrollment first to unlock classes and recordings."}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            <Link
-              href={hasActiveEnrollment ? "/app/curso" : "/app/matricula"}
-              className={`inline-flex items-center justify-center rounded-[12px] px-4 py-2.5 text-sm font-semibold transition ${
-                hasActiveEnrollment
-                  ? "bg-primary text-primary-foreground hover:bg-primary-2"
-                  : "border border-[rgba(15,23,42,0.1)] bg-white text-[#103474] hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
-              }`}
-            >
-              {hasActiveEnrollment ? "Go to course" : "Open enrollment"}
-            </Link>
-          </div>
-        </aside>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <article className="student-panel px-5 py-5 sm:px-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-muted">Academic path</p>
-              <h2 className="mt-2 text-2xl font-semibold text-foreground">Progress toward the next level</h2>
-            </div>
-            <span className="rounded-[10px] border border-border bg-surface-2 px-3 py-1 text-xs font-semibold text-muted">
-              {remainingProgress}% remaining
-            </span>
-          </div>
-          <p className="mt-3 text-sm text-muted">
-            Use your current course progress as a quick reference for how far you are from the next stage.
-          </p>
-
-          <div className="mt-5 rounded-[12px] border border-[rgba(16,52,116,0.1)] bg-[#f7faff] px-4 py-4">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted">Progress map</span>
-              <span className="font-semibold text-foreground">{globalProgress}%</span>
-            </div>
-            <div className="mt-3 h-3 w-full rounded-full bg-surface-2">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
-                style={{ width: `${globalProgress}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            {["Basic", "Intermediate", "Advanced"].map((level) => (
-              <span key={level} className="student-panel-soft px-4 py-3 text-sm font-medium text-foreground">
-                {level}
-              </span>
-            ))}
-          </div>
-          <div className="mt-5">
-            <Link href="/app/ruta-academica" className="student-button-secondary px-4 py-2.5 text-sm">
-              View academic path
-            </Link>
-          </div>
-        </article>
-
-        <article className="student-panel px-5 py-5 sm:px-6">
-          <p className="text-xs uppercase tracking-[0.3em] text-muted">Skills snapshot</p>
-          <h2 className="mt-2 text-2xl font-semibold text-foreground">Current performance</h2>
-          <p className="mt-2 text-sm text-muted">
-            Review the latest combined indicators for your core language skills.
-          </p>
-          <div className="mt-5 space-y-3">
-            {skillCards.map((skill) => (
-              <div key={skill.label} className="student-panel-soft px-4 py-4">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-medium text-foreground">{skill.label}</span>
-                  <span className="text-muted">{skill.value == null ? "--" : `${Math.round(skill.value)}%`}</span>
+          <aside className="relative overflow-hidden rounded-[30px] bg-[linear-gradient(145deg,#082454_0%,#103474_55%,#35538b_100%)] px-6 py-7 text-white shadow-[0_28px_60px_rgba(16,52,116,0.28)] sm:px-8 sm:py-8">
+            <div className="absolute -right-10 -bottom-12 h-44 w-44 rounded-full bg-white/10 blur-3xl" />
+            <div className="relative">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <span className="inline-flex rounded-full bg-white/18 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/90">
+                    Próxima Clase
+                  </span>
+                  <h2 className="mt-4 text-3xl font-semibold tracking-[-0.02em] text-white">{courseBadge}</h2>
                 </div>
-                <div className="mt-3 h-2 w-full rounded-full bg-white">
-                  <div
-                    className="h-full rounded-full bg-primary"
-                    style={{ width: `${skill.value ?? 0}%` }}
-                  />
+                <svg viewBox="0 0 24 24" className="mt-1 h-9 w-9 text-white/55" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h13v16h-13A2.5 2.5 0 0 1 4 17.5Z" />
+                  <path d="M7 4v16" />
+                  <path d="M11 8h4M11 12h5M11 16h4" />
+                </svg>
+              </div>
+
+              <p className="mt-8 flex items-center gap-3 text-white/82">
+                <span className="inline-flex h-5 w-5 items-center justify-center">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="4.5" y="5" width="15" height="14" rx="2" />
+                    <path d="M8 3.5v4M16 3.5v4M4.5 9.5h15" />
+                  </svg>
+                </span>
+                <span className="text-[15px] font-medium">
+                  {hasActiveEnrollment ? formatNextClass(nextSession?.startsAt) : "Schedule pending"}
+                </span>
+              </p>
+
+              <div className="mt-8">
+                {nextClassExternal ? (
+                  <a
+                    href={nextClassHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex min-h-12 w-full items-center justify-center gap-3 rounded-[18px] bg-white px-5 py-4 text-[18px] font-semibold text-[#103474] transition hover:bg-[#f3f6ff]"
+                  >
+                    <span>{nextClassLabel}</span>
+                    <ArrowRightIcon />
+                  </a>
+                ) : (
+                  <Link
+                    href={nextClassHref}
+                    className="inline-flex min-h-12 w-full items-center justify-center gap-3 rounded-[18px] bg-white px-5 py-4 text-[18px] font-semibold text-[#103474] transition hover:bg-[#f3f6ff]"
+                  >
+                    <span>{nextClassLabel}</span>
+                    <ArrowRightIcon />
+                  </Link>
+                )}
+              </div>
+            </div>
+          </aside>
+        </header>
+
+        <section className="grid gap-6 xl:grid-cols-[minmax(0,0.86fr)_minmax(0,1.14fr)]">
+          <article className="rounded-[30px] border border-[rgba(16,52,116,0.08)] bg-white p-6 shadow-[0px_12px_32px_rgba(0,25,67,0.04)] sm:p-8">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-muted">Global Progress</p>
+            <div className="mt-10 flex justify-center">
+              <ProgressRing value={courseProgress} />
+            </div>
+
+            <div className="mt-10 border-t border-[rgba(16,52,116,0.08)] pt-6">
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <MetricTile label="Modules" value={String(moduleCards.length || 0)} />
+                <MetricTile label="Lessons" value={String(metrics.total || 0)} />
+                <MetricTile label="Practice" value={formatMinutesToHours(metrics.practiceMinutes)} />
+              </div>
+            </div>
+          </article>
+
+          <article className="rounded-[30px] border border-[rgba(16,52,116,0.08)] bg-white p-6 shadow-[0px_12px_32px_rgba(0,25,67,0.04)] sm:p-8">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-muted">Editorial Insight: Skills Snapshot</p>
+
+            <div className="mt-8 grid gap-x-12 gap-y-8 md:grid-cols-2">
+              {skillCards.map((skill) => (
+                <SkillBar key={skill.label} label={skill.label} value={skill.value} />
+              ))}
+            </div>
+
+            <div className="mt-8 rounded-[24px] bg-[#f2f3f5] px-4 py-4 sm:px-5 sm:py-5">
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#103474] text-white">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9">
+                    <path d="M12 17v1.5" />
+                    <path d="M9.5 9.5a2.5 2.5 0 0 1 5 0c0 1.8-2.5 2.1-2.5 4.2" />
+                    <circle cx="12" cy="12" r="8.5" />
+                  </svg>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[15px] font-semibold text-[#103474]">Academic Tip:</p>
+                  <p className="mt-1 text-[17px] leading-[1.55] text-[#565b66]">{academicTip}</p>
                 </div>
               </div>
-            ))}
+            </div>
+          </article>
+        </section>
+
+        <section className="space-y-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-muted">Syllabus Guide</p>
+              <h2 className="mt-2 text-[34px] font-semibold tracking-[-0.03em] text-[#103474]">Course Completion</h2>
+            </div>
+
+            <Link href="/app/curso" className="inline-flex items-center gap-2 text-[18px] font-semibold text-[#103474]">
+              <span>View Full Syllabus</span>
+              <ChevronRightIcon />
+            </Link>
           </div>
-        </article>
-      </div>
-    </section>
-  );
+
+          <div className="grid gap-6 xl:grid-cols-3">
+            {(moduleCards.length
+              ? moduleCards
+              : [
+                  { step: "01", title: "Course Cycle", subtitle: "0 Lessons • 0h Practice Hours", progress: 0, range: "TBD", href: "/app/curso" },
+                  { step: "02", title: "Course Cycle", subtitle: "0 Lessons • 0h Practice Hours", progress: 0, range: "TBD", href: "/app/curso" },
+                  { step: "03", title: "Course Cycle", subtitle: "0 Lessons • 0h Practice Hours", progress: 0, range: "TBD", href: "/app/curso" },
+                ])
+              .slice(0, 3)
+              .map((card, index) => (
+                <ModuleCard
+                  key={`${card.step}-${index}`}
+                  step={card.step}
+                  title={card.title}
+                  subtitle={card.subtitle}
+                  progress={card.progress}
+                  range={card.range}
+                  href={card.href}
+                />
+              ))}
+          </div>
+        </section>
+      </section>
+    );
   });
 }

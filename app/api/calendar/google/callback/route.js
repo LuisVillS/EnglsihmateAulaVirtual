@@ -1,4 +1,3 @@
-import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 import {
@@ -7,7 +6,7 @@ import {
   fetchGoogleUserProfile,
   hasGoogleCalendarOAuthConfig,
   resolveGoogleRedirectUri,
-  resolveOriginFromHeaders,
+  resolveCanonicalAppOrigin,
   verifyGoogleOAuthState,
 } from "@/lib/google-calendar-oauth";
 
@@ -41,8 +40,7 @@ export async function GET(request) {
   }
 
   try {
-    const headerStore = await headers();
-    const origin = resolveOriginFromHeaders(headerStore);
+    const origin = resolveCanonicalAppOrigin();
     const redirectUri = resolveGoogleRedirectUri(origin);
     const tokenResult = await exchangeGoogleCode({ code, redirectUri });
     const service = getServiceSupabaseClient();
