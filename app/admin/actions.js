@@ -2987,7 +2987,7 @@ const FLASHCARD_LIBRARY_SELECT =
   "id, word, meaning, image_url, cefr_level, theme_tag, accepted_answers, audio_url, audio_r2_key, audio_provider, voice_id, elevenlabs_config";
 
 const FLASHCARD_DECK_SELECT =
-  "id, title, description, source_type, cefr_level, theme_tag, is_system, is_active, metadata, created_at, updated_at";
+  "id, title, description, cover_image_url, source_type, cefr_level, theme_tag, is_system, is_active, metadata, created_at, updated_at";
 
 function buildFlashcardsSchemaError(error) {
   const message = String(error?.message || "");
@@ -3628,6 +3628,7 @@ export async function upsertFlashcardDeck(prevState, maybeFormData) {
   const deckId = getText(formData, "deckId");
   const title = getText(formData, "title");
   const description = getText(formData, "description");
+  const coverImageUrl = getText(formData, "coverImageUrl");
   const cefrLevel = normalizeStudentCefrLevel(getText(formData, "cefrLevel"));
   const themeTag = normalizeStudentThemeTag(getText(formData, "themeTag"));
   const isActive = getText(formData, "isActive") !== "false";
@@ -3678,6 +3679,7 @@ export async function upsertFlashcardDeck(prevState, maybeFormData) {
   const payload = {
     title,
     description: description || null,
+    cover_image_url: coverImageUrl || null,
     source_type: "system",
     cefr_level: cefrLevel,
     theme_tag: themeTag || null,
@@ -3748,6 +3750,7 @@ export async function upsertFlashcardDeck(prevState, maybeFormData) {
       id: savedDeckId,
       title: deckResult.data.title || "Deck",
       description: deckResult.data.description || "",
+      coverImageUrl: deckResult.data.cover_image_url || "",
       cefrLevel: deckResult.data.cefr_level || "",
       themeTag: deckResult.data.theme_tag || "",
       sourceType: deckResult.data.source_type || "system",

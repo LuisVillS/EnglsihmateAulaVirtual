@@ -1,6 +1,7 @@
 import { normalizeCrmCallingCampaignKey } from "@/lib/crm/constants";
 import { listCrmStages } from "@/lib/crm/leads";
 import { listCrmCallingCampaigns } from "@/lib/crm/queue";
+import { listPausedCrmCallingSessions } from "@/lib/crm/calling-sessions";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 
 const FALLBACK_UUID = "00000000-0000-0000-0000-000000000000";
@@ -136,6 +137,7 @@ const CRM_LEAD_WITH_STAGE_SELECT = `
     status,
     selected_level,
     selected_course_type,
+    price_total,
     payment_method,
     payment_submitted_at,
     reviewed_at,
@@ -161,12 +163,25 @@ const CRM_LEAD_SOURCE_TAG_SELECT = `
   updated_at
 `;
 
+const LIMA_TIME_ZONE = "America/Lima";
+const LIMA_UTC_OFFSET = "-05:00";
+
 function getCrmReadClient(supabase) {
   return hasServiceRoleClient() ? getServiceSupabaseClient() : supabase;
 }
 
 function sanitizeSearchTerm(value) {
   return String(value || "").trim().replace(/,/g, " ");
+}
+
+function normalizeLeadIdentityEmail(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || null;
+}
+
+function normalizeLeadIdentityPhone(value) {
+  const normalized = String(value || "").replace(/[^\d+]/g, "").trim();
+  return normalized || null;
 }
 
 function applyLeadSearch(query, searchTerm) {
@@ -233,6 +248,163 @@ async function attachCrmLeadSourceTags(client, leads) {
     ...lead,
     source_tags: tagsByLeadId.get(lead?.id) || [],
   }));
+}
+
+function scoreLeadForMergePriority(lead) {
+  if (!lead || typeof lead !== "object") return -1;
+
+  let score = 0;
+  if (lead.pre_enrollment_id) score += 8;
+  if (lead.user_id) score += 6;
+  if (lead.phone || lead.phone_e164) score += 4;
+  if (lead.email) score += 3;
+  if (lead.full_name) score += 2;
+  if (lead.latest_note) score += 1;
+  if (lead.lead_status === "open") score += 1;
+
+  const updatedAt = lead.updated_at ? new Date(lead.updated_at).getTime() : 0;
+  return score * 1_000_000_000_000 + updatedAt;
+}
+
+function pickPreferredLeadValue(leads, ...fieldNames) {
+  for (const fieldName of fieldNames) {
+    for (const lead of leads) {
+      const value = lead?.[fieldName];
+      if (value !== null && value !== undefined && value !== "") {
+        return value;
+      }
+    }
+  }
+
+  return null;
+}
+
+function mergeSourceTags(leads) {
+  const merged = [];
+  const seen = new Set();
+
+  for (const lead of leads) {
+    for (const tag of Array.isArray(lead?.source_tags) ? lead.source_tags : []) {
+      const key = String(tag?.source_key || tag?.id || "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(tag);
+    }
+  }
+
+  return merged;
+}
+
+function mergeDuplicateLeadCluster(leads) {
+  const rankedLeads = [...leads].sort((left, right) => scoreLeadForMergePriority(right) - scoreLeadForMergePriority(left));
+  const primaryLead = rankedLeads[0] || null;
+  if (!primaryLead) return null;
+
+  return {
+    ...primaryLead,
+    email: pickPreferredLeadValue(rankedLeads, "email") || primaryLead.email || null,
+    full_name: pickPreferredLeadValue(rankedLeads, "full_name") || primaryLead.full_name || null,
+    phone: pickPreferredLeadValue(rankedLeads, "phone", "phone_e164") || primaryLead.phone || null,
+    phone_country_code:
+      pickPreferredLeadValue(rankedLeads, "phone_country_code") || primaryLead.phone_country_code || null,
+    phone_national_number:
+      pickPreferredLeadValue(rankedLeads, "phone_national_number") || primaryLead.phone_national_number || null,
+    phone_e164: pickPreferredLeadValue(rankedLeads, "phone_e164", "phone") || primaryLead.phone_e164 || null,
+    phone_dialable:
+      pickPreferredLeadValue(rankedLeads, "phone_dialable", "phone_e164", "phone") || primaryLead.phone_dialable || null,
+    phone_validation_status:
+      pickPreferredLeadValue(rankedLeads, "phone_validation_status") || primaryLead.phone_validation_status || null,
+    phone_validation_reason:
+      pickPreferredLeadValue(rankedLeads, "phone_validation_reason") || primaryLead.phone_validation_reason || null,
+    phone_raw_input: pickPreferredLeadValue(rankedLeads, "phone_raw_input", "phone") || primaryLead.phone_raw_input || null,
+    latest_note: pickPreferredLeadValue(rankedLeads, "latest_note") || primaryLead.latest_note || "",
+    source_tags: mergeSourceTags(rankedLeads),
+    duplicate_lead_ids: rankedLeads.map((lead) => lead.id).filter(Boolean),
+  };
+}
+
+function dedupeCrmLeads(leads) {
+  if (!Array.isArray(leads) || leads.length < 2) {
+    return Array.isArray(leads) ? leads : [];
+  }
+
+  const parent = new Map();
+
+  function ensureNode(id) {
+    if (!parent.has(id)) parent.set(id, id);
+  }
+
+  function find(id) {
+    ensureNode(id);
+    let root = parent.get(id);
+    while (root !== parent.get(root)) {
+      root = parent.get(root);
+    }
+
+    let current = id;
+    while (parent.get(current) !== root) {
+      const next = parent.get(current);
+      parent.set(current, root);
+      current = next;
+    }
+
+    return root;
+  }
+
+  function union(leftId, rightId) {
+    const leftRoot = find(leftId);
+    const rightRoot = find(rightId);
+    if (leftRoot !== rightRoot) {
+      parent.set(rightRoot, leftRoot);
+    }
+  }
+
+  const emailOwner = new Map();
+  const phoneOwner = new Map();
+
+  for (const lead of leads) {
+    const leadId = lead?.id;
+    if (!leadId) continue;
+    ensureNode(leadId);
+
+    const emailKey = normalizeLeadIdentityEmail(lead?.email);
+    if (emailKey) {
+      const existingLeadId = emailOwner.get(emailKey);
+      if (existingLeadId) {
+        union(existingLeadId, leadId);
+      } else {
+        emailOwner.set(emailKey, leadId);
+      }
+    }
+
+    const phoneKey = normalizeLeadIdentityPhone(lead?.phone_e164 || lead?.phone);
+    if (phoneKey) {
+      const existingLeadId = phoneOwner.get(phoneKey);
+      if (existingLeadId) {
+        union(existingLeadId, leadId);
+      } else {
+        phoneOwner.set(phoneKey, leadId);
+      }
+    }
+  }
+
+  const clusters = new Map();
+  for (const lead of leads) {
+    const leadId = lead?.id;
+    if (!leadId) continue;
+    const root = find(leadId);
+    if (!clusters.has(root)) clusters.set(root, []);
+    clusters.get(root).push(lead);
+  }
+
+  return Array.from(clusters.values())
+    .map((cluster) => mergeDuplicateLeadCluster(cluster))
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftTime = left?.updated_at ? new Date(left.updated_at).getTime() : 0;
+      const rightTime = right?.updated_at ? new Date(right.updated_at).getTime() : 0;
+      return rightTime - leftTime;
+    });
 }
 
 function isLeadCampaignEligible(lead, campaign, stageById) {
@@ -306,7 +478,40 @@ async function loadCrmLeads(
   if (error) {
     throw new Error(error.message || "Failed to load CRM leads.");
   }
-  return attachCrmLeadSourceTags(client, Array.isArray(data) ? data : []);
+  const leadsWithTags = await attachCrmLeadSourceTags(client, Array.isArray(data) ? data : []);
+  return dedupeCrmLeads(leadsWithTags);
+}
+
+async function attachLatestLeadNotes(client, leads) {
+  if (!Array.isArray(leads) || !leads.length) return Array.isArray(leads) ? leads : [];
+
+  const leadIds = leads.map((lead) => lead?.id).filter(Boolean);
+  if (!leadIds.length) {
+    return leads.map((lead) => ({ ...lead, latest_note: lead?.latest_note || "" }));
+  }
+
+  const { data, error } = await client
+    .from("crm_interactions")
+    .select("id, lead_id, notes, created_at")
+    .eq("interaction_kind", "note")
+    .in("lead_id", leadIds)
+    .not("notes", "is", null)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message || "Failed to load CRM lead notes.");
+  }
+
+  const latestNoteByLeadId = new Map();
+  for (const entry of Array.isArray(data) ? data : []) {
+    if (!entry?.lead_id || latestNoteByLeadId.has(entry.lead_id)) continue;
+    latestNoteByLeadId.set(entry.lead_id, entry.notes || "");
+  }
+
+  return leads.map((lead) => ({
+    ...lead,
+    latest_note: latestNoteByLeadId.get(lead?.id) || "",
+  }));
 }
 
 export async function loadCrmDashboardData(supabase) {
@@ -349,7 +554,7 @@ export async function loadCrmKanbanData(supabase, { search = "", leadStatus = ""
     loadCrmLeads(client, { search, leadStatus, sourceType, limit: 240, excludeArchived: true }),
   ]);
 
-  return { stages, leads };
+  return { stages, leads: await attachLatestLeadNotes(client, leads) };
 }
 
 export async function loadCrmLeadsPageData(
@@ -530,6 +735,8 @@ export async function loadCrmLeadDetailData(supabase, leadId) {
     lead,
     stages,
     interactions: interactionsResult.data || [],
+    latestNote:
+      (interactionsResult.data || []).find((entry) => entry?.interaction_kind === "note" && entry?.notes)?.notes || "",
     stageHistory: stageHistoryResult.data || [],
     profile: profileResult.data || null,
     preEnrollment: preEnrollmentResult.data || null,
@@ -605,14 +812,74 @@ function buildCallingHubSourceOptions(queueLeadRows) {
   }));
 }
 
+function getLimaDayRange(referenceDate = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: LIMA_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(referenceDate);
+
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  const dayStamp = `${year}-${month}-${day}`;
+
+  return {
+    startIso: new Date(`${dayStamp}T00:00:00${LIMA_UTC_OFFSET}`).toISOString(),
+    endIso: new Date(`${dayStamp}T23:59:59.999${LIMA_UTC_OFFSET}`).toISOString(),
+  };
+}
+
+function formatTalkTimeLabel(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "--";
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+}
+
+function extractTalkTimeSeconds(interaction) {
+  const metadata = interaction?.metadata && typeof interaction.metadata === "object" ? interaction.metadata : {};
+  const candidates = [
+    metadata.duration_seconds,
+    metadata.call_duration_seconds,
+    metadata.talk_time_seconds,
+    metadata.duration,
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 export async function loadCallingHubData(
   supabase,
-  { operatorUserId, selectedLeadId = "", campaignKey = "", selectedStageId = "", selectedSourceOrigin = "" } = {}
+  {
+    operatorUserId,
+    selectedLeadId = "",
+    campaignKey = "",
+    selectedStageId = "",
+    selectedSourceOrigin = "",
+    sessionLeadIds = [],
+    queueLeadIds = [],
+    suspendAutoSelection = false,
+  } = {}
 ) {
   const client = getCrmReadClient(supabase);
   const normalizedCampaignKey = normalizeCrmCallingCampaignKey(campaignKey);
   const normalizedStageId = String(selectedStageId || "").trim();
   const normalizedSourceOrigin = String(selectedSourceOrigin || "").trim();
+  const normalizedSessionLeadIds = Array.from(
+    new Set((Array.isArray(sessionLeadIds) ? sessionLeadIds : [sessionLeadIds]).map((value) => String(value || "").trim()).filter(Boolean))
+  );
+  const normalizedQueueLeadIds = Array.from(
+    new Set((Array.isArray(queueLeadIds) ? queueLeadIds : [queueLeadIds]).map((value) => String(value || "").trim()).filter(Boolean))
+  );
   const [stages, campaigns] = await Promise.all([
     listCrmStages(client),
     listCrmCallingCampaigns(client),
@@ -630,34 +897,37 @@ export async function loadCallingHubData(
     return data || null;
   };
 
-  let activeLead = await loadLeadById(selectedLeadId);
-  if (!activeLead?.id && operatorUserId) {
-    const { data, error } = await client
-      .from("crm_leads")
-      .select(CRM_LEAD_WITH_STAGE_SELECT)
-      .eq("queue_claimed_by_user_id", operatorUserId)
-      .order("queue_claimed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw new Error(error.message || "Failed to load the claimed CRM lead.");
-    activeLead = data || null;
-  }
+  const { startIso, endIso } = getLimaDayRange();
 
-  const [queueLeadRows, activeLeadInteractionsResult] = await Promise.all([
+  const [queueLeadRows, todayInteractionsResult, todayStageHistoryResult, pausedSessions] = await Promise.all([
     loadCrmLeads(client, { leadStatus: "open", limit: 120, excludeArchived: true }),
-    activeLead?.id
+    operatorUserId
       ? client
           .from("crm_interactions")
-          .select("id, interaction_kind, summary, notes, call_outcome, created_at")
-          .eq("lead_id", activeLead.id)
+          .select("id, lead_id, interaction_kind, call_outcome, summary, notes, metadata, created_at")
+          .eq("operator_user_id", operatorUserId)
+          .eq("interaction_kind", "call")
+          .gte("created_at", startIso)
+          .lte("created_at", endIso)
           .order("created_at", { ascending: false })
-          .limit(8)
       : Promise.resolve({ data: [], error: null }),
+    operatorUserId
+      ? client
+          .from("crm_stage_history")
+          .select("id, lead_id, to_stage_id, changed_by_user_id, created_at")
+          .eq("changed_by_user_id", operatorUserId)
+          .gte("created_at", startIso)
+          .lte("created_at", endIso)
+          .order("created_at", { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    listPausedCrmCallingSessions(client, { operatorUserId }),
   ]);
 
-  if (activeLeadInteractionsResult.error) {
+  if (todayInteractionsResult.error || todayStageHistoryResult.error) {
     throw new Error(
-      activeLeadInteractionsResult.error.message || "Failed to load Calling Hub history."
+      todayInteractionsResult.error?.message ||
+        todayStageHistoryResult.error?.message ||
+        "Failed to load Calling Hub history."
     );
   }
 
@@ -669,14 +939,166 @@ export async function loadCallingHubData(
     sourceOptions[0] ||
     null;
 
-  const queuePreview = (queueLeadRows || [])
+  const eligibleQueueRows = (queueLeadRows || [])
     .filter((lead) => isLeadCampaignEligible(lead, { stageId: normalizedStageId, sourceOrigin: normalizedSourceOrigin }, stageById))
     .sort((left, right) => {
       const leftTime = left.next_action_at ? new Date(left.next_action_at).getTime() : 0;
       const rightTime = right.next_action_at ? new Date(right.next_action_at).getTime() : 0;
       return leftTime - rightTime;
-    })
-    .slice(0, 12);
+    });
+
+  const orderedQueueLeadIds = normalizedQueueLeadIds.length
+    ? normalizedQueueLeadIds
+    : suspendAutoSelection
+      ? []
+      : eligibleQueueRows.map((lead) => lead?.id).filter(Boolean);
+  const orderedQueueLeadSet = new Set(orderedQueueLeadIds);
+  const queueRowMap = new Map();
+
+  if (orderedQueueLeadIds.length) {
+    const queueSnapshotResult = await client
+      .from("crm_leads")
+      .select(CRM_LEAD_WITH_STAGE_SELECT)
+      .in("id", orderedQueueLeadIds);
+
+    if (queueSnapshotResult.error) {
+      throw new Error(queueSnapshotResult.error.message || "Failed to load the Calling Hub queue snapshot.");
+    }
+
+    for (const lead of Array.isArray(queueSnapshotResult.data) ? queueSnapshotResult.data : []) {
+      if (lead?.id) queueRowMap.set(lead.id, lead);
+    }
+  }
+
+  for (const lead of eligibleQueueRows) {
+    if (lead?.id && !queueRowMap.has(lead.id)) {
+      queueRowMap.set(lead.id, lead);
+    }
+  }
+
+  let activeLead =
+    (selectedLeadId && queueRowMap.get(selectedLeadId)) ||
+    (orderedQueueLeadIds.length ? queueRowMap.get(orderedQueueLeadIds[0]) : null) ||
+    null;
+
+  if (!activeLead?.id && selectedLeadId) {
+    activeLead = await loadLeadById(selectedLeadId);
+    if (activeLead?.id) {
+      queueRowMap.set(activeLead.id, activeLead);
+    }
+  }
+
+  if (!activeLead?.id && operatorUserId && !suspendAutoSelection) {
+    const { data, error } = await client
+      .from("crm_leads")
+      .select(CRM_LEAD_WITH_STAGE_SELECT)
+      .eq("queue_claimed_by_user_id", operatorUserId)
+      .order("queue_claimed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message || "Failed to load the claimed CRM lead.");
+    activeLead = data || null;
+    if (activeLead?.id) {
+      queueRowMap.set(activeLead.id, activeLead);
+    }
+  }
+
+  if (!activeLead?.id && !suspendAutoSelection) {
+    activeLead = eligibleQueueRows[0] || null;
+    if (activeLead?.id) {
+      queueRowMap.set(activeLead.id, activeLead);
+    }
+  }
+
+  const queueRows = activeLead?.id
+    ? [
+        activeLead,
+        ...orderedQueueLeadIds
+          .filter((leadId) => leadId && leadId !== activeLead.id)
+          .map((leadId) => queueRowMap.get(leadId))
+          .filter(Boolean),
+        ...eligibleQueueRows.filter((lead) => lead?.id && lead.id !== activeLead.id && !orderedQueueLeadSet.has(lead.id)),
+      ]
+    : orderedQueueLeadIds.map((leadId) => queueRowMap.get(leadId)).filter(Boolean);
+
+  const normalizedQueueRows = Array.from(
+    new Map(queueRows.filter((lead) => lead?.id).map((lead) => [lead.id, lead])).values()
+  );
+  const normalizedQueueLeadOrder = normalizedQueueRows.map((lead) => lead.id);
+
+  const activeLeadInteractionsResult = activeLead?.id
+    ? await client
+        .from("crm_interactions")
+        .select("id, interaction_kind, summary, notes, call_outcome, created_at")
+        .eq("lead_id", activeLead.id)
+        .order("created_at", { ascending: false })
+        .limit(8)
+    : { data: [], error: null };
+
+  if (activeLeadInteractionsResult.error) {
+    throw new Error(activeLeadInteractionsResult.error.message || "Failed to load Calling Hub lead history.");
+  }
+
+  const todayInteractions = Array.isArray(todayInteractionsResult.data) ? todayInteractionsResult.data : [];
+  const sessionHistoryLeadIds = Array.from(new Set(todayInteractions.map((interaction) => interaction.lead_id).filter(Boolean)));
+  const talkTimeValues = todayInteractions.map(extractTalkTimeSeconds).filter((value) => Number.isFinite(value));
+  const averageTalkTimeSeconds = talkTimeValues.length
+    ? Math.round(talkTimeValues.reduce((sum, value) => sum + value, 0) / talkTimeValues.length)
+    : null;
+  const callsToday = todayInteractions.length;
+  const connectedToday = todayInteractions.filter((interaction) => interaction.call_outcome === "connected").length;
+  const noAnswerCallsToday = todayInteractions.filter((interaction) => interaction.call_outcome === "no_answer").length;
+  const conversionsToday = todayInteractions.filter((interaction) =>
+    ["connected", "callback_requested"].includes(interaction.call_outcome)
+  ).length;
+  const latestTodayInteraction = todayInteractions[0] || null;
+  const queuePreview = normalizedQueueRows.slice(1, 13);
+  const selectedSegmentLeadCount = normalizedQueueRows.length;
+  const selectedStageLeadCount = selectedStage?.leadCount || 0;
+  const selectedSourceLeadCount = selectedSource?.leadCount || 0;
+  const liveConversionRate = callsToday ? Math.round((connectedToday / callsToday) * 1000) / 10 : 0;
+  const stageIdsFromHistory = Array.from(
+    new Set((Array.isArray(todayStageHistoryResult.data) ? todayStageHistoryResult.data : []).map((entry) => entry?.to_stage_id).filter(Boolean))
+  );
+  const sessionHistoryLeads = sessionHistoryLeadIds.length
+    ? await client
+        .from("crm_leads")
+        .select("id, full_name, email, current_stage_id, current_stage:crm_stages(name)")
+        .in("id", sessionHistoryLeadIds)
+    : { data: [], error: null };
+
+  if (sessionHistoryLeads.error) {
+    throw new Error(sessionHistoryLeads.error.message || "Failed to load Calling Hub session history.");
+  }
+
+  const stageRowsResult = stageIdsFromHistory.length
+    ? await client.from("crm_stages").select("id, name").in("id", stageIdsFromHistory)
+    : { data: [], error: null };
+
+  if (stageRowsResult.error) {
+    throw new Error(stageRowsResult.error.message || "Failed to load Calling Hub stage history.");
+  }
+
+  const sessionHistoryLeadMap = new Map(
+    (Array.isArray(sessionHistoryLeads.data) ? sessionHistoryLeads.data : []).map((lead) => [lead.id, lead])
+  );
+  const stageNameById = new Map((Array.isArray(stageRowsResult.data) ? stageRowsResult.data : []).map((stage) => [stage.id, stage.name]));
+  const latestMoveByLeadId = new Map();
+  for (const entry of Array.isArray(todayStageHistoryResult.data) ? todayStageHistoryResult.data : []) {
+    if (!entry?.lead_id || latestMoveByLeadId.has(entry.lead_id)) continue;
+    latestMoveByLeadId.set(entry.lead_id, entry);
+  }
+  const sessionHistory = todayInteractions.slice(0, 6).map((interaction) => ({
+    ...interaction,
+    lead: sessionHistoryLeadMap.get(interaction.lead_id) || null,
+    movedToStageName: latestMoveByLeadId.get(interaction.lead_id)?.to_stage_id
+      ? stageNameById.get(latestMoveByLeadId.get(interaction.lead_id).to_stage_id) || null
+      : null,
+  }));
+  const latestLeadNote =
+    (Array.isArray(activeLeadInteractionsResult.data) ? activeLeadInteractionsResult.data : []).find(
+      (entry) => entry?.interaction_kind === "note" && entry?.notes
+    )?.notes || "";
 
   return {
     stages,
@@ -690,6 +1112,24 @@ export async function loadCallingHubData(
     sourceOptions,
     activeLead,
     activeLeadInteractions: activeLeadInteractionsResult.data || [],
+    latestLeadNote,
     queuePreview,
+    sessionHistory,
+    todayMetrics: {
+      callsToday,
+      connectedToday,
+      noAnswerCallsToday,
+      conversionsToday,
+      liveConversionRate,
+      averageTalkTimeSeconds,
+      averageTalkTimeLabel: formatTalkTimeLabel(averageTalkTimeSeconds),
+      latestCallAt: latestTodayInteraction?.created_at || null,
+      selectedSegmentLeadCount,
+      selectedStageLeadCount,
+      selectedSourceLeadCount,
+    },
+    pausedSessions,
+    sessionLeadIds: normalizedSessionLeadIds,
+    queueLeadIds: normalizedQueueLeadOrder,
   };
 }

@@ -18,6 +18,10 @@ import {
   moveCrmLeadStage,
   updateCrmLeadContactDetails,
 } from "@/lib/crm/mutations";
+import {
+  closePausedCrmCallingSession,
+  upsertPausedCrmCallingSession,
+} from "@/lib/crm/calling-sessions";
 import { provisionCrmOperator } from "@/lib/crm/operators";
 import {
   claimNextCrmLead,
@@ -58,6 +62,31 @@ function parseOptionalInteger(value) {
   if (!normalized) return null;
   const parsed = Number.parseInt(normalized, 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseOptionalIdList(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeOrderedLeadIds(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : [values]).map((value) => String(value || "").trim()).filter(Boolean)));
+}
+
+function ensureActiveLeadAtFront(leadIds, activeLeadId) {
+  const normalizedLeadIds = normalizeOrderedLeadIds(leadIds);
+  const normalizedActiveLeadId = String(activeLeadId || "").trim();
+  if (!normalizedActiveLeadId) return normalizedLeadIds;
+  return [normalizedActiveLeadId, ...normalizedLeadIds.filter((leadId) => leadId !== normalizedActiveLeadId)];
+}
+
+function rotateLeadQueueForward(leadIds) {
+  const normalizedLeadIds = normalizeOrderedLeadIds(leadIds);
+  if (normalizedLeadIds.length <= 1) return normalizedLeadIds;
+  const [firstLeadId, ...remainingLeadIds] = normalizedLeadIds;
+  return [...remainingLeadIds, firstLeadId];
 }
 
 function parseBooleanFlag(value) {
@@ -101,11 +130,23 @@ function normalizeCallingHubSourceOrigin(value) {
   return normalized;
 }
 
-function buildCallingHubPath({ campaignKey = "", leadId = "", stageId = "", sourceOrigin = "" } = {}) {
+function buildCallingHubPath({
+  campaignKey = "",
+  leadId = "",
+  stageId = "",
+  sourceOrigin = "",
+  sessionLeadIds = [],
+  queueLeadIds = [],
+  pausedSessionId = "",
+  live = false,
+} = {}) {
   const params = new URLSearchParams();
   const normalizedCampaign = normalizeCrmCallingCampaignKey(campaignKey);
   const normalizedStageId = parseOptionalString(stageId);
   const normalizedSourceOrigin = normalizeCallingHubSourceOrigin(sourceOrigin);
+  const normalizedSessionLeadIds = Array.from(new Set(sessionLeadIds.map((value) => String(value || "").trim()).filter(Boolean)));
+  const normalizedQueueLeadIds = normalizeOrderedLeadIds(queueLeadIds);
+  const normalizedPausedSessionId = parseOptionalString(pausedSessionId);
 
   if (normalizedCampaign && normalizedCampaign !== "all_open") {
     params.set("campaign", normalizedCampaign);
@@ -119,9 +160,19 @@ function buildCallingHubPath({ campaignKey = "", leadId = "", stageId = "", sour
   if (leadId) {
     params.set("lead", leadId);
   }
+  if (normalizedSessionLeadIds.length) {
+    params.set("history", normalizedSessionLeadIds.join(","));
+  }
+  if (normalizedQueueLeadIds.length) {
+    params.set("queue", normalizedQueueLeadIds.join(","));
+  }
+  if (normalizedPausedSessionId) {
+    params.set("pausedSessionId", normalizedPausedSessionId);
+  }
 
   const query = params.toString();
-  return query ? `/admin/crm/callinghub?${query}` : "/admin/crm/callinghub";
+  const pathname = leadId || live ? "/admin/crm/callinghub/live" : "/admin/crm/callinghub";
+  return query ? `${pathname}?${query}` : pathname;
 }
 
 function parseCallingHubCriteria(formData) {
@@ -471,13 +522,25 @@ export async function submitCallOutcomeAction(formData) {
   const { user, service } = await getMutationContext();
   const leadId = parseRequiredString(formData.get("leadId"), "Lead");
   const { campaignKey, stageId, sourceOrigin } = parseCallingHubCriteria(formData);
+  const queueLeadIds = ensureActiveLeadAtFront(parseOptionalIdList(formData.get("queueLeadIds")), leadId);
+  const sessionLeadIds = normalizeOrderedLeadIds([leadId, ...parseOptionalIdList(formData.get("sessionLeadIds"))]);
+  const pausedSessionId = parseOptionalString(formData.get("pausedSessionId"));
   const returnTo = buildReturnPath(
     formData,
-    buildCallingHubPath({ campaignKey, stageId, sourceOrigin, leadId })
+    buildCallingHubPath({
+      campaignKey,
+      stageId,
+      sourceOrigin,
+      leadId,
+      sessionLeadIds,
+      queueLeadIds,
+      pausedSessionId,
+    })
   );
   const actionMode =
     formData.get("actionMode")?.toString() === "save_next" ? "save_next" : "save";
   const callOutcome = normalizeCrmCallOutcome(formData.get("callOutcome")) || "attempted";
+  const note = formData.get("note")?.toString() ?? "";
   const nextActionAt = getDefaultNextActionAt(
     callOutcome,
     parseOptionalDateTime(formData.get("nextActionAt"))
@@ -487,27 +550,40 @@ export async function submitCallOutcomeAction(formData) {
     leadId,
     operatorUserId: user.id,
     callOutcome,
-    note: parseOptionalString(formData.get("note")),
+    note: null,
     nextActionAt,
     releaseClaim: actionMode === "save_next",
     metadata: { source: "crm_calling_hub", campaignKey, stageId, sourceOrigin },
   });
 
+  if (formData.has("note")) {
+    await createCrmLeadNote(service, {
+      leadId,
+      note,
+      summary: note.trim().length > 96 ? `${note.trim().slice(0, 93)}...` : note.trim(),
+      operatorUserId: user.id,
+      metadata: { source: "crm_calling_hub_note", campaignKey, stageId, sourceOrigin },
+    });
+  }
+
   revalidateCrmPaths(leadId);
   if (actionMode === "save_next") {
-    const nextLead = await claimNextCrmLead(service, {
-      operatorUserId: user.id,
-      claimTimeoutSeconds: 900,
-      campaignKey,
-      stageId,
-      sourceOrigin,
-    });
+    const rotatedQueueLeadIds = rotateLeadQueueForward(queueLeadIds);
+    const nextLeadId = rotatedQueueLeadIds[0] || leadId;
 
-    if (nextLead?.id) {
-      revalidateCrmPaths(nextLead.id);
+    if (nextLeadId) {
+      revalidateCrmPaths(nextLeadId);
       redirect(
         buildRedirectWithFlag(
-          buildCallingHubPath({ campaignKey, stageId, sourceOrigin, leadId: nextLead.id }),
+          buildCallingHubPath({
+            campaignKey,
+            stageId,
+            sourceOrigin,
+            leadId: nextLeadId,
+            sessionLeadIds,
+            queueLeadIds: rotatedQueueLeadIds,
+            pausedSessionId,
+          }),
           "advanced"
         )
       );
@@ -575,28 +651,87 @@ export async function deleteLeadAction(formData) {
 }
 
 export async function leaveCallingCampaignAction(formData) {
-  const { service } = await getMutationContext();
+  const { user, service } = await getMutationContext();
   const leadId = parseOptionalString(formData.get("leadId"));
   const { campaignKey, stageId, sourceOrigin } = parseCallingHubCriteria(formData);
+  const mode = parseOptionalString(formData.get("mode")) || "leave";
+  const pausedSessionId = parseOptionalString(formData.get("pausedSessionId"));
+  const sessionLeadIds = normalizeOrderedLeadIds([leadId, ...parseOptionalIdList(formData.get("sessionLeadIds"))]);
+  const queueLeadIds = ensureActiveLeadAtFront(parseOptionalIdList(formData.get("queueLeadIds")), leadId);
+
+  if (mode === "pause") {
+    await upsertPausedCrmCallingSession(service, {
+      sessionId: pausedSessionId,
+      operatorUserId: user.id,
+      campaignKey,
+      selectedStageId: stageId,
+      selectedSourceOrigin: sourceOrigin,
+      activeLeadId: leadId,
+      queueLeadIds,
+      sessionLeadIds,
+    });
+  } else if (pausedSessionId) {
+    await closePausedCrmCallingSession(service, {
+      sessionId: pausedSessionId,
+      operatorUserId: user.id,
+    });
+  }
 
   if (leadId) {
     await releaseCrmLeadClaim(service, { leadId });
     revalidateCrmPaths(leadId);
   }
 
-  redirect(buildRedirectWithFlag(buildCallingHubPath({ campaignKey, stageId, sourceOrigin }), "left"));
+  const nowIso = new Date().toISOString();
+  const { error: releaseAllError } = await service
+    .from("crm_leads")
+    .update({
+      queue_claimed_by_user_id: null,
+      queue_claimed_at: null,
+      queue_claim_expires_at: null,
+      updated_at: nowIso,
+    })
+    .eq("queue_claimed_by_user_id", user.id);
+
+  if (releaseAllError) {
+    throw new Error(releaseAllError.message || "Failed to release the operator calling session.");
+  }
+
+  const targetPath = buildCallingHubPath({ campaignKey, stageId, sourceOrigin });
+  if (mode === "pause") {
+    redirect(buildRedirectWithFlag(targetPath, "paused"));
+  }
+  if (mode === "stop") {
+    redirect(buildRedirectWithFlag(targetPath, "stopped"));
+  }
+
+  redirect(buildRedirectWithFlag(targetPath, "left"));
+}
+
+export async function closePausedCallingCampaignAction(formData) {
+  const { user, service } = await getMutationContext();
+  const sessionId = parseRequiredString(formData.get("pausedSessionId"), "Paused campaign");
+  const returnTo = buildReturnPath(formData, "/admin/crm/callinghub");
+
+  await closePausedCrmCallingSession(service, {
+    sessionId,
+    operatorUserId: user.id,
+  });
+
+  revalidateCrmPaths();
+  redirect(buildRedirectWithFlag(returnTo, "stopped"));
 }
 
 export async function createLeadNoteAction(formData) {
   const { user, service } = await getMutationContext();
   const leadId = parseRequiredString(formData.get("leadId"), "Lead");
-  const note = parseRequiredString(formData.get("note"), "Note");
+  const note = formData.get("note")?.toString() ?? "";
   const returnTo = buildReturnPath(formData, `/admin/crm/leads/${leadId}`);
 
   await createCrmLeadNote(service, {
     leadId,
     note,
-    summary: note.length > 96 ? `${note.slice(0, 93)}...` : note,
+    summary: note.trim().length > 96 ? `${note.trim().slice(0, 93)}...` : note.trim(),
     operatorUserId: user.id,
     metadata: { source: "crm_ui_note" },
   });
@@ -632,7 +767,7 @@ export async function quickEditLeadAction(prevStateOrFormData, maybeFormData) {
     leadId = parseRequiredString(formData.get("leadId"), "Lead");
     const currentStageId = parseOptionalString(formData.get("currentStageId"));
     const nextStageId = parseOptionalString(formData.get("stageId"));
-    const note = parseOptionalString(formData.get("note"));
+    const note = formData.has("note") ? formData.get("note")?.toString() ?? "" : null;
     const returnTo = buildReturnPath(formData, "/admin/crm/kanban");
     const noRedirect = parseBooleanFlag(formData.get("noRedirect"));
     const fullName = parseOptionalString(formData.get("fullName"));
@@ -661,11 +796,11 @@ export async function quickEditLeadAction(prevStateOrFormData, maybeFormData) {
       });
     }
 
-    if (note) {
+    if (note !== null) {
       await createCrmLeadNote(service, {
         leadId,
         note,
-        summary: note.length > 96 ? `${note.slice(0, 93)}...` : note,
+        summary: note.trim().length > 96 ? `${note.trim().slice(0, 93)}...` : note.trim(),
         operatorUserId: user.id,
         metadata: { source: "crm_kanban_quick_edit" },
       });
@@ -673,11 +808,13 @@ export async function quickEditLeadAction(prevStateOrFormData, maybeFormData) {
 
     revalidateCrmPaths(leadId);
     if (noRedirect) {
+      const selectedLead = await selectCrmLeadById(service, leadId);
       return {
         success: true,
         leadId,
         stageId: nextStageId || currentStageId || null,
-        lead: await selectCrmLeadById(service, leadId),
+        lead: selectedLead ? { ...selectedLead, latest_note: note ?? "" } : null,
+        latestNote: note ?? "",
         message: "Quick edit saved.",
         error: null,
       };

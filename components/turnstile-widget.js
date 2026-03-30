@@ -15,9 +15,37 @@ export default function TurnstileWidget({
   const containerRef = useRef(null);
   const widgetIdRef = useRef(null);
   const [scriptLoaded, setScriptLoaded] = useState(false);
+  const [renderReady, setRenderReady] = useState(false);
 
   useEffect(() => {
-    if (!scriptLoaded || !siteKey || !containerRef.current || !hasTurnstile()) {
+    if (!scriptLoaded) return;
+
+    let cancelled = false;
+    let attempts = 0;
+
+    const checkReady = () => {
+      if (cancelled) return;
+      if (hasTurnstile()) {
+        setRenderReady(true);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts < 40) {
+        window.setTimeout(checkReady, 150);
+      }
+    };
+
+    checkReady();
+
+    return () => {
+      cancelled = true;
+      setRenderReady(false);
+    };
+  }, [scriptLoaded]);
+
+  useEffect(() => {
+    if (!renderReady || !siteKey || !containerRef.current || !hasTurnstile()) {
       return;
     }
 
@@ -47,7 +75,7 @@ export default function TurnstileWidget({
         widgetIdRef.current = null;
       }
     };
-  }, [onTokenChange, scriptLoaded, siteKey]);
+  }, [onTokenChange, renderReady, siteKey]);
 
   return (
     <>
@@ -56,7 +84,14 @@ export default function TurnstileWidget({
         strategy="afterInteractive"
         onLoad={() => setScriptLoaded(true)}
       />
-      <div ref={containerRef} className={className} />
+      <div
+        className={`min-h-[72px] rounded-2xl border border-border bg-surface-2 px-4 py-3 ${className}`.trim()}
+      >
+        {!renderReady ? (
+          <p className="text-xs text-muted">Cargando verificacion anti-spam...</p>
+        ) : null}
+        <div ref={containerRef} />
+      </div>
     </>
   );
 }

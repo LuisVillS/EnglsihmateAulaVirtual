@@ -56,6 +56,12 @@ export default async function PracticePage({ searchParams: searchParamsPromise }
   return withSupabaseRequestTrace("page:/app/practice", async () => {
     const searchParams = await searchParamsPromise;
     const initialParams = normalizeSearchParams(searchParams);
+    if (initialParams.tab === "flashcards") {
+      const nextParams = new URLSearchParams();
+      if (initialParams.flashcards?.deckKey) nextParams.set("deck", initialParams.flashcards.deckKey);
+      if (initialParams.flashcards?.mode) nextParams.set("mode", initialParams.flashcards.mode);
+      redirect(nextParams.toString() ? `/app/practice/decks?${nextParams.toString()}` : "/app/practice/decks");
+    }
     const { supabase, user, isAdmin, role, profile: contextProfile } = await getRequestUserContext();
     const db = hasServiceRoleClient() ? getServiceSupabaseClient() : supabase;
 

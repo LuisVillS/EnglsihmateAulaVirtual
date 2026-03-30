@@ -38,13 +38,17 @@ function joinClasses(...values) {
   return values.filter(Boolean).join(" ");
 }
 
-function buildFlagEmoji(countryIso) {
-  if (!countryIso || countryIso.length !== 2) return "";
-  return countryIso
-    .toUpperCase()
-    .split("")
-    .map((char) => String.fromCodePoint(127397 + char.charCodeAt(0)))
-    .join("");
+function buildFlagIconClass(countryIso) {
+  const normalizedIso = String(countryIso || "").trim().toLowerCase();
+  return normalizedIso ? `flag-icon flag-icon-${normalizedIso}` : "";
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+      <path d="M5 7.5l5 5 5-5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 function normalizeRegionCandidate(value) {
@@ -52,7 +56,8 @@ function normalizeRegionCandidate(value) {
   if (!raw) return null;
 
   const localeMatch = raw.match(/[-_](\w{2})$/);
-  const countryCode = (localeMatch?.[1] || raw).toUpperCase();
+  if (!localeMatch?.[1]) return null;
+  const countryCode = localeMatch[1].toUpperCase();
   return COUNTRY_BY_ISO.get(countryCode)?.iso || null;
 }
 
@@ -186,28 +191,57 @@ export default function PayerPhoneField({
   nationalPlaceholder = "",
 }) {
   const lockedCountry = resolveCountryByAny(lockedCountryCode);
+  const lockedCountryDialCode = lockedCountry?.dialCode || "";
   const selectedCountry =
     resolveCountryByAny(countryCode) ||
     lockedCountry ||
-    detectLikelyPhoneCountry({ preferredCountryCode });
+    resolveCountryByAny(preferredCountryCode) ||
+    DEFAULT_PHONE_COUNTRY;
 
   useEffect(() => {
-    if (!lockedCountry?.dialCode) return;
-    if (countryCode === lockedCountry.dialCode) return;
-    onCountryCodeChange?.(lockedCountry.dialCode);
-  }, [countryCode, lockedCountry?.dialCode, onCountryCodeChange]);
+    if (!lockedCountryDialCode) return;
+    if (countryCode === lockedCountryDialCode) return;
+    onCountryCodeChange?.(lockedCountryDialCode);
+  }, [countryCode, lockedCountryDialCode, onCountryCodeChange]);
+
+  useEffect(() => {
+    if (lockedCountryDialCode) return;
+    if (countryCode) return;
+    if (!selectedCountry?.dialCode) return;
+    onCountryCodeChange?.(selectedCountry.dialCode);
+  }, [countryCode, lockedCountryDialCode, onCountryCodeChange, selectedCountry?.dialCode]);
 
   const effectiveHelperText = useMemo(() => {
     if (helperText) return helperText;
-    if (lockedCountry?.dialCode === DEFAULT_PHONE_COUNTRY.dialCode) {
+    if (lockedCountryDialCode === DEFAULT_PHONE_COUNTRY.dialCode) {
       return "Solo se acepta un numero de Peru (+51).";
     }
     return "Separa el codigo de pais del numero.";
-  }, [helperText, lockedCountry?.dialCode]);
+  }, [helperText, lockedCountryDialCode]);
 
   const countryFieldClass = compact || lockedCountry
-    ? "sm:grid-cols-[6.5rem_minmax(0,1fr)]"
+    ? "grid-cols-[9.5rem_minmax(0,1fr)]"
     : "sm:grid-cols-[11rem_minmax(0,1fr)]";
+
+  function renderCountrySummary(country) {
+    if (!country) return null;
+
+    return (
+      <div className="flex min-w-0 items-center gap-3">
+        <span
+          aria-hidden="true"
+          className={joinClasses(
+            "h-5 w-6 shrink-0 rounded-[0.35rem] bg-center bg-cover shadow-[inset_0_0_0_1px_rgba(15,23,42,0.08)]",
+            buildFlagIconClass(country.iso)
+          )}
+        />
+        <div className="min-w-0">
+          <p className="text-[0.98rem] font-semibold tracking-[-0.02em] text-foreground">{country.dialCode}</p>
+          {!compact ? <p className="truncate text-[11px] text-muted">{country.label}</p> : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">
@@ -219,43 +253,52 @@ export default function PayerPhoneField({
 
       <div className={joinClasses("grid gap-3", countryFieldClass)}>
         {lockedCountry ? (
-          <div className="flex min-h-[3rem] items-center justify-center rounded-2xl border border-border bg-surface-2 px-3 text-sm font-semibold text-foreground">
-            <span aria-hidden="true">{buildFlagEmoji(lockedCountry.iso)}</span>
-            <span className="ml-2">{lockedCountry.dialCode}</span>
+          <div className="flex min-h-[3rem] items-center rounded-[1.25rem] border border-border bg-surface-2 px-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
+            {renderCountrySummary(lockedCountry)}
           </div>
         ) : (
-          <select
-            value={selectedCountry?.dialCode || DEFAULT_PHONE_COUNTRY.dialCode}
-            onChange={(event) => onCountryCodeChange?.(event.target.value)}
-            className="min-h-[3rem] rounded-2xl border border-border bg-surface-2 px-3 text-sm text-foreground outline-none transition focus:border-primary"
-            aria-label={`${label || "Phone"} country code`}
-          >
-            {PHONE_COUNTRIES.map((option) => {
-              const optionLabel = showCountryName
-                ? `${buildFlagEmoji(option.iso)} ${option.label} (${option.dialCode})`
-                : `${buildFlagEmoji(option.iso)} ${option.dialCode}`;
-              return (
-                <option key={option.iso} value={option.dialCode}>
-                  {optionLabel}
-                </option>
-              );
-            })}
-          </select>
+          <div className="relative min-h-[3rem] rounded-[1.25rem] border border-border bg-surface-2 px-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
+            <div className="pointer-events-none flex h-full items-center justify-between gap-3">
+              {renderCountrySummary(selectedCountry)}
+              <span className="shrink-0 text-muted">
+                <ChevronDownIcon />
+              </span>
+            </div>
+            <select
+              value={selectedCountry?.dialCode || DEFAULT_PHONE_COUNTRY.dialCode}
+              onChange={(event) => onCountryCodeChange?.(event.target.value)}
+              className="absolute inset-0 h-full w-full cursor-pointer appearance-none rounded-[1.25rem] opacity-0 outline-none"
+              aria-label={`${label || "Phone"} country code`}
+            >
+              {PHONE_COUNTRIES.map((option) => {
+                const optionLabel = showCountryName
+                  ? `${option.label} (${option.dialCode})`
+                  : option.dialCode;
+                return (
+                  <option key={option.iso} value={option.dialCode}>
+                    {optionLabel}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         )}
 
-        <input
-          type="tel"
-          required={required}
-          value={nationalNumber}
-          onChange={(event) =>
-            onNationalNumberChange?.(event.target.value.replace(/[^\d]/g, "").slice(0, 15))
-          }
-          inputMode={inputMode}
-          autoComplete="tel-national"
-          placeholder={nationalPlaceholder || selectedCountry?.placeholder || "999888777"}
-          className="min-h-[3rem] rounded-2xl border border-border bg-surface-2 px-4 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-primary"
-          aria-label={label || "Phone number"}
-        />
+        <div className="flex min-h-[3rem] items-center rounded-[1.25rem] border border-border bg-surface-2 px-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
+          <input
+            type="tel"
+            required={required}
+            value={nationalNumber}
+            onChange={(event) =>
+              onNationalNumberChange?.(event.target.value.replace(/[^\d]/g, "").slice(0, 15))
+            }
+            inputMode={inputMode}
+            autoComplete="tel-national"
+            placeholder={nationalPlaceholder || selectedCountry?.placeholder || "999888777"}
+            className="w-full border-0 bg-transparent p-0 text-[1.08rem] font-medium tracking-[-0.02em] text-foreground outline-none placeholder:text-muted"
+            aria-label={label || "Phone number"}
+          />
+        </div>
       </div>
 
       {effectiveHelperText ? <p className="text-xs text-muted">{effectiveHelperText}</p> : null}

@@ -48,7 +48,7 @@ function SubmitButton({ label, variant = "primary" }) {
   const baseClasses =
     variant === "ghost"
       ? "w-full rounded-2xl border border-border bg-transparent px-4 py-3 text-sm font-semibold text-foreground transition hover:border-primary"
-      : "w-full rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-foreground shadow-lg shadow-black/30 transition hover:brightness-110 disabled:opacity-60";
+      : "w-full rounded-2xl bg-primary px-4 py-3 text-white text-sm font-semibold text-foreground shadow-lg shadow-black/30 transition hover:brightness-110 disabled:opacity-60";
 
   return (
     <button type="submit" className={baseClasses} disabled={pending}>

@@ -36,10 +36,10 @@ export default async function LeaderboardRoute({ searchParams: searchParamsPromi
     }
 
     let profile = contextProfile || null;
-    if (!profile?.id) {
+    if (!profile?.id || profile?.current_streak == null) {
       const { data: profileRow, error: profileError } = await supabase
         .from("profiles")
-        .select("id, full_name, course_level, xp_total")
+        .select("id, full_name, course_level, xp_total, current_streak")
         .eq("id", user.id)
         .maybeSingle();
 
@@ -61,6 +61,7 @@ export default async function LeaderboardRoute({ searchParams: searchParamsPromi
           id: user.id,
           fullName: profile?.full_name || user.user_metadata?.full_name || user.email || "Student",
           courseLevel: profile?.course_level || "",
+          currentStreak: Number(profile?.current_streak || 0) || 0,
         }}
         language={language}
         competition={competition}

@@ -1,5 +1,6 @@
 import { Montserrat, Poppins } from "next/font/google";
 import "./globals.css";
+import "flag-icon-css/css/flag-icons.min.css";
 import { ensureDefaultAdminUser } from "@/lib/default-admin";
 import FormErrorFocus from "@/components/form-error-focus";
 

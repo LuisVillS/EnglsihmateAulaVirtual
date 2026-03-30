@@ -30,6 +30,12 @@ function formatDate(value) {
 function DeckCard({ deck, onOpen, loading = false, badge = "" }) {
   return (
     <article className="rounded-[20px] border border-[rgba(16,52,116,0.1)] bg-white px-5 py-5 shadow-[0_16px_30px_rgba(15,23,42,0.05)]">
+      {deck?.coverImageUrl ? (
+        <div
+          className="mb-5 h-32 rounded-[18px] bg-cover bg-center"
+          style={{ backgroundImage: `linear-gradient(180deg, rgba(16,52,116,0.08), rgba(16,52,116,0.2)), url("${deck.coverImageUrl}")` }}
+        />
+      ) : null}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           {badge ? (
@@ -105,6 +111,7 @@ function summarizeDeck(deck) {
     deckKey: deck?.deckKey || "",
     title: deck?.title || "Flashcards",
     description: deck?.description || "",
+    coverImageUrl: deck?.coverImageUrl || "",
     sourceType: deck?.sourceType || "system",
     sourceLabel: deck?.sourceLabel || "",
     cefrLevel: deck?.cefrLevel || "",

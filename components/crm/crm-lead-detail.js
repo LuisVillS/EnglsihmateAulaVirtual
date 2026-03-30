@@ -23,9 +23,10 @@ import {
 } from "@/components/crm/crm-ui";
 
 export default function CrmLeadDetail({ data, returnTo }) {
-  const { lead, stages, interactions, stageHistory, profile, preEnrollment, payments, stageMap, operatorMap } = data;
+  const { lead, stages, interactions, latestNote = "", stageHistory, profile, preEnrollment, payments, stageMap, operatorMap } = data;
   const leadSource = resolveLeadSourceValue(lead);
   const leadDialHref = buildCrmDialHref(lead);
+  const timelineInteractions = interactions.filter((entry) => entry?.interaction_kind !== "note");
 
   return (
     <div className="space-y-4">
@@ -115,7 +116,7 @@ export default function CrmLeadDetail({ data, returnTo }) {
         </AdminCard>
 
         <AdminCard className="space-y-4">
-          <AdminSectionHeader eyebrow="Mutations" title="Server-backed changes" description="Stage changes and notes post through server actions only." />
+          <AdminSectionHeader eyebrow="Mutations" title="Server-backed changes" description="Stage changes and the shared lead notes document post through server actions only." />
 
           <form action={moveLeadStageAction} className="space-y-3 rounded-[22px] border border-[rgba(15,23,42,0.08)] bg-[#fcfdff] p-4">
             <input type="hidden" name="leadId" value={lead.id} />
@@ -152,16 +153,17 @@ export default function CrmLeadDetail({ data, returnTo }) {
             <input type="hidden" name="leadId" value={lead.id} />
             <input type="hidden" name="returnTo" value={returnTo} />
             <div className="space-y-1">
-              <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Operator note</label>
+              <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Notes</label>
               <textarea
                 name="note"
                 rows={5}
-                placeholder="Capture what changed, what was learned, or what should happen next."
+                defaultValue={latestNote}
+                placeholder="Edit the shared notes document for this lead."
                 className="w-full rounded-[20px] border border-[rgba(15,23,42,0.1)] bg-white px-3 py-3 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
               />
             </div>
             <button className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]">
-              Add note
+              Save notes
             </button>
           </form>
         </AdminCard>
@@ -169,9 +171,9 @@ export default function CrmLeadDetail({ data, returnTo }) {
 
       <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
         <AdminCard className="space-y-4">
-          <AdminSectionHeader eyebrow="Interactions" title="Timeline" description="Notes and call outcomes captured for this lead." />
+          <AdminSectionHeader eyebrow="Interactions" title="Timeline" description="Call outcomes and other interaction activity captured for this lead." />
           <div className="space-y-3">
-            {interactions.map((entry) => (
+            {timelineInteractions.map((entry) => (
               <div key={entry.id} className="rounded-[20px] border border-[rgba(15,23,42,0.08)] bg-[#fcfdff] px-4 py-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <CrmBadge tone="accent">{entry.interaction_kind}</CrmBadge>
@@ -187,7 +189,7 @@ export default function CrmLeadDetail({ data, returnTo }) {
                 ) : null}
               </div>
             ))}
-            {!interactions.length ? (
+            {!timelineInteractions.length ? (
               <div className="rounded-[20px] border border-dashed border-[rgba(15,23,42,0.12)] bg-[#f8fafc] px-4 py-10 text-center text-sm text-[#64748b]">
                 No interactions yet.
               </div>

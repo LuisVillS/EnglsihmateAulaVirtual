@@ -59,7 +59,7 @@ export default async function AdminFlashcardsPage() {
 
     const deckRowsResult = await supabase
       .from("flashcard_decks")
-      .select("id, title, description, source_type, cefr_level, theme_tag, is_system, is_active")
+      .select("id, title, description, cover_image_url, source_type, cefr_level, theme_tag, is_system, is_active")
       .eq("is_system", true)
       .order("cefr_level", { ascending: true })
       .order("title", { ascending: true });
@@ -90,6 +90,7 @@ export default async function AdminFlashcardsPage() {
         id: String(deck.id || "").trim(),
         title: String(deck.title || "").trim(),
         description: String(deck.description || "").trim(),
+        coverImageUrl: String(deck.cover_image_url || "").trim(),
         cefrLevel: String(deck.cefr_level || "").trim().toUpperCase(),
         themeTag: String(deck.theme_tag || "").trim().toLowerCase(),
         sourceType: String(deck.source_type || "system").trim().toLowerCase(),

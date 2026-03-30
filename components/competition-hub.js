@@ -142,7 +142,7 @@ export default function CompetitionHub({
               <Link href="/app/practice?tab=exercises" className="student-button-primary px-4 py-2.5 text-sm">
                 Open Practice Arena
               </Link>
-              <Link href="/app/practice?tab=flashcards" className="student-button-secondary px-4 py-2.5 text-sm">
+              <Link href="/app/practice/decks" className="student-button-secondary px-4 py-2.5 text-sm">
                 Open Flashcard Arcade
               </Link>
             </div>

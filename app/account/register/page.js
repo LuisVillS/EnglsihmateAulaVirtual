@@ -478,10 +478,11 @@ export default function PreEnrollmentRegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [phoneTouched, setPhoneTouched] = useState(false);
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
-    phoneCountryCode: DEFAULT_PHONE_COUNTRY.dialCode,
+    phoneCountryCode: "",
     phoneNationalNumber: "",
     birthDate: "",
   });
@@ -502,6 +503,8 @@ export default function PreEnrollmentRegisterPage() {
     [formData.phoneCountryCode, formData.phoneNationalNumber]
   );
   const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
+  const turnstileEnabled = Boolean(turnstileSiteKey);
+  const phoneErrorMessage = phoneTouched ? phoneError : "";
 
   useEffect(() => {
     const cached = window.localStorage.getItem("pre_enroll_email_history");
@@ -519,9 +522,9 @@ export default function PreEnrollmentRegisterPage() {
   useEffect(() => {
     const detectedCountry = detectLikelyPhoneCountry();
     setFormData((current) =>
-      current.phoneCountryCode === DEFAULT_PHONE_COUNTRY.dialCode
-        ? { ...current, phoneCountryCode: detectedCountry.dialCode }
-        : current
+      current.phoneCountryCode
+        ? current
+        : { ...current, phoneCountryCode: detectedCountry.dialCode }
     );
   }, []);
 
@@ -535,7 +538,13 @@ export default function PreEnrollmentRegisterPage() {
       return;
     }
     if (phoneError) {
+      setPhoneTouched(true);
       setError(phoneError);
+      setLoading(false);
+      return;
+    }
+    if (!turnstileEnabled) {
+      setError("El registro no esta disponible temporalmente. Intenta nuevamente en unos minutos.");
       setLoading(false);
       return;
     }
@@ -660,10 +669,11 @@ export default function PreEnrollmentRegisterPage() {
                   onCountryCodeChange={(value) =>
                     setFormData((current) => ({ ...current, phoneCountryCode: value }))
                   }
-                  onNationalNumberChange={(value) =>
-                    setFormData((current) => ({ ...current, phoneNationalNumber: value }))
-                  }
-                  error={phoneError}
+                  onNationalNumberChange={(value) => {
+                    setPhoneTouched(true);
+                    setFormData((current) => ({ ...current, phoneNationalNumber: value }));
+                  }}
+                  error={phoneErrorMessage}
                 />
               </div>
               <div className="space-y-2">
@@ -680,19 +690,21 @@ export default function PreEnrollmentRegisterPage() {
             </div>
             <button
               type="submit"
-              disabled={loading}
-              className="w-full rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-95 disabled:opacity-60"
+              disabled={loading || !turnstileEnabled}
+              className="w-full rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading ? "Creando acceso..." : "Enviar pre-matricula"}
+              {!turnstileEnabled
+                ? "Registro temporalmente no disponible"
+                : loading
+                  ? "Creando acceso..."
+                  : "Enviar pre-matricula"}
             </button>
             {turnstileSiteKey ? (
-              <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3">
-                <TurnstileWidget siteKey={turnstileSiteKey} onTokenChange={setTurnstileToken} />
-              </div>
+              <TurnstileWidget siteKey={turnstileSiteKey} onTokenChange={setTurnstileToken} />
             ) : (
-              <p className="text-xs text-danger">
-                Falta configurar NEXT_PUBLIC_TURNSTILE_SITE_KEY para el formulario publico.
-              </p>
+              <div className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-xs text-danger">
+                El registro esta temporalmente no disponible. Intenta nuevamente mas tarde.
+              </div>
             )}
             <div className="text-center text-sm text-muted">
               Ya registre mis datos.{" "}

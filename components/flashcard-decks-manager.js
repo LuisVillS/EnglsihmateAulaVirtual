@@ -17,6 +17,7 @@ function createEmptyDeck() {
     deckId: "",
     title: "",
     description: "",
+    coverImageUrl: "",
     cefrLevel: "A1",
     themeTag: "",
     isActive: true,
@@ -30,6 +31,7 @@ function toDeckValues(deck = null) {
     deckId: String(deck.id || "").trim(),
     title: String(deck.title || "").trim(),
     description: String(deck.description || "").trim(),
+    coverImageUrl: String(deck.coverImageUrl || "").trim(),
     cefrLevel: String(deck.cefrLevel || "A1").trim().toUpperCase() || "A1",
     themeTag: String(deck.themeTag || "").trim().toLowerCase(),
     isActive: deck.isActive !== false,
@@ -239,6 +241,12 @@ export default function FlashcardDecksManager({ initialDecks = [], availableCard
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {filteredDecks.map((deck) => (
             <article key={deck.id} className="rounded-3xl border border-border bg-surface p-5 shadow-sm">
+              {deck.coverImageUrl ? (
+                <div
+                  className="mb-4 h-32 rounded-[20px] bg-cover bg-center"
+                  style={{ backgroundImage: `linear-gradient(180deg, rgba(16,52,116,0.08), rgba(16,52,116,0.18)), url("${deck.coverImageUrl}")` }}
+                />
+              ) : null}
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-lg font-semibold text-foreground">{deck.title || "Deck sin titulo"}</p>
@@ -361,7 +369,25 @@ export default function FlashcardDecksManager({ initialDecks = [], availableCard
                 placeholder="Deck principal para presentaciones, saludos y vocabulario base."
               />
             </label>
+
+            <label className="space-y-2 sm:col-span-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">URL de imagen</span>
+              <input
+                name="coverImageUrl"
+                value={formValues.coverImageUrl}
+                onChange={(event) => setFormValues((current) => ({ ...current, coverImageUrl: event.target.value }))}
+                className="w-full rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground"
+                placeholder="https://..."
+              />
+            </label>
           </div>
+
+          {formValues.coverImageUrl ? (
+            <div
+              className="h-40 rounded-2xl border border-border bg-cover bg-center"
+              style={{ backgroundImage: `linear-gradient(180deg, rgba(16,52,116,0.06), rgba(16,52,116,0.16)), url("${formValues.coverImageUrl}")` }}
+            />
+          ) : null}
 
           <label className="flex items-center gap-3 rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground">
             <input

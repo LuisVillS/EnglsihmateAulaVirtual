@@ -7,12 +7,11 @@ export const metadata = {
 export default async function FlashcardsPage({ searchParams: searchParamsPromise }) {
   const searchParams = await searchParamsPromise;
   const params = new URLSearchParams();
-  params.set("tab", "flashcards");
 
   const deck = String(searchParams?.deck || searchParams?.deck_key || searchParams?.deckKey || "").trim();
   const mode = String(searchParams?.flashcard_mode || searchParams?.flashcardMode || searchParams?.mode || "").trim();
   if (deck) params.set("deck", deck);
-  if (mode) params.set("flashcard_mode", mode);
+  if (mode) params.set("mode", mode);
 
-  redirect(`/app/practice?${params.toString()}`);
+  redirect(params.toString() ? `/app/practice/decks?${params.toString()}` : "/app/practice/decks");
 }
