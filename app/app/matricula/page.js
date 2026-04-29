@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import MatriculaPage from "@/app/matricula/page";
 import MonthlyPaymentCard from "@/components/monthly-payment-card";
+import { UNIFIED_COURSE_PRICE } from "@/lib/course-config";
 import { getRequestUserContext } from "@/lib/request-user-context";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import {
@@ -163,7 +164,7 @@ export default async function AppMatriculaPage({ searchParams }) {
   const canPayNow = renewal.canPayNow;
   const canRenewSameCourse = renewal.canRenewSameCourse;
   const canStartNewEnrollment = renewal.canStartNewEnrollment;
-  const amount = profile.is_premium ? 139 : 99;
+  const amount = UNIFIED_COURSE_PRICE;
 
   const billingMonths = [currentBillingMonth, nextBillingMonth].filter(Boolean);
   const payments = await getPaymentsForMonths(service, profile.id, billingMonths);

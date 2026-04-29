@@ -255,7 +255,7 @@ export default function Sidebar({
   mobileOpen,
   onCloseMobile,
   studyWithMeUnlocked = false,
-  studyWithMeLockMessage = "Disponible solo para alumnos Premium.",
+  studyWithMeLockMessage = "Disponible para alumnos con curso activo.",
 }) {
   const pathname = usePathname();
   const isLockedRole = role === "non_student";

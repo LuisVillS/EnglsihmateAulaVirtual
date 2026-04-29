@@ -84,12 +84,8 @@ export default function TurnstileWidget({
         strategy="afterInteractive"
         onLoad={() => setScriptLoaded(true)}
       />
-      <div
-        className={`min-h-[72px] rounded-2xl border border-border bg-surface-2 px-4 py-3 ${className}`.trim()}
-      >
-        {!renderReady ? (
-          <p className="text-xs text-muted">Cargando verificacion anti-spam...</p>
-        ) : null}
+      <div className={className}>
+        {!renderReady ? <p className="text-xs text-muted">Cargando verificacion anti-spam...</p> : null}
         <div ref={containerRef} />
       </div>
     </>

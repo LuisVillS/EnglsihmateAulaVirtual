@@ -25,7 +25,7 @@ export default async function CrmSettingsPage({ searchParams }) {
       <AdminPageHeader
         eyebrow="CRM"
         title="Pipeline settings"
-        description="Manage CRM stages, reordering, activation, stage-level Brevo template IDs, and source ignore rules from one admin surface."
+        description="Manage CRM stages, reordering, activation, stage-level email templates, and compatible source rules from one admin surface."
         actions={
           <>
             <Link

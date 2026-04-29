@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  UNIFIED_COURSE_PRICE,
+  formatUnifiedCourseType,
+  normalizeUnifiedCourseType,
+} from "@/lib/course-config";
 import { formatEnrollmentFrequencyLabel } from "@/lib/frequency-labels";
 import PayerPhoneField, {
   buildStructuredPayerPhone,
@@ -114,15 +119,6 @@ function formatMonthLabel(value) {
   if (!parsed) return "-";
   const label = MONTH_LABELS[parsed.month - 1] || String(parsed.month).padStart(2, "0");
   return `${label} ${parsed.year}`;
-}
-
-function formatCourseType(value) {
-  const normalized = (value || "").toString().toUpperCase();
-  if (normalized === "PREMIUM") return "Premium";
-  if (normalized === "REGULAR") return "Regular";
-  if (normalized === "premium") return "Premium";
-  if (normalized === "regular") return "Regular";
-  return "-";
 }
 
 function formatDateTime(value) {
@@ -247,15 +243,14 @@ export default function MatriculaPage() {
     level: "",
     frequency: "",
     startTime: "",
-    courseType: "regular",
     startMonth: "",
   });
 
   const amount = useMemo(() => {
     if (summary?.price_total != null) return Number(summary.price_total) || 0;
     if (preEnrollment?.price_total != null) return Number(preEnrollment.price_total) || 0;
-    return selection.courseType === "premium" ? 139 : 99;
-  }, [summary?.price_total, preEnrollment?.price_total, selection.courseType]);
+    return UNIFIED_COURSE_PRICE;
+  }, [summary?.price_total, preEnrollment?.price_total]);
   const payerPhone = useMemo(
     () => buildStructuredPayerPhone(payerPhoneCountryCode, payerPhoneNationalNumber),
     [payerPhoneCountryCode, payerPhoneNationalNumber]
@@ -519,7 +514,7 @@ export default function MatriculaPage() {
           level: selection.level,
           frequency: selection.frequency,
           startTime: selection.startTime || null,
-          courseType: selection.courseType,
+          courseType: normalizeUnifiedCourseType(),
           startMonth: selection.startMonth || null,
           startReservation: true,
         }),
@@ -719,9 +714,7 @@ export default function MatriculaPage() {
         : true
       : Boolean(paymentFile || preEnrollment?.payment_proof_url);
 
-  const summaryCourseTypeLabel = formatCourseType(
-    summary?.course_type || preEnrollment?.selected_course_type || selection.courseType
-  );
+  const summaryCourseTypeLabel = formatUnifiedCourseType(summary?.course_type || preEnrollment?.selected_course_type);
   const summaryFrequencyLabel = formatEnrollmentFrequencyLabel(
     summary?.frequency || preEnrollment?.selected_frequency || selection.frequency
   );
@@ -973,14 +966,10 @@ export default function MatriculaPage() {
                   </SelectField>
                 </Field>
 
-                <Field label="Tipo de curso">
-                  <SelectField
-                    value={selection.courseType}
-                    onChange={(event) => setSelection((prev) => ({ ...prev, courseType: event.target.value }))}
-                  >
-                    <option value="regular">Regular</option>
-                    <option value="premium">Premium</option>
-                  </SelectField>
+                <Field label="Plan del curso">
+                  <div className="rounded-xl border border-border bg-surface-2 px-4 py-3 text-sm font-semibold text-foreground">
+                    {formatUnifiedCourseType()}
+                  </div>
                 </Field>
               </div>
 

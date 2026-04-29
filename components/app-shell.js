@@ -14,7 +14,7 @@ export default function AppShell({
   role = "non_student",
   studentUiLanguage = "es",
   studyWithMeUnlocked = false,
-  studyWithMeLockMessage = "Disponible solo para alumnos Premium.",
+  studyWithMeLockMessage = "Disponible para alumnos con curso activo.",
 }) {
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [sidebarReady, setSidebarReady] = useState(false);

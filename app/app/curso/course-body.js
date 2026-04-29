@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AppModal from "@/components/app-modal";
 import CourseSessionFlashcardsViewer from "@/components/course-session-flashcards-viewer";
+import FilterPopover, { FilterChipGroup, FilterPopoverSection } from "@/components/filter-popover";
 import { formatMonthKeyFromDate } from "@/lib/class-format";
 import { getFrequencyReference } from "@/lib/course-sessions";
 import { getRemainingQuizRestarts, normalizeAttemptRow } from "@/lib/lesson-quiz";
@@ -125,13 +126,83 @@ function toSlidesEmbedUrl(url) {
   return `https://docs.google.com/presentation/d/${match[1]}/embed?start=false&loop=false&delayms=3000`;
 }
 
+function toVimeoEmbedUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.includes("vimeo.com")) return null;
+    const playerMatch = parsed.pathname.match(/\/video\/(\d+)/i);
+    if (playerMatch?.[1]) {
+      const hashParam = parsed.searchParams.get("h");
+      return `https://player.vimeo.com/video/${playerMatch[1]}${hashParam ? `?h=${encodeURIComponent(hashParam)}` : ""}`;
+    }
+    const idMatch = parsed.pathname.match(/(?:^|\/)(\d+)(?:$|\/)/);
+    if (!idMatch?.[1]) return null;
+    const hashParam = parsed.searchParams.get("h");
+    return `https://player.vimeo.com/video/${idMatch[1]}${hashParam ? `?h=${encodeURIComponent(hashParam)}` : ""}`;
+  } catch {
+    return null;
+  }
+}
+
+function toYouTubeEmbedUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    let videoId = "";
+    if (host.includes("youtu.be")) {
+      videoId = parsed.pathname.replace(/^\/+/, "").split("/")[0] || "";
+    } else if (host.includes("youtube.com")) {
+      if (parsed.pathname.includes("/embed/")) return raw;
+      if (parsed.pathname.includes("/shorts/")) {
+        videoId = parsed.pathname.split("/shorts/")[1]?.split("/")[0] || "";
+      } else if (parsed.pathname.includes("/watch")) {
+        videoId = parsed.searchParams.get("v") || "";
+      } else if (parsed.pathname.includes("/live/")) {
+        videoId = parsed.pathname.split("/live/")[1]?.split("/")[0] || "";
+      }
+    }
+    if (!videoId) return null;
+    return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+  } catch {
+    return null;
+  }
+}
+
+function toLoomEmbedUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.includes("loom.com")) return null;
+    const shareMatch = parsed.pathname.match(/\/share\/([a-zA-Z0-9]+)/i);
+    if (!shareMatch?.[1]) return null;
+    return `https://www.loom.com/embed/${shareMatch[1]}`;
+  } catch {
+    return null;
+  }
+}
+
+function toRecordingEmbedUrl(url) {
+  return toYouTubeEmbedUrl(url) || toVimeoEmbedUrl(url) || toLoomEmbedUrl(url);
+}
+
+function isDirectVideoFileUrl(url) {
+  return /\.(mp4|webm|ogg|m3u8)(?:\?|#|$)/i.test(String(url || "").trim());
+}
+
 function sessionAction(row) {
   if (!row) return null;
   if (row.afterEnd && row.recording_link) {
-    return { href: row.recording_link, label: "Ver grabacion" };
+    return { type: "recording", href: row.recording_link, label: "Ver grabacion" };
   }
-  if (row.live_link) {
-    return { href: row.live_link, label: row.inLiveWindow ? "Unirse a la sesion" : "Ir a clase" };
+  if (!row.afterEnd && row.isClassDay && row.live_link) {
+    return { type: "live", href: row.live_link, label: "Ir a clase" };
   }
   return null;
 }
@@ -314,9 +385,16 @@ export default function CourseBody({
   initialFocusSessionId = null,
 }) {
   const [expanded, setExpanded] = useState({});
-  const [showOnlyUnlocked, setShowOnlyUnlocked] = useState(false);
+  const [selectedMonthKey, setSelectedMonthKey] = useState("");
+  const [selectedWeekKey, setSelectedWeekKey] = useState("");
+  const [classNameQuery, setClassNameQuery] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [draftMonthKey, setDraftMonthKey] = useState("");
+  const [draftWeekKey, setDraftWeekKey] = useState("");
+  const [draftClassNameQuery, setDraftClassNameQuery] = useState("");
   const [flashcardSessionId, setFlashcardSessionId] = useState(null);
   const [selectedMaterial, setSelectedMaterial] = useState(null);
+  const [selectedRecording, setSelectedRecording] = useState(null);
   const nowMs = new Date(nowIso || "1970-01-01T00:00:00.000Z").getTime();
   const today = dayKey(new Date(nowMs));
   const allowed = useMemo(() => new Set((allowedMonths || []).map((value) => monthKey(value)).filter(Boolean)), [allowedMonths]);
@@ -350,6 +428,8 @@ export default function CourseBody({
       isClassDay: dayKey(startsAt || session.session_date) === today,
       title: String(slide?.title || session.day_label || `Clase ${String(session.session_in_cycle || session.session_index || index + 1).padStart(2, "0")}`).trim(),
       classLabel: `Clase ${String(session.session_in_cycle || session.session_index || index + 1).padStart(2, "0")}`,
+      weekLabel: `Semana ${String(session.session_in_cycle || session.session_index || index + 1)}`,
+      weekValue: String(session.session_in_cycle || session.session_index || index + 1),
       scoreValue,
       resultsUrl,
       retryUrl,
@@ -374,7 +454,64 @@ export default function CourseBody({
     return Array.from(map.entries()).map(([key, rows]) => ({ key, rows, locked: rows.every((row) => row.locked), first: rows[0] })).sort((a, b) => (safeDate(a.first?.startsAt)?.getTime() || 0) - (safeDate(b.first?.startsAt)?.getTime() || 0));
   }, [hydrated]);
 
-  const visibleGroups = showOnlyUnlocked ? groups.filter((group) => !group.locked) : groups;
+  const monthOptions = useMemo(
+    () =>
+      groups.map((group) => {
+        const heading = monthTitle(group.key);
+        return {
+          value: group.key,
+          label: heading.label,
+        };
+      }),
+    [groups]
+  );
+
+  const weekOptions = useMemo(() => {
+    const sourceRows = draftMonthKey
+      ? hydrated.filter((row) => row.cycleKey === draftMonthKey)
+      : hydrated;
+    const seen = new Set();
+    return sourceRows
+      .filter((row) => {
+        if (!row.weekValue || seen.has(row.weekValue)) return false;
+        seen.add(row.weekValue);
+        return true;
+      })
+      .sort((left, right) => Number(left.weekValue) - Number(right.weekValue))
+      .map((row) => ({
+        value: row.weekValue,
+        label: row.weekLabel,
+      }));
+  }, [draftMonthKey, hydrated]);
+
+  const normalizedClassNameQuery = classNameQuery.trim().toLowerCase();
+  const visibleGroups = useMemo(() => {
+    return groups
+      .map((group) => {
+        if (selectedMonthKey && group.key !== selectedMonthKey) return null;
+        const rows = group.rows.filter((row) => {
+          if (selectedWeekKey && row.weekValue !== selectedWeekKey) return false;
+          if (!normalizedClassNameQuery) return true;
+          const title = String(row.title || "").toLowerCase();
+          const label = String(row.classLabel || "").toLowerCase();
+          return title.includes(normalizedClassNameQuery) || label.includes(normalizedClassNameQuery);
+        });
+        if (!rows.length) return null;
+        return {
+          ...group,
+          rows,
+          first: rows[0],
+          locked: rows.every((row) => row.locked),
+        };
+      })
+      .filter(Boolean);
+  }, [groups, normalizedClassNameQuery, selectedMonthKey, selectedWeekKey]);
+
+  const activeFilterCount = [
+    Boolean(selectedMonthKey),
+    Boolean(selectedWeekKey),
+    Boolean(normalizedClassNameQuery),
+  ].filter(Boolean).length;
   const frequency = getFrequencyReference(commission?.modality_key)?.classDays?.length;
   const cycleYear = String(firstSessionDate || commission?.start_date || "").slice(0, 4) || "----";
   const heroTitle = `${String(commission?.course_level || "Curso").toUpperCase()} (${cycleYear} - CICLO ${commission?.commission_number || 1})`;
@@ -382,7 +519,7 @@ export default function CourseBody({
   const remaining = Math.max(0, Number(metrics?.total || 0) - Number(metrics?.completed || 0));
   const gradeTen = gradeSummary?.finalGrade != null ? (Math.round(Number(gradeSummary.finalGrade)) / 10).toFixed(1) : "--";
   const certificateReady = progressPercent >= 80;
-  const heroTarget = featured?.inLiveWindow && featured?.live_link
+  const heroTarget = featured?.isClassDay && !featured?.afterEnd && featured?.live_link
     ? { type: "link", href: featured.live_link }
     : latestCompleted?.recording_link
       ? { type: "link", href: latestCompleted.recording_link }
@@ -397,6 +534,20 @@ export default function CourseBody({
   const selectedMaterialUrl = String(selectedMaterial?.url || "").trim();
   const selectedMaterialTitle = String(selectedMaterial?.title || "").trim() || "Presentacion de clase";
   const selectedMaterialEmbedUrl = toSlidesEmbedUrl(selectedMaterialUrl);
+  const selectedRecordingUrl = String(selectedRecording?.url || "").trim();
+  const selectedRecordingTitle = String(selectedRecording?.title || "").trim() || "Grabacion de clase";
+  const selectedRecordingPasscode = String(selectedRecording?.passcode || "").trim();
+  const selectedRecordingEmbedUrl = toRecordingEmbedUrl(selectedRecordingUrl);
+  const selectedRecordingIsDirectVideo = !selectedRecordingEmbedUrl && isDirectVideoFileUrl(selectedRecordingUrl);
+
+  function handleFiltersOpenChange(nextOpen) {
+    if (nextOpen) {
+      setDraftMonthKey(selectedMonthKey);
+      setDraftWeekKey(selectedWeekKey);
+      setDraftClassNameQuery(classNameQuery);
+    }
+    setFiltersOpen(nextOpen);
+  }
 
   useEffect(() => {
     const sessionId = String(initialFocusSessionId || "").trim();
@@ -419,6 +570,88 @@ export default function CourseBody({
       if (secondTimer) window.clearTimeout(secondTimer);
     };
   }, [initialFocusSessionId]);
+
+  function renderExpandedSessionContent(row) {
+    return (
+      <div onClick={stopCardToggle} className="grid gap-8 border-t border-[rgba(16,52,116,0.08)] bg-[#fcfdff] px-6 py-8 lg:grid-cols-2">
+        <div>
+          <h5 className="flex items-center gap-2 text-[15px] font-semibold uppercase tracking-[0.1em] text-[#103474]">
+            <FolderIcon />
+            Material de clase
+          </h5>
+          <div className="mt-6 space-y-3">
+            {row.resources.length ? (
+              row.resources.map((item) => (
+                <ResourceRow
+                  key={item.id}
+                  item={item}
+                  sessionId={row.id}
+                  onOpenFlashcards={setFlashcardSessionId}
+                  onOpenMaterial={setSelectedMaterial}
+                />
+              ))
+            ) : (
+              <div className="rounded-[16px] border border-dashed border-[rgba(16,52,116,0.14)] bg-white px-4 py-5 text-sm text-[#667089]">
+                Material pendiente de carga para esta clase.
+              </div>
+            )}
+          </div>
+        </div>
+        <div>
+          <h5 className="flex items-center gap-2 text-[15px] font-semibold uppercase tracking-[0.1em] text-[#103474]">
+            <QuizIcon />
+            Evaluacion
+          </h5>
+          <div className="mt-6 rounded-[20px] border border-[rgba(16,52,116,0.08)] bg-[#f8fafc] p-6">
+            {row.primaryTest ? (
+              <>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#667089]">Test</p>
+                <h6 className="mt-2 text-[19px] font-semibold leading-tight text-[#103474]">{row.primaryTest.title}</h6>
+                <div className="mt-6 flex flex-col gap-4 rounded-[14px] border border-[rgba(16,52,116,0.08)] bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#667089]">Tu resultado</p>
+                    <p className="mt-2 text-xl font-semibold text-[#103474]">
+                      {row.scoreValue != null ? (row.scoreValue / 10).toFixed(1) : "—"}
+                      <span className="ml-2 text-sm font-normal text-[#667089]">/ 10</span>
+                    </p>
+                  </div>
+                  {row.resultsUrl ? (
+                    <a
+                      href={row.resultsUrl}
+                      onClick={stopCardToggle}
+                      className="inline-flex min-h-11 items-center justify-center rounded-[12px] bg-[#103474] px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-white"
+                    >
+                      Ver resultado
+                    </a>
+                  ) : row.primaryTest.url ? (
+                    <a
+                      href={row.canRetry ? row.retryUrl : row.primaryTest.url}
+                      onClick={stopCardToggle}
+                      className="inline-flex min-h-11 items-center justify-center rounded-[12px] bg-[#103474] px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-white"
+                    >
+                      {row.canRetry ? "Intentar test" : "Iniciar test"}
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="inline-flex min-h-11 items-center justify-center rounded-[12px] bg-[#dfe3eb] px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[#7c8498]"
+                    >
+                      Sin acceso
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="rounded-[14px] border border-dashed border-[rgba(16,52,116,0.14)] bg-white px-4 py-5 text-sm text-[#667089]">
+                Aun no hay una evaluacion asignada para esta clase.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -462,13 +695,83 @@ export default function CourseBody({
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div><h2 className="text-[2.15rem] font-semibold tracking-[-0.04em] text-[#103474]">Cronograma de Clases</h2><p className="mt-1 text-[15px] font-medium text-[#6f7789]">Sigue tu ruta de aprendizaje semana a semana</p></div>
             <div className="flex items-center gap-3">
-              <button type="button" onClick={() => setShowOnlyUnlocked((value) => !value)} className={`inline-flex min-h-11 items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${showOnlyUnlocked ? "bg-[#dfe8ff] text-[#103474]" : "bg-white text-[#103474]"}`}><FilterIcon />Filtrar</button>
+              <FilterPopover
+                title="Filter by Content"
+                buttonLabel="Filtrar"
+                buttonIcon={<FilterIcon />}
+                activeCount={activeFilterCount}
+                open={filtersOpen}
+                onOpenChange={handleFiltersOpenChange}
+                width={470}
+                footer={({ close }) => (
+                  <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedMonthKey("");
+                        setSelectedWeekKey("");
+                        setClassNameQuery("");
+                        setDraftMonthKey("");
+                        setDraftWeekKey("");
+                        setDraftClassNameQuery("");
+                        close();
+                      }}
+                      className="inline-flex min-h-12 items-center justify-center rounded-[16px] border border-[rgba(16,52,116,0.14)] px-4 py-3 text-sm font-semibold text-[#103474] transition hover:bg-[#f5f8ff]"
+                    >
+                      Clear all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedMonthKey(draftMonthKey);
+                        setSelectedWeekKey(draftWeekKey);
+                        setClassNameQuery(draftClassNameQuery.trim());
+                        close();
+                      }}
+                      className="inline-flex min-h-12 items-center justify-center rounded-[18px] bg-[#103474] px-5 py-3 text-sm font-semibold text-white shadow-[0_16px_32px_rgba(16,52,116,0.2)] transition hover:bg-[#0c295a]"
+                    >
+                      Apply Filters
+                    </button>
+                  </div>
+                )}
+              >
+                <div className="space-y-5">
+                  <FilterPopoverSection label="Month of class" description="Choose the month block you want to review.">
+                    <FilterChipGroup
+                      options={monthOptions}
+                      value={draftMonthKey}
+                      onChange={(nextValue) => {
+                        setDraftMonthKey(nextValue);
+                        setDraftWeekKey("");
+                      }}
+                    />
+                  </FilterPopoverSection>
+
+                  <FilterPopoverSection label="Week of class" description="Narrow the timeline to a specific week.">
+                    <FilterChipGroup
+                      options={weekOptions}
+                      value={draftWeekKey}
+                      onChange={setDraftWeekKey}
+                    />
+                  </FilterPopoverSection>
+
+                  <FilterPopoverSection label="Class name" description="Search by the class title or class number.">
+                    <input
+                      type="text"
+                      value={draftClassNameQuery}
+                      onChange={(event) => setDraftClassNameQuery(event.target.value)}
+                      placeholder="Search class name"
+                      className="w-full rounded-[16px] border border-[rgba(16,52,116,0.14)] bg-[#fbfcff] px-4 py-3 text-sm text-[#1f2432] placeholder:text-[#97a3ba] focus:border-[#103474] focus:outline-none"
+                    />
+                  </FilterPopoverSection>
+                </div>
+              </FilterPopover>
               <a href="/api/calendar/ics" className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#103474]" aria-label="Descargar calendario"><DownloadIcon /></a>
             </div>
           </div>
 
           <div className="space-y-14">
-            {visibleGroups.map((group) => {
+            {visibleGroups.length ? visibleGroups.map((group) => {
               const heading = monthTitle(group.key);
               return (
                 <section key={group.key} className="relative">
@@ -490,19 +793,188 @@ export default function CourseBody({
                           const toggleCard = () => setExpanded((current) => ({ ...current, [row.id]: !open }));
                           return (
                             <div key={row.id} className="relative">
-                              <span className={`absolute -left-[51px] top-7 h-5 w-5 rounded-full border-4 border-[#f3f5f8] ${featuredRow ? "bg-[#103474] ring-4 ring-[#dfe8ff]" : row.afterEnd ? "bg-[#34c37b] ring-4 ring-[#e7f8ef]" : "bg-[#d2d8e4] ring-4 ring-[#eef1f6]"}`} />
+                              <span
+                                className={`absolute -left-[51px] top-7 h-5 w-5 rounded-full border-4 border-[#f3f5f8] ${
+                                  featuredRow
+                                    ? "bg-[#103474] ring-4 ring-[#dfe8ff]"
+                                    : row.afterEnd
+                                      ? "bg-[#34c37b] ring-4 ring-[#e7f8ef]"
+                                      : "bg-[#d2d8e4] ring-4 ring-[#eef1f6]"
+                                }`}
+                              />
                               {featuredRow ? (
-                                <article id={`session-${row.id}`} role="button" tabIndex={0} onClick={toggleCard} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleCard(); } }} className="overflow-hidden rounded-[24px] border-2 border-[#103474] bg-white shadow-[0_28px_70px_rgba(16,52,116,0.18)] ring-4 ring-[#dfe8ff] transition hover:shadow-[0_32px_78px_rgba(16,52,116,0.2)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#dfe8ff]">
+                                <article
+                                  id={`session-${row.id}`}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={toggleCard}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                      event.preventDefault();
+                                      toggleCard();
+                                    }
+                                  }}
+                                  className="overflow-hidden rounded-[24px] border-2 border-[#103474] bg-white shadow-[0_28px_70px_rgba(16,52,116,0.18)] ring-4 ring-[#dfe8ff] transition hover:shadow-[0_32px_78px_rgba(16,52,116,0.2)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#dfe8ff]"
+                                >
                                   <div className="flex flex-col gap-5 bg-[#f8fbff] px-6 py-6 lg:flex-row lg:items-center lg:justify-between">
-                                    <div className="flex items-center gap-5"><div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-[14px] bg-white text-[#103474] shadow-sm"><span className="text-lg font-semibold leading-none">{row.dateBox.day}</span><span className="mt-1 text-[15px] font-semibold leading-none">{row.dateBox.month}</span></div><div><div className="flex flex-wrap items-center gap-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#103474]">{row.classLabel}</p><span className="rounded-full bg-[#103474] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-white">{row.inLiveWindow ? "En vivo" : "Clase activa"}</span></div><h4 className="mt-2 text-[20px] font-semibold leading-tight text-[#103474] sm:text-[22px]">{row.title}</h4></div></div>
-                                    <div className="flex items-center gap-3">{rowAction ? <a href={rowAction.href} target="_blank" rel="noopener noreferrer" onClick={stopCardToggle} className="inline-flex min-h-11 items-center gap-2 rounded-[14px] bg-[#103474] px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(16,52,116,0.25)]"><PlayIcon />{rowAction.label}</a> : null}<button type="button" onClick={(event) => { stopCardToggle(event); toggleCard(); }} className="inline-flex h-11 w-11 items-center justify-center rounded-[14px] border border-[rgba(16,52,116,0.18)] bg-white text-[#103474]"><ChevronIcon open={open} /></button></div>
+                                    <div className="flex items-center gap-5">
+                                      <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-[14px] bg-white text-[#103474] shadow-sm">
+                                        <span className="text-lg font-semibold leading-none">{row.dateBox.day}</span>
+                                        <span className="mt-1 text-[15px] font-semibold leading-none">{row.dateBox.month}</span>
+                                      </div>
+                                      <div>
+                                        <div className="flex flex-wrap items-center gap-3">
+                                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#103474]">{row.classLabel}</p>
+                                          <span className="rounded-full bg-[#103474] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-white">
+                                            {row.inLiveWindow ? "En vivo" : "Clase activa"}
+                                          </span>
+                                        </div>
+                                        <h4 className="mt-2 text-[20px] font-semibold leading-tight text-[#103474] sm:text-[22px]">{row.title}</h4>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                      {!row.afterEnd ? (
+                                        <span className="inline-flex items-center gap-2 rounded-full bg-[#eef2f8] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#535866]">
+                                          {new Intl.DateTimeFormat("en-GB", {
+                                            timeZone: LIMA,
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                            hour12: false,
+                                          }).format(safeDate(row.startsAt || row.session_date) || new Date())}
+                                        </span>
+                                      ) : null}
+                                      {rowAction ? (
+                                        rowAction.type === "recording" ? (
+                                          <button
+                                            type="button"
+                                            onClick={(event) => {
+                                              stopCardToggle(event);
+                                              setSelectedRecording({
+                                                url: rowAction.href,
+                                                title: row.title,
+                                                passcode: row.recording_passcode,
+                                              });
+                                            }}
+                                            className="inline-flex min-h-11 items-center gap-2 rounded-[14px] bg-[#103474] px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(16,52,116,0.25)]"
+                                          >
+                                            <PlayIcon />
+                                            {rowAction.label}
+                                          </button>
+                                        ) : (
+                                          <a
+                                            href={rowAction.href}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            onClick={stopCardToggle}
+                                            className="inline-flex min-h-11 items-center gap-2 rounded-[14px] bg-[#103474] px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(16,52,116,0.25)]"
+                                          >
+                                            <PlayIcon />
+                                            {rowAction.label}
+                                          </a>
+                                        )
+                                      ) : !row.afterEnd ? (
+                                        <span className="rounded-[12px] bg-[#e7ebf1] px-5 py-2 text-sm font-semibold text-[#6b7386]">
+                                          Proximamente
+                                        </span>
+                                      ) : null}
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          stopCardToggle(event);
+                                          toggleCard();
+                                        }}
+                                        className="inline-flex h-11 w-11 items-center justify-center rounded-[14px] border border-[rgba(16,52,116,0.18)] bg-white text-[#103474]"
+                                      >
+                                        <ChevronIcon open={open} />
+                                      </button>
+                                    </div>
                                   </div>
-                                  {open ? <div onClick={stopCardToggle} className="grid gap-8 border-t border-[rgba(16,52,116,0.08)] bg-[#fcfdff] px-6 py-8 lg:grid-cols-2"><div><h5 className="flex items-center gap-2 text-[15px] font-semibold uppercase tracking-[0.1em] text-[#103474]"><FolderIcon />Material de clase</h5><div className="mt-6 space-y-3">{row.resources.length ? row.resources.map((item) => <ResourceRow key={item.id} item={item} sessionId={row.id} onOpenFlashcards={setFlashcardSessionId} onOpenMaterial={setSelectedMaterial} />) : <div className="rounded-[16px] border border-dashed border-[rgba(16,52,116,0.14)] bg-white px-4 py-5 text-sm text-[#667089]">Material pendiente de carga para esta clase.</div>}</div></div><div><h5 className="flex items-center gap-2 text-[15px] font-semibold uppercase tracking-[0.1em] text-[#103474]"><QuizIcon />Evaluacion</h5><div className="mt-6 rounded-[20px] border border-[rgba(16,52,116,0.08)] bg-[#f8fafc] p-6">{row.primaryTest ? <><p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#667089]">Test</p><h6 className="mt-2 text-[19px] font-semibold leading-tight text-[#103474]">{row.primaryTest.title}</h6><div className="mt-6 flex flex-col gap-4 rounded-[14px] border border-[rgba(16,52,116,0.08)] bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#667089]">Tu resultado</p><p className="mt-2 text-xl font-semibold text-[#103474]">{row.scoreValue != null ? (row.scoreValue / 10).toFixed(1) : "—"}<span className="ml-2 text-sm font-normal text-[#667089]">/ 10</span></p></div>{row.resultsUrl ? <a href={row.resultsUrl} onClick={stopCardToggle} className="inline-flex min-h-11 items-center justify-center rounded-[12px] bg-[#103474] px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-white">Ver resultado</a> : row.primaryTest.url ? <a href={row.canRetry ? row.retryUrl : row.primaryTest.url} onClick={stopCardToggle} className="inline-flex min-h-11 items-center justify-center rounded-[12px] bg-[#103474] px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-white">{row.canRetry ? "Intentar test" : "Iniciar test"}</a> : <button type="button" disabled className="inline-flex min-h-11 items-center justify-center rounded-[12px] bg-[#dfe3eb] px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[#7c8498]">Sin acceso</button>}</div></> : <div className="rounded-[14px] border border-dashed border-[rgba(16,52,116,0.14)] bg-white px-4 py-5 text-sm text-[#667089]">Aun no hay una evaluacion asignada para esta clase.</div>}</div></div></div> : null}
+                                  {open ? renderExpandedSessionContent(row) : null}
                                 </article>
                               ) : (
-                                <article id={`session-${row.id}`} role="button" tabIndex={0} onClick={toggleCard} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleCard(); } }} className={`rounded-[20px] border px-6 py-6 transition hover:shadow-[0_12px_28px_rgba(16,52,116,0.08)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#dfe8ff] ${row.afterEnd ? "border-[rgba(16,52,116,0.08)] bg-white shadow-[0_8px_24px_rgba(16,52,116,0.06)]" : "border-[rgba(16,52,116,0.08)] bg-[#fbfcfe]"}`}>
-                                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-3"><span className="text-[13px] font-semibold uppercase tracking-[0.12em] text-[#535866]">{shortDateTime(row.startsAt || row.session_date)}</span><span className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${row.afterEnd ? "bg-[#ddf7e8] text-[#11894f]" : "bg-[#e7ebf2] text-[#667089]"}`}>{row.afterEnd ? "Completado" : "Proxima"}</span></div><h4 className="mt-4 text-[20px] font-semibold leading-tight text-[#103474]">{row.title}</h4></div><div className="flex flex-wrap items-center justify-end gap-3 lg:flex-nowrap">{row.afterEnd ? <div className="flex flex-col items-end gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#535866]">Nota Test</span><span className="text-[22px] font-semibold text-[#103474]">{row.scoreValue != null ? (row.scoreValue / 10).toFixed(1) : "--"}</span></div> : <span className="inline-flex items-center gap-2 rounded-full bg-[#eef2f8] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#535866]">{new Intl.DateTimeFormat("en-GB", { timeZone: LIMA, hour: "2-digit", minute: "2-digit", hour12: false }).format(safeDate(row.startsAt || row.session_date) || new Date())}</span>}{rowAction ? <a href={rowAction.href} target="_blank" rel="noopener noreferrer" onClick={stopCardToggle} className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-[12px] px-4 py-2 text-sm font-semibold ${row.afterEnd ? "border border-[rgba(16,52,116,0.12)] bg-white text-[#103474]" : "bg-[#103474] text-white shadow-[0_10px_22px_rgba(16,52,116,0.18)]"}`}><PlayIcon />{rowAction.label}</a> : !row.afterEnd ? <span className="rounded-[12px] bg-[#e7ebf1] px-5 py-2 text-sm font-semibold text-[#6b7386]">Proximamente</span> : null}<button type="button" onClick={(event) => { stopCardToggle(event); toggleCard(); }} className="inline-flex h-10 w-10 items-center justify-center rounded-[12px] text-[#103474]"><ChevronIcon open={open} /></button></div></div>
-                                  {open ? <div onClick={stopCardToggle} className="mt-5 rounded-[16px] border border-[rgba(16,52,116,0.08)] bg-white px-4 py-4"><div className="flex flex-wrap gap-3">{row.recording_link ? <button type="button" onClick={(event) => { stopCardToggle(event); openUrl(row.recording_link); }} className="rounded-[12px] border border-[rgba(16,52,116,0.12)] px-4 py-2 text-sm font-semibold text-[#103474]">Ver grabacion</button> : null}{row.primarySlide?.url ? <button type="button" onClick={(event) => { stopCardToggle(event); setSelectedMaterial(row.primarySlide); }} className="rounded-[12px] border border-[rgba(16,52,116,0.12)] px-4 py-2 text-sm font-semibold text-[#103474]">Ver material</button> : null}{row.primaryTest?.url ? <a href={row.primaryTest.url} onClick={stopCardToggle} className="rounded-[12px] border border-[rgba(16,52,116,0.12)] px-4 py-2 text-sm font-semibold text-[#103474]">Ir al test</a> : null}{!row.recording_link && !row.primarySlide?.url && !row.primaryTest?.url ? <p className="text-sm text-[#667089]">Sin detalles adicionales para esta clase.</p> : null}</div></div> : null}
+                                <article
+                                  id={`session-${row.id}`}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={toggleCard}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                      event.preventDefault();
+                                      toggleCard();
+                                    }
+                                  }}
+                                  className={`rounded-[20px] border px-6 py-6 transition hover:shadow-[0_12px_28px_rgba(16,52,116,0.08)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#dfe8ff] ${row.afterEnd ? "border-[rgba(16,52,116,0.08)] bg-white shadow-[0_8px_24px_rgba(16,52,116,0.06)]" : "border-[rgba(16,52,116,0.08)] bg-[#fbfcfe]"}`}
+                                >
+                                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex flex-wrap items-center gap-3">
+                                        <span className="text-[13px] font-semibold uppercase tracking-[0.12em] text-[#535866]">
+                                          {shortDateTime(row.startsAt || row.session_date)}
+                                        </span>
+                                        <span
+                                          className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${row.afterEnd ? "bg-[#ddf7e8] text-[#11894f]" : "bg-[#e7ebf2] text-[#667089]"}`}
+                                        >
+                                          {row.afterEnd ? "Completado" : "Proxima"}
+                                        </span>
+                                      </div>
+                                      <h4 className="mt-4 text-[20px] font-semibold leading-tight text-[#103474]">{row.title}</h4>
+                                    </div>
+                                    <div className="flex flex-wrap items-center justify-end gap-3 lg:flex-nowrap">
+                                      {!row.afterEnd ? (
+                                        <span className="inline-flex items-center gap-2 rounded-full bg-[#eef2f8] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#535866]">
+                                          {new Intl.DateTimeFormat("en-GB", {
+                                            timeZone: LIMA,
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                            hour12: false,
+                                          }).format(safeDate(row.startsAt || row.session_date) || new Date())}
+                                        </span>
+                                      ) : null}
+                                      {rowAction ? (
+                                        rowAction.type === "recording" ? (
+                                          <button
+                                            type="button"
+                                            onClick={(event) => {
+                                              stopCardToggle(event);
+                                              setSelectedRecording({
+                                                url: rowAction.href,
+                                                title: row.title,
+                                                passcode: row.recording_passcode,
+                                              });
+                                            }}
+                                            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-[12px] px-4 py-2 text-sm font-semibold ${row.afterEnd ? "border border-[rgba(16,52,116,0.12)] bg-white text-[#103474]" : "bg-[#103474] text-white shadow-[0_10px_22px_rgba(16,52,116,0.18)]"}`}
+                                          >
+                                            <PlayIcon />
+                                            {rowAction.label}
+                                          </button>
+                                        ) : (
+                                          <a
+                                            href={rowAction.href}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            onClick={stopCardToggle}
+                                            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-[12px] px-4 py-2 text-sm font-semibold ${row.afterEnd ? "border border-[rgba(16,52,116,0.12)] bg-white text-[#103474]" : "bg-[#103474] text-white shadow-[0_10px_22px_rgba(16,52,116,0.18)]"}`}
+                                          >
+                                            <PlayIcon />
+                                            {rowAction.label}
+                                          </a>
+                                        )
+                                      ) : !row.afterEnd ? (
+                                        <span className="rounded-[12px] bg-[#e7ebf1] px-5 py-2 text-sm font-semibold text-[#6b7386]">Proximamente</span>
+                                      ) : null}
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          stopCardToggle(event);
+                                          toggleCard();
+                                        }}
+                                        className="inline-flex h-10 w-10 items-center justify-center rounded-[12px] text-[#103474]"
+                                      >
+                                        <ChevronIcon open={open} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {open ? renderExpandedSessionContent(row) : null}
                                 </article>
                               )}
                             </div>
@@ -513,7 +985,11 @@ export default function CourseBody({
                   </div>
                 </section>
               );
-            })}
+            }) : (
+              <section className="rounded-[24px] border border-dashed border-[rgba(16,52,116,0.16)] bg-white px-6 py-12 text-center text-[#667089]">
+                No encontramos clases con esos filtros.
+              </section>
+            )}
           </div>
         </section>
       </section>
@@ -537,8 +1013,41 @@ export default function CourseBody({
           )}
         </div>
       </AppModal>
+
+      <AppModal open={Boolean(selectedRecording)} onClose={() => setSelectedRecording(null)} title={selectedRecordingTitle} widthClass="max-w-6xl">
+        <div className="space-y-4">
+          {selectedRecordingEmbedUrl ? (
+            <div className="overflow-hidden rounded-[22px] border border-[rgba(16,52,116,0.1)] bg-white shadow-[0_18px_44px_rgba(16,52,116,0.08)]">
+              <div className="aspect-[16/9] w-full bg-[#0d111a]">
+                <iframe src={selectedRecordingEmbedUrl} title={selectedRecordingTitle} className="h-full w-full border-0" allowFullScreen />
+              </div>
+            </div>
+          ) : selectedRecordingIsDirectVideo ? (
+            <div className="overflow-hidden rounded-[22px] border border-[rgba(16,52,116,0.1)] bg-black shadow-[0_18px_44px_rgba(16,52,116,0.08)]">
+              <video controls className="h-auto w-full" src={selectedRecordingUrl}>
+                Tu navegador no soporta video HTML5.
+              </video>
+            </div>
+          ) : (
+            <div className="rounded-[20px] border border-dashed border-[rgba(16,52,116,0.16)] bg-white px-6 py-8 text-center text-[#667089]">
+              <p>No pudimos mostrar esta grabacion dentro del aula.</p>
+              <button
+                type="button"
+                onClick={() => openUrl(selectedRecordingUrl)}
+                className="mt-4 inline-flex min-h-11 items-center justify-center rounded-[12px] bg-[#103474] px-4 py-2 text-sm font-semibold text-white"
+              >
+                Abrir grabacion en otra pestana
+              </button>
+            </div>
+          )}
+          <div className="rounded-[14px] border border-[rgba(16,52,116,0.12)] bg-[#f8fbff] px-4 py-3 text-sm text-[#103474]">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#5c6780]">Codigo de Acceso</p>
+            <p className="mt-1 font-mono text-[15px] font-semibold tracking-[0.04em]">
+              {selectedRecordingPasscode || "No disponible"}
+            </p>
+          </div>
+        </div>
+      </AppModal>
     </>
   );
 }
-
-

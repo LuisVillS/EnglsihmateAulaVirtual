@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import PracticeDecksPage from "@/components/practice-decks-page";
 import { buildWeaknessDeckKey, normalizeFlashcardGameMode } from "@/lib/flashcard-arcade/constants";
 import { loadFlashcardArcadeHubData } from "@/lib/flashcard-arcade/service";
+import { loadStudentDeckBuilderCards } from "@/lib/flashcard-arcade/student-decks";
 import { getRequestUserContext } from "@/lib/request-user-context";
 import { USER_ROLES } from "@/lib/roles";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
@@ -60,6 +61,9 @@ export default async function PracticeDecksRoute({ searchParams: searchParamsPro
       legacyXpTotal: profile?.xp_total || 0,
       courseLevel: profile?.course_level || "",
     });
+    const availableDeckCards = await loadStudentDeckBuilderCards(db, {
+      cefrLevel: profile?.course_level || "",
+    });
     const language = resolveStudentUiLanguage({
       courseLevel: profile?.course_level || "",
       pathname: "/app/practice/decks",
@@ -76,6 +80,7 @@ export default async function PracticeDecksRoute({ searchParams: searchParamsPro
           cefrLevel: normalizeStudentCefrLevel(profile?.course_level || ""),
         }}
         flashcardHub={flashcardHub}
+        availableDeckCards={availableDeckCards}
       />
     );
   });

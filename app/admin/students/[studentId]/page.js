@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { formatUnifiedCourseType } from "@/lib/course-config";
 import { requireAdminPageAccess } from "@/lib/admin/access";
 import StudentForm from "@/components/student-form";
 import AdminStudentPasswordForm from "@/components/admin-student-password-form";
@@ -87,12 +88,8 @@ export default async function StudentDetailPage({ params: paramsPromise }) {
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted">
-            <span
-              className={`rounded-full border px-3 py-1 ${
-                student.is_premium ? "border-accent/45 text-accent" : "border-border"
-              }`}
-            >
-              {student.is_premium ? "Premium" : "Regular"}
+            <span className="rounded-full border border-accent/45 px-3 py-1 text-accent">
+              {formatUnifiedCourseType()}
             </span>
             {student.dni ? <span className="rounded-full border border-border px-3 py-1">DNI {student.dni}</span> : null}
           </div>

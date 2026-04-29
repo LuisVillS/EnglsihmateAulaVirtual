@@ -3,7 +3,7 @@
 Private English-learning platform built with Next.js App Router and Supabase. The repository currently contains:
 
 - A student web app with dashboard, course access, academic path, practice arena, flashcards, competitions, calendar, enrollment, and library reading.
-- An admin area for students, commissions, templates, exercises, flashcards, library management, Discord linking, pre-enrollments, and teacher analytics.
+- An admin area for students, commissions, templates, exercises, flashcards, blog management, library management, Discord linking, pre-enrollments, and teacher analytics.
 - A Supabase schema and migration history that power most of the product behavior.
 - A separate Python Discord bot under `bot/`.
 
@@ -52,6 +52,11 @@ Private English-learning platform built with Next.js App Router and Supabase. Th
 - `/admin/crm/leads` CRM lead list with filters and server-backed navigation.
 - `/admin/crm/leads/[id]` CRM lead detail with timeline, payment summary, stage moves, and note capture.
 - `/admin/crm/statistics` CRM release-facing reporting, webhook health, and automation visibility.
+- `/admin/blog` blog posts list with draft/published management.
+- `/admin/blog/new` blog post creation.
+- `/admin/blog/[id]` blog post editor with Markdown content and URL-based images.
+- `/admin/blog/categories` blog category management.
+- `/admin/blog/subscribers` blog subscriber list and CSV export.
 - `/admin/panel` operations panel.
 - `/admin/students` student management and CSV import/export.
 - `/admin/commissions` commission management.
@@ -88,11 +93,11 @@ CRM-specific API endpoints currently include:
 - `/api/leads/submit`
 - `/api/webhooks/meta/leads`
 - `/api/crm/webhooks/meta`
-- `/api/crm/webhooks/formspree` `deprecated`
 - `/api/crm/automations/run`
 - `/api/crm/simulate/meta`
 - `/api/crm/simulate/web-form`
-- `/api/crm/simulate/formspree` `deprecated`
+- `/api/admin/blog/subscribers/export`
+- `/api/jobs/blog-weekly-digest`
 
 ## Important directories
 
@@ -196,6 +201,8 @@ NEXT_PUBLIC_SITE_URL=...
 FLIPBOOK_SESSION_SECRET=...
 ```
 
+Transactional email sends use Brevo templates and now validate that the recipient email domain has MX records before calling Brevo, so obvious typo domains fail immediately instead of producing later soft bounces.
+
 CRM webhook and automation variables:
 
 ```bash
@@ -207,14 +214,23 @@ META_WEBHOOK_VERIFY_TOKEN=...
 META_PAGE_ACCESS_TOKEN=...
 META_GRAPH_API_VERSION=...
 
-# Legacy compatibility only; active ingestion no longer depends on Formspree
 CRM_META_WEBHOOK_SECRET=...
-CRM_FORMSPREE_WEBHOOK_SECRET=...
 CRM_AUTOMATION_RUN_SECRET=...
 CRM_AUTOMATIONS_SAFE_MODE=true
+CRON_SECRET=...
 
 # Optional pattern for CRM automation template lookup
 BREVO_TEMPLATE_<TEMPLATE_KEY>_ID=...
+```
+
+Blog digest variables:
+
+```bash
+BLOG_PUBLIC_BASE_URL=...
+BLOG_DIGEST_UNSUBSCRIBE_SECRET=...
+BLOG_DIGEST_TIMEZONE=America/Lima
+BLOG_DIGEST_POST_LIMIT=5
+BLOG_DIGEST_SUBJECT=...
 ```
 
 There are additional feature-specific variables in the codebase for external integrations. Before enabling a new flow, search the relevant route or library module and document any new env var here in the same change.
@@ -247,6 +263,9 @@ CRM-specific notes:
 - CRM external ingestion now also preserves canonical phone candidates when possible, including `phone_country_code`, `phone_national_number`, `phone_e164`, `phone_dialable`, and phone validation metadata if the destination columns exist.
 - CRM lead ingestion now deduplicates by phone number and merges additional source tags onto the same canonical lead, up to three source tags per lead.
 - CRM automation delivery can switch to a stage-triggered Brevo template when a lead enters a configured stage, while still honoring source-aware ignore rules and the generic template lookup rules.
+- CRM stages now keep a stable `system_key` plus a user-facing `display_name`, so stage renames in Kanban do not break automation or filtering logic.
+- `/admin/crm/kanban` now supports per-stage modal editing for the display name, initial email template, ignored roles, initial delay hours, and a 24-hour stagnancy follow-up template.
+- The 24-hour CRM stage stagnancy follow-up can be scheduled through `/api/jobs/crm-stage-stagnancy` using the existing `CRON_SECRET` job-auth pattern.
 - `/admin/crm/statistics` reports approved revenue, webhook activity, automation job health, and release-readiness signals.
 - Queue ownership is server-controlled through SQL using `FOR UPDATE SKIP LOCKED`.
 - The Calling Hub uses `tel:` launch only; call outcomes stay manual and are persisted through server actions.
@@ -254,6 +273,7 @@ CRM-specific notes:
 - `/admin/crm/kanban` now uses optimistic stage moves and bottom-positioned horizontal board navigation so the board stays responsive without wrapping or redirect churn.
 - CRM cards now keep only approved source tags plus the `Student` tag visible so merged acquisition history stays readable without internal status chips.
 - Public web-form intake is handled by `/api/leads/submit`, which validates Turnstile server-side, stores raw inbound events before normalizing CRM leads, and preserves `site_key` identity for `main_site` and `virtual_site`.
+- Public web-form and Meta intake merge only into open non-student CRM leads; matches against won/approved/revenue-bearing records create a fresh open lead in `new_lead` instead of placing the new submission under Won / Enrolled.
 - Meta lead intake is handled by `/api/webhooks/meta/leads`, which supports `GET` verification, `POST` webhook intake, signature validation, raw event storage, and Graph API lead retrieval by `leadgen_id`.
 - The CRM home surface exposes temporary admin-only Meta and internal WebForm lead-simulation buttons for source-preview testing.
 - `/admin/crm/settings/integrations` now provides a low-code integrations setup page with webhook URLs, secret-status visibility, accepted header names, and admin setup guidance for Meta and the internal WebForm flow.
@@ -271,6 +291,17 @@ CRM-specific notes:
 - CRM webhook ingestion is now split between public intake routes and compatibility routes: `/api/leads/submit` for internal WebForm intake, `/api/webhooks/meta/leads` for Meta webhook verification and lead retrieval, and `app/api/crm/webhooks/*` for compatibility.
 - Temporary admin-only CRM simulation routes exist at `app/api/crm/simulate/*` for Meta and internal WebForm source preview/testing.
 - CRM automation delivery is asynchronous, Brevo-backed, and can be exercised through `/api/crm/automations/run` in safe mode.
+
+Blog-specific notes:
+
+- `blog_categories`, `blog_posts`, and `blog_subscribers` are managed from `/admin/blog` using server-side admin actions.
+- Blog writes are guarded by admin access and use the Supabase service role only on the server; browser code must not receive `SUPABASE_SERVICE_ROLE_KEY`.
+- Public blog reads should use only active categories and posts where `status = 'published'`; drafts remain admin-only.
+- Blog images are URL-only for now, including external image URLs and R2 URLs. Supabase Storage uploads are intentionally not part of the current blog editor.
+- `/admin/blog` separates posts into Published, Draft, and Unpublished tables. Published posts with broken image URLs are moved to `unpublished` automatically and show the image-check reason in the UI.
+- The blog editor supports a richer Markdown toolbar with toggle-aware bold, italics, underline, strikethrough, highlight, headings, lists, quotes, links, external images, safe inline color/font-size spans, dividers, and YouTube/Vimeo `@[video](url)` embeds. Common shortcuts include Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+K, and Ctrl+Alt+1/2/3.
+- `/api/jobs/blog-weekly-digest` sends a Monday/Saturday blog digest through Brevo using app-generated HTML, skips empty weeks, dedupes blog subscribers + students + CRM open leads by normalized email, and records each run in `blog_digest_runs`.
+- The digest unsubscribe link writes back to `blog_subscribers.status = 'unsubscribed'`, which acts as the global suppression source for future blog digests.
 
 Useful command:
 

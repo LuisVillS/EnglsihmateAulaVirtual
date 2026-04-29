@@ -27,6 +27,16 @@ function Icon({ name }) {
           <path d="M15.5 13h.01" />
         </svg>
       );
+    case "blog":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+          <path d="M6 4.5h9.5L19 8v11.5H6Z" />
+          <path d="M15.5 4.5V8H19" />
+          <path d="M9 11h6" />
+          <path d="M9 14h6" />
+          <path d="M9 17h4" />
+        </svg>
+      );
     case "students":
       return (
         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">

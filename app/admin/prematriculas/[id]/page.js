@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { formatUnifiedCourseType, resolveUnifiedCoursePrice } from "@/lib/course-config";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { approvePreEnrollment, rejectPreEnrollment } from "../actions";
 import ProofPreviewButton from "@/components/proof-preview-button";
@@ -110,13 +111,14 @@ export default async function PreEnrollmentDetailPage({ params }) {
             <h2 className="text-lg font-semibold">Curso / Horario</h2>
             <div className="mt-4 space-y-2 text-sm text-muted">
               <p>Nivel: {preEnrollment.selected_level || schedule?.course_level || "-"}</p>
-              <p>Tipo: {preEnrollment.selected_course_type || "-"}</p>
+              <p>Tipo: {formatUnifiedCourseType(preEnrollment.selected_course_type)}</p>
               <p>Mes inicio: {preEnrollment.start_month || "-"}</p>
               <p>Modalidad: {preEnrollment.modality || schedule?.modality_key || "-"}</p>
               <p>Comision: {schedule?.commission_number || "-"}</p>
               <p>Horario: {schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : "-"}</p>
               <p>Inicio: {schedule?.start_date || "-"}</p>
               <p>Fin: {schedule?.end_date || "-"}</p>
+              <p>Monto: S/ {resolveUnifiedCoursePrice(preEnrollment.price_total)}</p>
             </div>
           </div>
         </div>

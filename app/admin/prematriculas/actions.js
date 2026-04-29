@@ -5,6 +5,7 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 import { saveStudentProfile } from "@/lib/students";
 import { sendEnrollmentEmail } from "@/lib/brevo";
+import { UNIFIED_COURSE_PRICE } from "@/lib/course-config";
 import { deletePaymentProof, isSupabaseStorageKey } from "@/lib/proof-storage";
 import { formatBillingMonth, getCurrentBillingMonthDate } from "@/lib/payments";
 import { formatScheduleWithFrequency } from "@/lib/course-sessions";
@@ -146,7 +147,7 @@ export async function approvePreEnrollment(formData) {
       phone: profile.phone,
       birthDate: profile.birth_date,
       courseLevel: preEnrollment.selected_level || schedule?.course_level || null,
-      isPremium: preEnrollment.selected_course_type === "PREMIUM",
+      isPremium: false,
       startMonth: preEnrollment.start_month || null,
       enrollmentDate: schedule?.start_date || null,
       preferredHour: parseTimeToMinutes(schedule?.start_time),
@@ -174,7 +175,7 @@ export async function approvePreEnrollment(formData) {
   const requestedStartMonth = getMonthKey(preEnrollment.start_month || schedule?.start_date || "");
   const currentBillingMonth =
     monthKeyToBillingMonth(requestedStartMonth) || formatBillingMonth(getCurrentBillingMonthDate(new Date()));
-  const monthlyAmount = preEnrollment.selected_course_type === "PREMIUM" ? 139 : 99;
+  const monthlyAmount = UNIFIED_COURSE_PRICE;
 
   const paymentPayload = {
     student_id: profile.id,

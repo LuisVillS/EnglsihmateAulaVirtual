@@ -1587,7 +1587,7 @@ await run("flipbook stage uses exact-fit chrome insets instead of free-floating 
   assert.match(shellSource, /<FlipbookControlsBar \{\.\.\.controlsBarProps\} \/>/);
   assert.match(shellSource, /top: FLIPBOOK_STAGE_TOP_CHROME_HEIGHT,/);
   assert.match(shellSource, /bottom: FLIPBOOK_STAGE_BOTTOM_CHROME_HEIGHT,/);
-  assert.match(shellSource, /backgroundColor: "#000000"/);
+  assert.match(shellSource, /backgroundColor: "var\(--flipbook-stage-bg, #ffffff\)"/);
   assert.doesNotMatch(shellSource, /pb-24 pt-14/);
 });
 

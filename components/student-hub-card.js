@@ -56,29 +56,47 @@ export default function StudentHubCard({
   icon = "matricula",
   accentClass = "bg-[#dce8ff]",
   iconClass = "text-[#103474]",
+  className = "",
+  interactionPolish = false,
 }) {
   const isExternal = String(href || "").startsWith("http");
-  const cardClassName =
-    "group relative overflow-hidden rounded-[14px] border border-[rgba(15,23,42,0.08)] bg-white p-5 shadow-[0_14px_28px_rgba(15,23,42,0.05)] transition hover:border-[rgba(16,52,116,0.16)] hover:shadow-[0_18px_34px_rgba(15,23,42,0.08)]";
+  const hoverMotionClass = interactionPolish
+    ? "duration-300 hover:-translate-y-1 hover:shadow-[0_22px_40px_rgba(15,23,42,0.1)] focus-visible:-translate-y-1"
+    : "";
+  const cardClassName = `group relative overflow-hidden rounded-[14px] border border-[rgba(15,23,42,0.08)] bg-white p-5 shadow-[0_14px_28px_rgba(15,23,42,0.05)] transition hover:border-[rgba(16,52,116,0.16)] hover:shadow-[0_18px_34px_rgba(15,23,42,0.08)] ${hoverMotionClass} ${className}`.trim();
 
   const content = (
     <>
-      <div className={`pointer-events-none absolute -right-7 -top-7 h-28 w-28 rounded-full opacity-95 ${accentClass}`} />
+      <div
+        className={`pointer-events-none absolute -right-7 -top-7 h-28 w-28 rounded-full opacity-95 transition-transform duration-300 ${interactionPolish ? "group-hover:scale-110 group-hover:-translate-y-1" : ""} ${accentClass}`}
+      />
       <div className="relative flex h-full flex-col justify-between gap-5">
         <div className="flex items-start justify-between gap-4">
           <div className="max-w-[75%]">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#94a3b8]">{eyebrow}</p>
-            <h3 className="mt-2 text-[1.6rem] font-semibold leading-[1.1] text-[#111827]">{title}</h3>
+            {eyebrow ? (
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#94a3b8]">{eyebrow}</p>
+            ) : null}
+            <h3 className={`text-[1.6rem] font-semibold leading-[1.1] text-[#111827] ${eyebrow ? "mt-2" : ""}`}>
+              {title}
+            </h3>
             <p className="mt-2 text-sm leading-6 text-[#64748b]">{description}</p>
           </div>
-          <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[12px] border border-white/80 bg-white/90 shadow-[0_10px_18px_rgba(15,23,42,0.08)]">
+          <div
+            className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[12px] border border-white/80 bg-white/90 shadow-[0_10px_18px_rgba(15,23,42,0.08)] transition-transform duration-300 ${interactionPolish ? "group-hover:-translate-y-0.5 group-hover:scale-105" : ""}`}
+          >
             <CardIcon icon={icon} colorClass={iconClass} />
           </div>
         </div>
 
         <span className="relative inline-flex items-center gap-2 text-sm font-semibold text-[#475569] transition group-hover:text-[#103474]">
           Más información
-          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            viewBox="0 0 24 24"
+            className={`h-4 w-4 transition-transform duration-300 ${interactionPolish ? "group-hover:translate-x-1" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <path d="M5 12h14M13 6l6 6-6 6" />
           </svg>
         </span>

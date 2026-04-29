@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireCrmRouteAccess } from "@/lib/admin/access";
-import { enqueuePendingCrmAutomationJobs, runCrmAutomationJobs } from "@/lib/crm/automations/engine";
+import {
+  enqueuePendingCrmAutomationJobs,
+  enqueueStageStagnancyFollowUpJobs,
+  runCrmAutomationJobs,
+} from "@/lib/crm/automations/engine";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
+import { constantTimeEqual } from "@/lib/security/env";
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number(value || fallback);
@@ -14,11 +19,9 @@ function readRunnerSecret(request) {
   const bearer = authorization.toLowerCase().startsWith("bearer ")
     ? authorization.slice(7).trim()
     : "";
-  const url = new URL(request.url);
   return (
     request.headers.get("x-crm-automation-secret") ||
     bearer ||
-    url.searchParams.get("secret") ||
     ""
   ).trim();
 }
@@ -31,7 +34,8 @@ function resolveSafeMode(value) {
 
 async function authorizeRunner(request) {
   const expectedSecret = String(process.env.CRM_AUTOMATION_RUN_SECRET || "").trim();
-  if (expectedSecret && readRunnerSecret(request) === expectedSecret) {
+  const providedSecret = readRunnerSecret(request);
+  if (expectedSecret && providedSecret && constantTimeEqual(providedSecret, expectedSecret)) {
     return { ok: true, via: "secret" };
   }
 
@@ -61,12 +65,17 @@ async function handleRun(request) {
   const url = new URL(request.url);
   const limit = parsePositiveInt(url.searchParams.get("limit"), 25);
   const enqueueLimit = parsePositiveInt(url.searchParams.get("enqueueLimit"), 50);
+  const stagnancyLimit = parsePositiveInt(url.searchParams.get("stagnancyLimit"), 50);
   const safeMode = resolveSafeMode(url.searchParams.get("safe"));
   const service = getServiceSupabaseClient();
 
   try {
     const enqueueSummary = await enqueuePendingCrmAutomationJobs(service, {
       limit: enqueueLimit,
+    });
+    const stagnancySummary = await enqueueStageStagnancyFollowUpJobs(service, {
+      limit: stagnancyLimit,
+      thresholdHours: 24,
     });
     const runSummary = await runCrmAutomationJobs(service, {
       limit,
@@ -77,6 +86,7 @@ async function handleRun(request) {
       ok: true,
       authorization: authorization.via,
       enqueueSummary,
+      stagnancySummary,
       runSummary,
     });
   } catch (error) {

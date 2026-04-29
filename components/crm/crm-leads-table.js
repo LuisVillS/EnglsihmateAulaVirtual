@@ -1,6 +1,10 @@
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
 import { AdminCard, AdminSectionHeader } from "@/components/admin-page";
 import CrmLeadDangerActions from "@/components/crm/crm-lead-danger-actions";
+import FilterPopover, { FilterChipGroup, FilterPopoverSection } from "@/components/filter-popover";
 import {
   CrmBadge,
   CrmTagRow,
@@ -16,13 +20,11 @@ import {
   resolveToneByStatus,
 } from "@/components/crm/crm-ui";
 
-export default function CrmLeadsTable({ leads, stages, filters }) {
-  const activeFilters = [
-    filters?.search ? `Search: ${filters.search}` : null,
-    filters?.leadStatus ? `Status: ${filters.leadStatus}` : null,
-    filters?.stageName ? `Stage: ${filters.stageName}` : null,
-    filters?.sourceType ? `Source: ${formatLeadSourceLabel(filters.sourceType)}` : null,
-  ].filter(Boolean);
+function LeadsFilterPopover({ filters, stages, activeFilterCount }) {
+  const [searchValue, setSearchValue] = useState(filters?.search || "");
+  const [statusValue, setStatusValue] = useState(filters?.leadStatus || "");
+  const [stageValue, setStageValue] = useState(filters?.stageId || "");
+  const [sourceValue, setSourceValue] = useState(filters?.sourceType || "");
 
   const sourceOptions = [
     { value: "", label: "All sources" },
@@ -34,6 +36,88 @@ export default function CrmLeadsTable({ leads, stages, filters }) {
     { value: "other", label: "Other" },
   ];
 
+  const statusOptions = [
+    { value: "open", label: "Open" },
+    { value: "won", label: "Won" },
+    { value: "lost", label: "Lost" },
+    { value: "archived", label: "Archived" },
+  ];
+
+  const stageOptions = stages.map((stage) => ({
+    value: stage.id,
+    label: stage.name,
+  }));
+
+  return (
+    <FilterPopover
+      title="Filter Lead List"
+      buttonLabel="Filters"
+      activeCount={activeFilterCount}
+      width={470}
+      footer={() => (
+        <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
+          <Link
+            href="/admin/crm/leads"
+            className="inline-flex min-h-12 items-center justify-center rounded-[16px] border border-[rgba(16,52,116,0.14)] px-4 py-3 text-sm font-semibold text-[#103474] transition hover:bg-[#f5f8ff]"
+          >
+            Clear all
+          </Link>
+          <button
+            type="submit"
+            form="crm-leads-filters-form"
+            className="inline-flex min-h-12 items-center justify-center rounded-[18px] bg-[#103474] px-5 py-3 text-sm font-semibold text-white shadow-[0_16px_32px_rgba(16,52,116,0.2)] transition hover:bg-[#0c295a]"
+          >
+            Apply Filters
+          </button>
+        </div>
+      )}
+    >
+      <form id="crm-leads-filters-form" method="get" className="space-y-5">
+        <input type="hidden" name="status" value={statusValue} />
+        <input type="hidden" name="stage" value={stageValue} />
+        <input type="hidden" name="source" value={sourceValue} />
+
+        <FilterPopoverSection label="Search" description="Find a lead by name, email, phone, or source.">
+          <input
+            type="search"
+            name="q"
+            value={searchValue}
+            onChange={(event) => setSearchValue(event.target.value)}
+            placeholder="Search lead details"
+            className="w-full rounded-[16px] border border-[rgba(16,52,116,0.14)] bg-[#fbfcff] px-4 py-3 text-sm text-[#1f2432] placeholder:text-[#97a3ba] focus:border-[#103474] focus:outline-none"
+          />
+        </FilterPopoverSection>
+
+        <FilterPopoverSection label="Status" description="Choose the pipeline outcome state.">
+          <FilterChipGroup options={statusOptions} value={statusValue} onChange={setStatusValue} />
+        </FilterPopoverSection>
+
+        <FilterPopoverSection label="Stage" description="Focus the table on a specific pipeline stage.">
+          <FilterChipGroup options={stageOptions} value={stageValue} onChange={setStageValue} />
+        </FilterPopoverSection>
+
+        <FilterPopoverSection label="Source" description="Filter leads by origin channel.">
+          <FilterChipGroup options={sourceOptions.filter((option) => option.value)} value={sourceValue} onChange={setSourceValue} />
+        </FilterPopoverSection>
+      </form>
+    </FilterPopover>
+  );
+}
+
+export default function CrmLeadsTable({ leads, stages, filters }) {
+  const activeFilters = [
+    filters?.search ? `Search: ${filters.search}` : null,
+    filters?.leadStatus ? `Status: ${filters.leadStatus}` : null,
+    filters?.stageName ? `Stage: ${filters.stageName}` : null,
+    filters?.sourceType ? `Source: ${formatLeadSourceLabel(filters.sourceType)}` : null,
+  ].filter(Boolean);
+  const filterStateKey = [
+    filters?.search || "",
+    filters?.leadStatus || "",
+    filters?.stageId || "",
+    filters?.sourceType || "",
+  ].join("::");
+
   return (
     <div className="space-y-4">
       <AdminCard className="space-y-4 border-[rgba(16,52,116,0.1)] bg-[rgba(255,255,255,0.95)] backdrop-blur">
@@ -44,60 +128,18 @@ export default function CrmLeadsTable({ leads, stages, filters }) {
           meta={<CrmBadge tone="accent">{leads.length} result(s)</CrmBadge>}
         />
 
-        <form method="get" className="grid gap-3 lg:grid-cols-[1.1fr_0.8fr_0.8fr_0.8fr_auto]">
-          <input
-            type="search"
-            name="q"
-            defaultValue={filters?.search || ""}
-            placeholder="Search name, email, phone, or source"
-            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <LeadsFilterPopover
+            key={filterStateKey}
+            filters={filters}
+            stages={stages}
+            activeFilterCount={activeFilters.length}
           />
-          <select
-            name="status"
-            defaultValue={filters?.leadStatus || ""}
-            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
-          >
-            <option value="">All statuses</option>
-            <option value="open">Open</option>
-            <option value="won">Won</option>
-            <option value="lost">Lost</option>
-            <option value="archived">Archived</option>
-          </select>
-          <select
-            name="stage"
-            defaultValue={filters?.stageId || ""}
-            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
-          >
-            <option value="">All stages</option>
-            {stages.map((stage) => (
-              <option key={stage.id} value={stage.id}>
-                {stage.name}
-              </option>
-            ))}
-          </select>
-          <select
-            name="source"
-            defaultValue={filters?.sourceType || ""}
-            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
-          >
-            {sourceOptions.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <div className="flex gap-2">
-            <button className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#103474] px-4 text-sm font-semibold text-white transition hover:bg-[#0c295a]">
-              Apply
-            </button>
-            <Link
-              href="/admin/crm/leads"
-              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-4 text-sm font-semibold text-[#0f172a] transition hover:border-[rgba(16,52,116,0.18)] hover:bg-[#f8fbff]"
-            >
-              Clear
-            </Link>
+
+          <div className="text-sm text-[#64748b]">
+            Server-side filtering keeps the table and lead counts aligned.
           </div>
-        </form>
+        </div>
 
         {activeFilters.length ? (
           <div className="flex flex-wrap gap-2">

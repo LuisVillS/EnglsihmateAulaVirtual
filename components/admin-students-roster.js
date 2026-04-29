@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { AdminBadge, AdminCard, AdminSectionHeader } from "@/components/admin-page";
 import AdminSideDrawer from "@/components/admin-side-drawer";
 import StudentRowActions from "@/components/student-row-actions";
+import { formatUnifiedCourseType } from "@/lib/course-config";
 
 function formatHourLabel(hour) {
   if (hour == null) return "Sin horario";
@@ -62,8 +63,8 @@ function VerificationBadge({ verified }) {
   return verified ? <AdminBadge tone="success">Verificado</AdminBadge> : <AdminBadge tone="warning">Pendiente</AdminBadge>;
 }
 
-function StudentTypeBadge({ premium }) {
-  return premium ? <AdminBadge tone="accent">Premium</AdminBadge> : <AdminBadge tone="neutral">Regular</AdminBadge>;
+function StudentTypeBadge() {
+  return <AdminBadge tone="accent">{formatUnifiedCourseType()}</AdminBadge>;
 }
 
 function InfoRow({ label, value }) {
@@ -147,7 +148,7 @@ export default function AdminStudentsRoster({ students, totalCount, page, totalP
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
                         <VerificationBadge verified={Boolean(student.email_verified_at)} />
-                        <StudentTypeBadge premium={student.is_premium} />
+                        <StudentTypeBadge />
                         <AdminBadge tone={resolveStudentStatusTone(student.status)}>
                           {resolveStudentStatusLabel(student.status)}
                         </AdminBadge>
@@ -209,7 +210,7 @@ export default function AdminStudentsRoster({ students, totalCount, page, totalP
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <VerificationBadge verified={Boolean(selectedStudent.email_verified_at)} />
-                    <StudentTypeBadge premium={selectedStudent.is_premium} />
+                    <StudentTypeBadge />
                     <AdminBadge tone={resolveStudentStatusTone(selectedStudent.status)}>
                       {resolveStudentStatusLabel(selectedStudent.status)}
                     </AdminBadge>

@@ -6,9 +6,17 @@ import {
   createManualCrmLeadAction,
   moveLeadStageAction,
   quickEditLeadAction,
+  saveCrmStageAction,
 } from "@/app/admin/crm/actions";
 import CrmDialAction from "@/components/crm/crm-dial-action";
+import FilterPopover, { FilterChipGroup, FilterPopoverSection } from "@/components/filter-popover";
 import CrmModal from "@/components/crm/crm-modal";
+import { UNIFIED_COURSE_PRICE } from "@/lib/course-config";
+import {
+  isCrmClosedStage,
+  resolveCrmStageDisplayName,
+  resolveCrmStageSystemKey,
+} from "@/lib/crm/stage-metadata";
 import {
   CrmBadge,
   CrmNotice,
@@ -21,6 +29,15 @@ import {
   formatPreEnrollmentStatus,
   resolveLeadSourceValue,
 } from "@/components/crm/crm-ui";
+
+const SOURCE_FILTER_OPTIONS = [
+  { key: "meta", label: "Meta" },
+  { key: "web_form", label: "Web forms" },
+  { key: "formspree", label: "Formspree" },
+  { key: "pre_enrollment", label: "Virtual classroom" },
+  { key: "manual", label: "Manual" },
+  { key: "other", label: "Other" },
+];
 
 function joinClasses(...values) {
   return values.filter(Boolean).join(" ");
@@ -98,18 +115,22 @@ function resolveTopBadge(lead) {
 function resolveStageTone(stage) {
   if (stage?.pipeline_state === "won") return "bg-[#5ab57f]";
   if (stage?.pipeline_state === "lost") return "bg-[#c16b54]";
-  if (String(stage?.stage_key || "").toLowerCase().includes("attempt")) return "bg-[#52607a]";
+  if (String(resolveCrmStageSystemKey(stage) || "").includes("attempt")) return "bg-[#52607a]";
   return "bg-[#7d8798]";
 }
 
-function computeBoardMetrics(leads) {
+function computeBoardMetrics(leads, stages, summaryMetrics = null) {
   const safeLeads = Array.isArray(leads) ? leads : [];
+  const stageById = new Map((Array.isArray(stages) ? stages : []).map((stage) => [stage.id, stage]));
   const openLeads = safeLeads.filter((lead) => lead?.lead_status === "open");
   const wonLeads = safeLeads.filter((lead) => lead?.lead_status === "won");
-  const totalPipelineValue = safeLeads.reduce(
-    (sum, lead) => sum + Number(lead?.approved_revenue_soles || 0),
-    0
-  );
+  const closedLeads = safeLeads.filter((lead) => {
+    const stage = lead?.current_stage || stageById.get(lead?.current_stage_id) || null;
+    return isCrmClosedStage(stage);
+  });
+  const totalLeadCount = Number(summaryMetrics?.totalLeadCount ?? safeLeads.length);
+  const closedLeadCount = Number(summaryMetrics?.closedLeadCount ?? closedLeads.length);
+  const totalPipelineValue = Math.max(0, totalLeadCount - closedLeadCount) * UNIFIED_COURSE_PRICE;
   const closeDurations = wonLeads
     .map((lead) => {
       const createdAt = lead?.created_at ? new Date(lead.created_at).getTime() : null;
@@ -123,6 +144,7 @@ function computeBoardMetrics(leads) {
     totalPipelineValue,
     activeDeals: openLeads.length,
     wonDeals: wonLeads.length,
+    closedDeals: closedLeads.length,
     averageCloseDays: closeDurations.length
       ? Math.max(1, Math.round(closeDurations.reduce((sum, value) => sum + value, 0) / closeDurations.length))
       : null,
@@ -181,6 +203,126 @@ const MANUAL_LEAD_INITIAL_STATE = {
   message: null,
 };
 
+function StageEditForm({ stage, returnTo }) {
+  const [followUpEnabled, setFollowUpEnabled] = useState(Boolean(stage?.stagnancy_follow_up_enabled));
+  const excludedSources = Array.isArray(stage?.brevo_template_config?.source_rules?.exclude)
+    ? stage.brevo_template_config.source_rules.exclude
+    : [];
+
+  return (
+    <form action={saveCrmStageAction} className="space-y-4">
+      <input type="hidden" name="stageId" value={stage.id} />
+      <input type="hidden" name="systemKey" value={resolveCrmStageSystemKey(stage) || ""} />
+      <input type="hidden" name="pipelineState" value={stage.pipeline_state || "open"} />
+      <input type="hidden" name="position" value={stage.position || 1} />
+      <input type="hidden" name="isActive" value={stage.is_active ? "1" : "0"} />
+      <input type="hidden" name="isDefault" value={stage.is_default ? "1" : "0"} />
+      <input type="hidden" name="returnTo" value={returnTo} />
+      <input type="hidden" name="sourceExcludeValuesTouched" value="1" />
+      <input type="hidden" name="initialDelayHoursTouched" value="1" />
+      <input type="hidden" name="stagnancyFollowUpTouched" value="1" />
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="space-y-1 text-sm">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Display name</span>
+          <input
+            name="displayName"
+            type="text"
+            defaultValue={resolveCrmStageDisplayName(stage)}
+            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
+          />
+        </label>
+
+        <label className="space-y-1 text-sm">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Template ID</span>
+          <input
+            name="emailTemplateId"
+            type="text"
+            inputMode="numeric"
+            defaultValue={stage?.email_template_id || stage?.brevo_template_id || ""}
+            placeholder="123"
+            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
+          />
+          <p className="text-xs text-[#64748b]">Enter the Brevo template number manually.</p>
+        </label>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="space-y-1 text-sm">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Ignored lead sources</span>
+          <select
+            name="sourceExcludeValues"
+            multiple
+            defaultValue={excludedSources}
+            className="min-h-36 w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
+          >
+            {SOURCE_FILTER_OPTIONS.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-[#64748b]">Selected lead sources will not trigger this email.</p>
+        </label>
+
+        <label className="space-y-1 text-sm">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Initial delay</span>
+          <input
+            name="initialDelayHours"
+            type="number"
+            min="0"
+            step="1"
+            defaultValue={stage?.initial_delay_hours || 0}
+            className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
+          />
+          <p className="text-xs text-[#64748b]">Delay in hours before the first email is sent.</p>
+        </label>
+      </div>
+
+      <div className="space-y-3 rounded-[20px] border border-[rgba(15,23,42,0.08)] bg-[#f8fafc] p-4">
+        <label className="inline-flex items-center gap-3 text-sm font-medium text-[#0f172a]">
+          <input
+            name="stagnancyFollowUpEnabled"
+            type="checkbox"
+            value="1"
+            checked={followUpEnabled}
+            onChange={(event) => setFollowUpEnabled(event.target.checked)}
+            className="h-4 w-4 rounded border-[rgba(15,23,42,0.2)]"
+          />
+          Send follow-up if lead remains in stage for 24 hours
+        </label>
+
+        {followUpEnabled ? (
+          <label className="space-y-1 text-sm">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Follow-up template ID</span>
+            <input
+              name="followUpTemplateId"
+              type="text"
+              inputMode="numeric"
+              defaultValue={stage?.follow_up_template_id || ""}
+              placeholder="456"
+              className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
+            />
+          </label>
+        ) : null}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-xs text-[#64748b]">
+          <p>
+            System key:{" "}
+            <span className="font-semibold text-[#334155]">{resolveCrmStageSystemKey(stage)}</span>
+          </p>
+          <p>The stable key stays fixed even if the display name changes.</p>
+        </div>
+        <button className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-[#103474] px-4 text-sm font-semibold text-white transition hover:bg-[#0c295a]">
+          Save stage settings
+        </button>
+      </div>
+    </form>
+  );
+}
+
 const LeadCard = memo(function LeadCard({ lead, onDragStart, onDragEnd, onQuickEdit }) {
   const contextChip = resolveContextChip(lead);
   const badgeLabel = resolveTopBadge(lead);
@@ -237,6 +379,7 @@ const LeadCard = memo(function LeadCard({ lead, onDragStart, onDragEnd, onQuickE
 const StageColumn = memo(function StageColumn({
   stage,
   leads,
+  canManageStages,
   isDropTarget,
   onDragOver,
   onDragLeave,
@@ -244,7 +387,10 @@ const StageColumn = memo(function StageColumn({
   onDragStart,
   onDragEnd,
   onQuickEdit,
+  onEditStage,
 }) {
+  const stageLabel = resolveCrmStageDisplayName(stage);
+
   return (
     <section
       onDragOver={onDragOver}
@@ -258,15 +404,17 @@ const StageColumn = memo(function StageColumn({
       <div className="mb-3 flex items-center justify-between px-2">
         <div className="flex items-center gap-3">
           <span className={joinClasses("h-2.5 w-2.5 rounded-full", resolveStageTone(stage))} />
-          <h3 className="text-[18px] font-bold tracking-[-0.03em] text-[#000d39]">{stage.name}</h3>
+          <h3 className="text-[18px] font-bold tracking-[-0.03em] text-[#000d39]">{stageLabel}</h3>
           <span className="rounded-full bg-[#ece8ef] px-2.5 py-1 text-[11px] font-bold text-[#666d7a]">
             {leads.length}
           </span>
         </div>
         <button
           type="button"
+          onClick={() => onEditStage(stage.id)}
+          disabled={!canManageStages}
           className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#757681] transition hover:bg-white"
-          aria-label={`${stage.name} options`}
+          aria-label={`${stageLabel} options`}
         >
           <MoreIcon />
         </button>
@@ -293,64 +441,92 @@ const StageColumn = memo(function StageColumn({
   );
 });
 
-function FilterPanel({ searchParams }) {
+function KanbanFiltersPopover({ searchParams, activeFilterCount }) {
+  const [searchValue, setSearchValue] = useState(searchParams?.q?.toString() || "");
+  const [statusValue, setStatusValue] = useState(searchParams?.status?.toString() || "");
+  const [sourceValue, setSourceValue] = useState(searchParams?.source?.toString() || "");
+
   return (
-    <form
-      method="get"
-      className="grid gap-3 rounded-[24px] border border-[rgba(15,23,42,0.08)] bg-white px-5 py-4 shadow-[0_16px_34px_rgba(15,23,42,0.05)] lg:grid-cols-[1.15fr_0.8fr_0.8fr_auto]"
+    <FilterPopover
+      title="Filter Pipeline"
+      buttonLabel="Filters"
+      buttonIcon={<FilterIcon />}
+      activeCount={activeFilterCount}
+      width={470}
+      buttonClassName="min-h-[58px] rounded-[20px] px-7 text-[16px] font-bold"
+      footer={() => (
+        <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
+          <Link
+            href="/admin/crm/kanban"
+            className="inline-flex min-h-12 items-center justify-center rounded-[16px] border border-[rgba(16,52,116,0.14)] px-4 py-3 text-sm font-semibold text-[#103474] transition hover:bg-[#f5f8ff]"
+          >
+            Clear all
+          </Link>
+          <button
+            type="submit"
+            form="crm-kanban-filters-form"
+            className="inline-flex min-h-12 items-center justify-center rounded-[18px] bg-[#103474] px-5 py-3 text-sm font-semibold text-white shadow-[0_16px_32px_rgba(16,52,116,0.2)] transition hover:bg-[#0c295a]"
+          >
+            Apply Filters
+          </button>
+        </div>
+      )}
     >
-      <input
-        type="search"
-        name="q"
-        defaultValue={searchParams?.q?.toString() || ""}
-        placeholder="Search name, email, phone, or source"
-        className="w-full rounded-[18px] border border-[rgba(15,23,42,0.08)] bg-[#fbfbfe] px-4 py-3 text-sm text-[#0f172a] outline-none transition focus:border-[#103474]/20"
-      />
-      <select
-        name="status"
-        defaultValue={searchParams?.status?.toString() || ""}
-        className="w-full rounded-[18px] border border-[rgba(15,23,42,0.08)] bg-[#fbfbfe] px-4 py-3 text-sm text-[#0f172a] outline-none transition focus:border-[#103474]/20"
-      >
-        <option value="">All statuses</option>
-        <option value="open">Open</option>
-        <option value="won">Won</option>
-        <option value="lost">Lost</option>
-      </select>
-      <select
-        name="source"
-        defaultValue={searchParams?.source?.toString() || ""}
-        className="w-full rounded-[18px] border border-[rgba(15,23,42,0.08)] bg-[#fbfbfe] px-4 py-3 text-sm text-[#0f172a] outline-none transition focus:border-[#103474]/20"
-      >
-        <option value="">All sources</option>
-        <option value="pre_enrollment">Virtual classroom</option>
-        <option value="meta">Meta</option>
-        <option value="formspree">Formspree</option>
-        <option value="manual">Manual</option>
-        <option value="other">Other</option>
-      </select>
-      <div className="flex gap-2">
-        <button className="inline-flex min-h-11 items-center justify-center rounded-[18px] bg-[#000d39] px-5 text-sm font-semibold text-white transition hover:opacity-95">
-          Apply
-        </button>
-        <Link
-          href="/admin/crm/kanban"
-          className="inline-flex min-h-11 items-center justify-center rounded-[18px] border border-[rgba(15,23,42,0.08)] bg-white px-5 text-sm font-semibold text-[#0f172a] transition hover:bg-[#f8fbff]"
-        >
-          Clear
-        </Link>
-      </div>
-    </form>
+      <form id="crm-kanban-filters-form" method="get" className="space-y-5">
+        <input type="hidden" name="status" value={statusValue} />
+        <input type="hidden" name="source" value={sourceValue} />
+
+        <FilterPopoverSection label="Search" description="Find leads by name, email, phone, or source tag.">
+          <input
+            type="search"
+            name="q"
+            value={searchValue}
+            onChange={(event) => setSearchValue(event.target.value)}
+            placeholder="Search lead details"
+            className="w-full rounded-[16px] border border-[rgba(16,52,116,0.14)] bg-[#fbfcff] px-4 py-3 text-sm text-[#1f2432] placeholder:text-[#97a3ba] focus:border-[#103474] focus:outline-none"
+          />
+        </FilterPopoverSection>
+
+        <FilterPopoverSection label="Status" description="Focus on the current pipeline outcome.">
+          <FilterChipGroup
+            options={[
+              { value: "open", label: "Open" },
+              { value: "won", label: "Won" },
+              { value: "lost", label: "Lost" },
+            ]}
+            value={statusValue}
+            onChange={setStatusValue}
+          />
+        </FilterPopoverSection>
+
+        <FilterPopoverSection label="Source" description="Limit the board to a specific lead source.">
+          <FilterChipGroup
+            options={SOURCE_FILTER_OPTIONS.map((option) => ({
+              value: option.key,
+              label: option.label,
+            }))}
+            value={sourceValue}
+            onChange={setSourceValue}
+          />
+        </FilterPopoverSection>
+      </form>
+    </FilterPopover>
   );
 }
 
-export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParams = {} }) {
+export default function CrmKanbanPipeline({
+  stages,
+  leads,
+  summaryMetrics = null,
+  canManageStages = false,
+  returnTo,
+  searchParams = {},
+}) {
   const [dragLeadId, setDragLeadId] = useState("");
   const [dropStageId, setDropStageId] = useState("");
   const [editingLeadId, setEditingLeadId] = useState("");
+  const [editingStageId, setEditingStageId] = useState("");
   const [manualLeadOpen, setManualLeadOpen] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(
-    Boolean(searchParams?.q || searchParams?.status || searchParams?.source)
-  );
   const [boardNotice, setBoardNotice] = useState("");
 
   const [quickEditState, quickEditFormAction, quickEditPending] = useActionState(
@@ -395,7 +571,10 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
         : lead
     );
   }, [boardLeads, quickEditState, stageById]);
-  const boardMetrics = useMemo(() => computeBoardMetrics(hydratedBoardLeads), [hydratedBoardLeads]);
+  const boardMetrics = useMemo(
+    () => computeBoardMetrics(hydratedBoardLeads, safeStages, summaryMetrics),
+    [hydratedBoardLeads, safeStages, summaryMetrics]
+  );
 
   const grouped = useMemo(() => {
     const fallbackStageId = safeStages?.[0]?.id || null;
@@ -425,6 +604,10 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
     () => hydratedBoardLeads.find((lead) => lead.id === editingLeadId) || null,
     [editingLeadId, hydratedBoardLeads]
   );
+  const editingStage = useMemo(
+    () => safeStages.find((stage) => stage.id === editingStageId) || null,
+    [editingStageId, safeStages]
+  );
 
   const successNotice =
     quickEditState?.success && quickEditState?.leadId
@@ -432,6 +615,16 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
       : manualLeadState?.success
         ? manualLeadState.message || "Manual lead created."
         : "";
+  const activeFilterCount = [
+    Boolean(searchParams?.q),
+    Boolean(searchParams?.status),
+    Boolean(searchParams?.source),
+  ].filter(Boolean).length;
+  const filterStateKey = [
+    searchParams?.q?.toString() || "",
+    searchParams?.status?.toString() || "",
+    searchParams?.source?.toString() || "",
+  ].join("::");
 
   const handleDragStart = (event, leadId) => {
     event.dataTransfer.effectAllowed = "move";
@@ -492,14 +685,11 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((current) => !current)}
-            className="inline-flex min-h-[58px] items-center justify-center gap-3 rounded-[20px] bg-[#ece8ef] px-7 text-[16px] font-bold text-[#2a2f39] transition hover:bg-[#e1dce7]"
-          >
-            <FilterIcon />
-            Filters
-          </button>
+          <KanbanFiltersPopover
+            key={filterStateKey}
+            searchParams={searchParams}
+            activeFilterCount={activeFilterCount}
+          />
           <button
             type="button"
             onClick={() => setManualLeadOpen(true)}
@@ -511,8 +701,12 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
         </div>
       </section>
 
-      {filtersOpen ? <FilterPanel searchParams={searchParams} /> : null}
       <CrmNotice searchParams={searchParams} />
+      {boardNotice || successNotice ? (
+        <div className="rounded-[20px] border border-[rgba(16,52,116,0.12)] bg-[#eef4ff] px-4 py-3 text-sm text-[#103474]">
+          {boardNotice || successNotice}
+        </div>
+      ) : null}
 
       <section className="overflow-x-auto pb-8">
         <div className="flex min-w-max items-start gap-6">
@@ -521,6 +715,7 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
               key={stage.id}
               stage={stage}
               leads={grouped.get(stage.id) || []}
+              canManageStages={canManageStages}
               isDropTarget={dropStageId === stage.id}
               onDragOver={(event) => {
                 event.preventDefault();
@@ -531,6 +726,7 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
               onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
               onQuickEdit={setEditingLeadId}
+              onEditStage={setEditingStageId}
             />
           ))}
         </div>
@@ -559,7 +755,7 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
               <p className="mt-2 text-[20px] font-bold text-white">{boardMetrics.wonDeals}</p>
             </div>
             <div>
-              <p className="text-[13px] font-bold uppercase tracking-[0.2em] text-[#8ea0db]">Active deals</p>
+              <p className="text-[13px] font-bold uppercase tracking-[0.2em] text-[#8ea0db]">Open pipeline</p>
               <p className="mt-2 text-[20px] font-bold text-white">{boardMetrics.activeDeals}</p>
             </div>
           </div>
@@ -622,7 +818,7 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
                 <p className="text-sm font-semibold text-[#111827]">{editingLead.email || "No email"}</p>
                 <p className="text-sm text-[#64748b]">{formatCrmPhoneDisplay(editingLead)}</p>
                 <div className="flex flex-wrap gap-2">
-                  <CrmBadge tone="accent">{editingLead.current_stage?.name || "No stage"}</CrmBadge>
+                  <CrmBadge tone="accent">{resolveCrmStageDisplayName(editingLead.current_stage) || "No stage"}</CrmBadge>
                 </div>
               </div>
               <CrmDialAction
@@ -675,7 +871,7 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
                 >
                   {safeStages.map((stage) => (
                     <option key={stage.id} value={stage.id}>
-                      {stage.name}
+                      {resolveCrmStageDisplayName(stage)}
                     </option>
                   ))}
                 </select>
@@ -722,6 +918,21 @@ export default function CrmKanbanPipeline({ stages, leads, returnTo, searchParam
               </div>
             </div>
           </form>
+        ) : null}
+      </CrmModal>
+
+      <CrmModal
+        open={Boolean(editingStage)}
+        onClose={() => setEditingStageId("")}
+        title={editingStage ? `Stage settings: ${resolveCrmStageDisplayName(editingStage)}` : "Stage settings"}
+        description="Rename the stage for the UI, enter the Brevo template IDs manually, exclude specific lead sources, and enable the 24-hour stagnancy follow-up while the stable system key stays unchanged."
+      >
+        {editingStage ? (
+          <StageEditForm
+            key={`${editingStage.id}:${editingStage.updated_at || ""}`}
+            stage={editingStage}
+            returnTo={returnTo}
+          />
         ) : null}
       </CrmModal>
 

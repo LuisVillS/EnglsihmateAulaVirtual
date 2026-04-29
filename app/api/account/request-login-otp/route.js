@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import { createEmailVerificationToken } from "@/lib/pre-enrollment";
 import { sendPreEnrollmentOtpEmail } from "@/lib/brevo";
-import { resolveCanonicalAppUrl } from "@/lib/security/env";
+import { resolveAppUrlForRequest } from "@/lib/security/env";
 
 function normalizeIdentifier(value) {
   return value?.toString().trim() || "";
@@ -47,7 +47,7 @@ export async function POST(request) {
     }
 
     const { code: otpCode } = await createEmailVerificationToken(profile.id);
-    const origin = resolveCanonicalAppUrl();
+    const origin = resolveAppUrlForRequest(request);
     const loginUrl = `${origin}/login/access?code=${encodeURIComponent(profile.student_code || "")}&otp=1`;
 
     await sendPreEnrollmentOtpEmail({

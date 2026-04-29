@@ -5,6 +5,7 @@ import { memo, startTransition, useActionState, useMemo, useOptimistic, useState
 import { createManualCrmLeadAction, moveLeadStageAction, quickEditLeadAction } from "@/app/admin/crm/actions";
 import CrmModal from "@/components/crm/crm-modal";
 import { CrmBadge, deriveLeadCardTags, formatCrmPhoneDisplay } from "@/components/crm/crm-ui";
+import { UNIFIED_COURSE_PRICE } from "@/lib/course-config";
 
 const QUICK_EDIT_INITIAL_STATE = { success: false, error: null, leadId: null };
 const MANUAL_LEAD_INITIAL_STATE = { success: false, error: null, leadId: null, message: null };
@@ -26,8 +27,6 @@ function firstNumeric(...values) {
 function normalizeCourseTypeValue(value) {
   const normalized = String(value || "").trim().toUpperCase();
   if (!normalized) return "";
-  if (normalized.includes("PREMIUM")) return "PREMIUM";
-  if (normalized.includes("REGULAR")) return "REGULAR";
   return normalized;
 }
 function leadPotentialValue(lead) {
@@ -56,7 +55,9 @@ function leadPotentialValue(lead) {
     rawSourcePayload?.amount_soles,
     lead?.approved_revenue_soles
   );
-  if (explicitPrice > 0) return explicitPrice;
+  if (explicitPrice > 0) {
+    return explicitPrice === 99 || explicitPrice === 139 ? UNIFIED_COURSE_PRICE : explicitPrice;
+  }
   const selectedType = normalizeCourseTypeValue(
     lead?.pre_enrollment?.selected_course_type ||
     sourceMetadata?.selected_course_type ||
@@ -72,9 +73,8 @@ function leadPotentialValue(lead) {
     rawSourcePayload?.course_type ||
     rawSourcePayload?.courseType
   );
-  if (selectedType === "PREMIUM") return 139;
-  if (selectedType) return 99;
-  return 99;
+  if (selectedType) return UNIFIED_COURSE_PRICE;
+  return UNIFIED_COURSE_PRICE;
 }
 function age(value) {
   const t = new Date(value || "").getTime();

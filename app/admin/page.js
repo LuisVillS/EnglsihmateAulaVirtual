@@ -263,7 +263,7 @@ export default async function AdminPage({ searchParams }) {
                 Import CSV
               </button>
               <div className="space-y-1 text-[11px] text-[#64748b]">
-                <p>Columns: `full_name,email,dni,phone,birth_date,course_level,is_premium,start_month,enrollment_date,preferred_hour,modality`</p>
+                <p>Columns: `full_name,email,dni,phone,birth_date,course_level,start_month,enrollment_date,preferred_hour,modality`</p>
                 <p>Modality: `Diaria`, `Interdiaria (Lunes, Miercoles y Viernes)`, `Interdiaria (Martes y Jueves)`, `Sabatinos`</p>
                 <p>Course level: `BASICO A1`, `BASICO A2`, `INTERMEDIO B1`, `INTERMEDIO B2`, `AVANZADO C1`</p>
               </div>

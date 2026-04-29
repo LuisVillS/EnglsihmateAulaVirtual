@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { UNIFIED_COURSE_PRICE, normalizeUnifiedCourseType } from "@/lib/course-config";
 import { isPeruvianMobileNumber, validateCrmPhoneInput } from "@/lib/crm/phones";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import { resolvePreEnrollmentUserId } from "@/lib/pre-enrollment-session";
@@ -171,6 +172,8 @@ export async function POST(request) {
     const { data: updated, error } = await service
       .from("pre_enrollments")
       .update({
+        selected_course_type: normalizeUnifiedCourseType(preEnrollment.selected_course_type),
+        price_total: UNIFIED_COURSE_PRICE,
         payment_method: paymentMethod,
         payment_proof_url: key,
         payment_proof_meta: paymentProofMeta,

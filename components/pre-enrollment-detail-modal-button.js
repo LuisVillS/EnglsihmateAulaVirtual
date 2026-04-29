@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import AppModal from "@/components/app-modal";
 import ProofPreviewButton from "@/components/proof-preview-button";
+import { formatUnifiedCourseType, resolveUnifiedCoursePrice } from "@/lib/course-config";
 import { formatEnrollmentFrequencyLabel } from "@/lib/frequency-labels";
 
 function formatStatus(value) {
@@ -163,7 +164,7 @@ export default function PreEnrollmentDetailModalButton({
               <DetailCard title="Seleccion academica">
                 <p>Nivel: <span className="font-semibold">{preEnrollment?.selected_level || schedule?.course_level || "-"}</span></p>
                 <p>Frecuencia: <span className="font-semibold">{frequencyLabel}</span></p>
-                <p>Tipo de curso: <span className="font-semibold">{preEnrollment?.selected_course_type || "-"}</span></p>
+                <p>Tipo de curso: <span className="font-semibold">{formatUnifiedCourseType(preEnrollment?.selected_course_type)}</span></p>
                 <p>Mes de inicio: <span className="font-semibold">{preEnrollment?.start_month || "-"}</span></p>
                 <p>Curso: <span className="font-semibold">{preEnrollment?.selected_course_id || "-"}</span></p>
                 <p>Horario elegido: <span className="font-semibold">{preEnrollment?.selected_start_time || "-"}</span></p>
@@ -177,7 +178,7 @@ export default function PreEnrollmentDetailModalButton({
               <DetailCard title="Pago">
                 <p>Metodo: <span className="font-semibold">{preEnrollment?.payment_method || "-"}</span></p>
                 <p>Modo confirmacion: <span className="font-semibold">{paymentMeta?.confirmationMode || "-"}</span></p>
-                <p>Monto: <span className="font-semibold">{preEnrollment?.price_total ?? "-"}</span></p>
+                <p>Monto: <span className="font-semibold">S/ {resolveUnifiedCoursePrice(preEnrollment?.price_total)}</span></p>
                 <p>Estado MP: <span className="font-semibold">{preEnrollment?.mp_status || "-"}</span></p>
                 <p>ID MP: <span className="font-semibold">{preEnrollment?.mp_payment_id || "-"}</span></p>
                 <p>Operacion reportada: <span className="font-semibold">{paymentMeta?.operationCode || "-"}</span></p>

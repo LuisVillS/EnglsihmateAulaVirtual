@@ -9,7 +9,7 @@ export const metadata = {
 
 export default async function CrmKanbanPage({ searchParams }) {
   const params = (await Promise.resolve(searchParams)) || {};
-  const { supabase } = await requireCrmPageAccess();
+  const { supabase, context } = await requireCrmPageAccess();
   const search = params?.q?.toString() || "";
   const leadStatus = params?.status?.toString() || "";
   const sourceType = params?.source?.toString() || "";
@@ -33,6 +33,9 @@ export default async function CrmKanbanPage({ searchParams }) {
         key={boardSnapshotKey}
         stages={data.stages}
         leads={data.leads}
+        summaryMetrics={data.summaryMetrics}
+        templateOptions={data.templateOptions}
+        canManageStages={Boolean(context?.isClassicAdmin || context?.isCrmAdmin)}
         returnTo={returnTo}
         searchParams={params}
       />

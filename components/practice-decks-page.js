@@ -1,9 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import AppModal from "@/components/app-modal";
+import PracticeDeckBuilderModal from "@/components/practice-deck-builder-modal";
+import { deleteStudentFlashcardDeckAction } from "@/app/app/practice/decks/actions";
 import { buildDeckProgressSummary } from "@/lib/flashcard-arcade/progress";
 import { normalizeFlashcardGameMode } from "@/lib/flashcard-arcade/constants";
 
@@ -31,9 +33,12 @@ function buildCopy(language) {
       cards: "cards",
       mastered: "mastered",
       study: "Study",
-      createTitle: "Create New Deck",
-      createBody: "Custom deck creation for students is coming next. Use your course notes and current decks meanwhile.",
-      createCta: "View my course",
+      createTitle: "Create Your Deck",
+      createBody: "Build a personal deck with the flashcards you want to review together.",
+      createCta: "Create now",
+      edit: "Edit",
+      delete: "Delete",
+      deleting: "Deleting...",
       noResults: "No decks match your search yet. Try another topic or reset the filters.",
     };
   }
@@ -51,9 +56,12 @@ function buildCopy(language) {
     cards: "tarjetas",
     mastered: "dominado",
     study: "Estudiar",
-    createTitle: "Crear Nuevo Deck",
-    createBody: "La creacion de decks personalizados para estudiantes llegara pronto. Mientras tanto, usa tus notas y decks actuales.",
-    createCta: "Ver mi curso",
+    createTitle: "Crea Tu Deck",
+    createBody: "Arma un deck personal con las flashcards que quieras repasar juntas.",
+    createCta: "Crear ahora",
+    edit: "Editar",
+    delete: "Eliminar",
+    deleting: "Eliminando...",
     noResults: "No hay decks que coincidan con tu busqueda. Prueba con otro tema o restablece los filtros.",
   };
 }
@@ -144,7 +152,16 @@ function FilterIcon() {
   );
 }
 
-function DeckCard({ deck, copy, onOpen }) {
+function DeckCard({
+  deck,
+  copy,
+  onOpen,
+  onEdit,
+  onDelete,
+  deletePending = false,
+  editPending = false,
+  studyPending = false,
+}) {
   return (
     <article className="group flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0px_12px_32px_rgba(0,25,67,0.06)] transition-all duration-300 hover:-translate-y-1">
       <div className="relative h-48 overflow-hidden">
@@ -180,6 +197,26 @@ function DeckCard({ deck, copy, onOpen }) {
         </div>
 
         <div className="mt-auto space-y-2">
+          {deck.isEditable ? (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => onEdit?.(deck)}
+                disabled={editPending || deletePending}
+                className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-[#002a5c] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {copy.edit}
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete?.(deck)}
+                disabled={deletePending || editPending}
+                className="flex-1 rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deletePending ? copy.deleting : copy.delete}
+              </button>
+            </div>
+          ) : null}
           <div className="flex justify-between text-xs font-semibold">
             <span className="text-slate-500">{copy.progress}</span>
             <span className="text-[#002a5c]">{deck.completionPercent}% {copy.mastered}</span>
@@ -190,9 +227,10 @@ function DeckCard({ deck, copy, onOpen }) {
           <button
             type="button"
             onClick={() => onOpen(deck.deckKey)}
-            className="mt-6 w-full rounded-xl bg-gradient-to-r from-[#001943] to-[#102e62] py-3 font-bold text-white shadow-lg shadow-blue-900/10 transition-all hover:opacity-95 active:scale-[0.98]"
+            disabled={studyPending}
+            className="mt-6 w-full rounded-xl bg-gradient-to-r from-[#001943] to-[#102e62] py-3 font-bold text-white shadow-lg shadow-blue-900/10 transition-all hover:opacity-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {copy.study}
+            {studyPending ? "..." : copy.study}
           </button>
         </div>
       </div>
@@ -200,7 +238,7 @@ function DeckCard({ deck, copy, onOpen }) {
   );
 }
 
-function CreateDeckCard({ copy }) {
+function CreateDeckCard({ copy, onCreate }) {
   return (
     <article className="flex min-h-[400px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[rgba(196,198,209,0.3)] bg-[#f3f4f5] p-8 text-center transition-all duration-300 hover:bg-[#e7e8e9]">
       <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white text-[#002a5c] shadow-sm">
@@ -208,17 +246,24 @@ function CreateDeckCard({ copy }) {
       </div>
       <h3 className="mb-2 text-xl font-bold text-[#002a5c]">{copy.createTitle}</h3>
       <p className="mb-6 max-w-[220px] text-sm leading-8 text-slate-500">{copy.createBody}</p>
-      <Link
-        href="/app/curso"
+      <button
+        type="button"
+        onClick={onCreate}
         className="rounded-xl border border-slate-200 bg-white px-6 py-2.5 text-sm font-bold text-[#002a5c] shadow-sm transition-all hover:bg-[#002a5c] hover:text-white"
       >
         {copy.createCta}
-      </Link>
+      </button>
     </article>
   );
 }
 
-export default function PracticeDecksPage({ student, flashcardHub, initialParams, language = "es" }) {
+export default function PracticeDecksPage({
+  student,
+  flashcardHub,
+  initialParams,
+  language = "es",
+  availableDeckCards = [],
+}) {
   const copy = buildCopy(language);
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -231,6 +276,10 @@ export default function PracticeDecksPage({ student, flashcardHub, initialParams
   const [competition, setCompetition] = useState(flashcardHub?.competition || null);
   const [loadingDeckKey, setLoadingDeckKey] = useState("");
   const [error, setError] = useState("");
+  const [deckBuilderOpen, setDeckBuilderOpen] = useState(false);
+  const [editingDeck, setEditingDeck] = useState(null);
+  const [editingDeckKey, setEditingDeckKey] = useState("");
+  const [deletingDeckId, setDeletingDeckId] = useState("");
 
   const categoryOptions = Array.from(new Set([copy.all, ...decks.map((deck) => prettify(deck.themeTag || deck.sourceLabel || copy.all)).filter(Boolean)]));
   const difficultyOptions = Array.from(new Set([copy.all, ...decks.map((deck) => formatLevelLabel(deck.cefrLevel, language)).filter(Boolean)]));
@@ -241,6 +290,24 @@ export default function PracticeDecksPage({ student, flashcardHub, initialParams
     const matchesDifficulty = difficulty === copy.all || formatLevelLabel(deck.cefrLevel, language) === difficulty;
     return matchesQuery && matchesCategory && matchesDifficulty;
   });
+
+  function handleDeckExit(updatedDeck) {
+    const nextSummary = updatedDeck?.deckKey ? summarizeDeck(updatedDeck) : null;
+    if (nextSummary?.deckKey) {
+      setDecks((current) => current.map((deck) => (deck.deckKey === nextSummary.deckKey ? nextSummary : deck)));
+      if (recommendedDeck?.deckKey === nextSummary.deckKey) {
+        setRecommendedDeck(nextSummary);
+      }
+    }
+
+    setActiveDeck(null);
+    setError("");
+  }
+
+  function closeDeckModal() {
+    setActiveDeck(null);
+    setError("");
+  }
 
   async function openDeck(deckKey, mode = initialParams?.mode || "") {
     if (!deckKey) return;
@@ -257,11 +324,11 @@ export default function PracticeDecksPage({ student, flashcardHub, initialParams
         throw new Error(data?.error || "No se pudo cargar el deck.");
       }
 
-      setActiveDeck({ ...(data?.deck || {}), _initialMode: mode ? normalizeFlashcardGameMode(mode) : "" });
-      const nextUrl = mode
-        ? `/app/practice/decks?deck=${encodeURIComponent(deckKey)}&mode=${encodeURIComponent(normalizeFlashcardGameMode(mode))}`
-        : `/app/practice/decks?deck=${encodeURIComponent(deckKey)}`;
-      router.replace(nextUrl);
+      const resolvedDeck = {
+        ...(data?.deck || {}),
+        _initialMode: mode ? normalizeFlashcardGameMode(mode) : "",
+      };
+      setActiveDeck(resolvedDeck);
     } catch (deckError) {
       setError(deckError.message || "No se pudo cargar el deck.");
     } finally {
@@ -269,39 +336,69 @@ export default function PracticeDecksPage({ student, flashcardHub, initialParams
     }
   }
 
+  function openCreateDeck() {
+    setEditingDeck(null);
+    setEditingDeckKey("");
+    setDeckBuilderOpen(true);
+    setError("");
+  }
+
+  async function openEditDeck(deck) {
+    const deckKey = String(deck?.deckKey || "").trim();
+    if (!deckKey) return;
+    setEditingDeckKey(deckKey);
+    setError("");
+
+    try {
+      const response = await fetch(`/api/flashcards/arcade/decks?deck_key=${encodeURIComponent(deckKey)}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || "No se pudo cargar el deck para editar.");
+      }
+
+      setEditingDeck(data?.deck || null);
+      setDeckBuilderOpen(true);
+    } catch (deckError) {
+      setError(deckError.message || "No se pudo cargar el deck para editar.");
+    } finally {
+      setEditingDeckKey("");
+    }
+  }
+
+  function handleDeleteDeck(deck) {
+    const deckId = String(deck?.deckId || "").trim();
+    if (!deckId || deletingDeckId) return;
+
+    setDeletingDeckId(deckId);
+    setError("");
+    startTransition(async () => {
+      const formData = new FormData();
+      formData.set("deckId", deckId);
+      try {
+        const result = await deleteStudentFlashcardDeckAction(null, formData);
+        if (!result?.success) {
+          throw new Error(result?.error || "No se pudo eliminar el deck.");
+        }
+        setDecks(Array.isArray(result.decks) ? result.decks : []);
+        setRecommendedDeck(result.recommendedDeck || null);
+      } catch (deleteError) {
+        setError(deleteError.message || "No se pudo eliminar el deck.");
+      } finally {
+        setDeletingDeckId("");
+      }
+    });
+  }
+
   useEffect(() => {
     const requestedDeckKey = String(initialParams?.deckKey || "").trim();
     const requestedMode = String(initialParams?.mode || "").trim();
     if (!requestedDeckKey && !requestedMode) return;
-    const fallbackDeckKey = requestedDeckKey || recommendedDeck?.deckKey || decks[0]?.deckKey || "";
-    if (!fallbackDeckKey) return;
-    void openDeck(fallbackDeckKey, requestedMode);
+    router.replace("/app/practice/decks");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  if (activeDeck) {
-    return (
-      <FlashcardArcadePlayer
-        deck={activeDeck}
-        gamification={gamification}
-        initialMode={activeDeck?._initialMode || ""}
-        sourceContext="practice_decks"
-        onGamificationChange={(nextGamification) => setGamification(nextGamification)}
-        onCompetitionChange={(nextCompetition) => setCompetition(nextCompetition)}
-        onExit={(updatedDeck) => {
-          const nextSummary = updatedDeck?.deckKey ? summarizeDeck(updatedDeck) : null;
-          if (nextSummary?.deckKey) {
-            setDecks((current) => current.map((deck) => (deck.deckKey === nextSummary.deckKey ? nextSummary : deck)));
-            if (recommendedDeck?.deckKey === nextSummary.deckKey) {
-              setRecommendedDeck(nextSummary);
-            }
-          }
-          setActiveDeck(null);
-          router.replace("/app/practice/decks");
-        }}
-      />
-    );
-  }
 
   return (
     <section className="space-y-12 bg-[#f8f9fa] text-[#191c1d]">
@@ -374,9 +471,14 @@ export default function PracticeDecksPage({ student, flashcardHub, initialParams
               deck={deck}
               copy={copy}
               onOpen={(deckKey) => openDeck(deckKey)}
+              onEdit={openEditDeck}
+              onDelete={handleDeleteDeck}
+              deletePending={deletingDeckId === deck.deckId}
+              editPending={editingDeckKey === deck.deckKey}
+              studyPending={loadingDeckKey === deck.deckKey}
             />
           ))}
-          <CreateDeckCard copy={copy} />
+          <CreateDeckCard copy={copy} onCreate={openCreateDeck} />
 
           {!filteredDecks.length ? (
             <div className="rounded-2xl bg-white p-8 text-sm text-slate-500 shadow-[0px_12px_32px_rgba(0,25,67,0.06)] md:col-span-2 xl:col-span-2">
@@ -385,6 +487,51 @@ export default function PracticeDecksPage({ student, flashcardHub, initialParams
           ) : null}
         </div>
       </section>
+
+      <PracticeDeckBuilderModal
+        key={`${deckBuilderOpen ? "open" : "closed"}:${editingDeck?.deckKey || editingDeck?.deckId || "new"}:${student?.cefrLevel || ""}`}
+        open={deckBuilderOpen}
+        onClose={() => {
+          setDeckBuilderOpen(false);
+          setEditingDeck(null);
+          setEditingDeckKey("");
+        }}
+        onSaved={(result) => {
+          setDecks(Array.isArray(result?.decks) ? result.decks : []);
+          setRecommendedDeck(result?.recommendedDeck || null);
+          setDeckBuilderOpen(false);
+          setEditingDeck(null);
+          setEditingDeckKey("");
+          setError("");
+        }}
+        initialDeck={editingDeck}
+        availableCards={availableDeckCards}
+        studentLevel={student?.cefrLevel || ""}
+        language={language}
+      />
+
+      <AppModal
+        open={Boolean(activeDeck)}
+        onClose={closeDeckModal}
+        title={activeDeck?.title || "Practicar deck"}
+        widthClass="max-w-none"
+        dismissible
+        fullScreen
+      >
+        {activeDeck ? (
+          <FlashcardArcadePlayer
+            deck={activeDeck}
+            gamification={gamification}
+            embedded
+            minimalLauncher
+            initialMode={activeDeck?._initialMode || ""}
+            sourceContext="practice_decks"
+            onGamificationChange={(nextGamification) => setGamification(nextGamification)}
+            onCompetitionChange={(nextCompetition) => setCompetition(nextCompetition)}
+            onExit={handleDeckExit}
+          />
+        ) : null}
+      </AppModal>
     </section>
   );
 }

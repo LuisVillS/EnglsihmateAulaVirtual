@@ -497,6 +497,15 @@ async function handleSetPassword(prevState, formData, context, requireOtp) {
 }
 
 async function handleGoogleLogin(prevState, context, requireOtp) {
+  if (context === "admin") {
+    return {
+      ...prevState,
+      context,
+      requireOtp,
+      error: "Google no esta habilitado para el acceso administrativo.",
+    };
+  }
+
   const supabase = await createSupabaseServerClient({ allowCookieSetter: true });
   let canonicalAppUrl = "";
   try {

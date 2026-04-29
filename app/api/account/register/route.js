@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 import { createEmailVerificationToken, upsertPreEnrollmentProfile } from "@/lib/pre-enrollment";
 import { sendPreEnrollmentOtpEmail } from "@/lib/brevo";
 import { setPreEnrollSession } from "@/lib/pre-enroll-auth";
-import { resolveCanonicalAppUrl } from "@/lib/security/env";
+import { resolveAppUrlForRequest } from "@/lib/security/env";
 
 export async function POST(request) {
   try {
     const body = await request.json();
     const { email, fullName, phone, phoneCountryCode, phoneNationalNumber, birthDate } = body || {};
-    const origin = resolveCanonicalAppUrl();
+    const origin = resolveAppUrlForRequest(request);
 
     const { userId, studentCode } = await upsertPreEnrollmentProfile({
       email,

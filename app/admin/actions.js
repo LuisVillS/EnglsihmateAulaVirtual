@@ -6060,7 +6060,6 @@ export async function upsertStudent(prevState, maybeFormData) {
   const birthDate = getText(formData, "birthDate");
   const courseLevelRaw = formData.get("courseLevel")?.toString().toUpperCase() || "";
   const levelNumberRaw = formData.get("levelNumber")?.toString();
-  const courseType = formData.get("courseType")?.toString() || "regular";
   const startMonth = formData.get("startMonth")?.toString();
   const enrollmentDate = formData.get("enrollmentDate")?.toString();
   const preferredHourInput = formData.get("preferredHour")?.toString();
@@ -6114,7 +6113,7 @@ export async function upsertStudent(prevState, maybeFormData) {
       birthDate,
       courseLevel: resolvedCourseLevel || null,
       levelNumber,
-      isPremium: courseType === "premium",
+      isPremium: false,
       startMonth: resolvedStartMonth,
       enrollmentDate: resolvedEnrollmentDate,
       preferredHour: resolvedPreferredHour,
@@ -6188,7 +6187,6 @@ export async function importStudentsCsv(prevState, maybeFormData) {
   const birthDateIndex = headers.indexOf("birth_date");
   const courseLevelIndex = headers.indexOf("course_level");
   const levelNumberIndex = headers.indexOf("level_number");
-  const isPremiumIndex = headers.indexOf("is_premium");
   const startMonthIndex = headers.indexOf("start_month");
   const enrollmentDateIndex = headers.indexOf("enrollment_date");
   const hourIndex = headers.indexOf("preferred_hour");
@@ -6227,7 +6225,7 @@ export async function importStudentsCsv(prevState, maybeFormData) {
         birthDate: birthDateIndex !== -1 ? cells[birthDateIndex] : null,
         courseLevel,
         levelNumber: levelNumberIndex !== -1 ? parseInt(cells[levelNumberIndex] || "", 10) : undefined,
-        isPremium: isPremiumIndex !== -1 ? cells[isPremiumIndex] : false,
+        isPremium: false,
         startMonth: startMonthIndex !== -1 ? cells[startMonthIndex] : null,
         enrollmentDate: enrollmentDateIndex !== -1 ? cells[enrollmentDateIndex] : null,
         preferredHour: normalizedPreferredHour,

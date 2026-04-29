@@ -1,5 +1,6 @@
 import { normalizeCrmCallingCampaignKey } from "@/lib/crm/constants";
 import { listCrmStages } from "@/lib/crm/leads";
+import { isCrmClosedStage } from "@/lib/crm/stage-metadata";
 import { listCrmCallingCampaigns } from "@/lib/crm/queue";
 import { listPausedCrmCallingSessions } from "@/lib/crm/calling-sessions";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
@@ -9,7 +10,9 @@ const FALLBACK_UUID = "00000000-0000-0000-0000-000000000000";
 const CRM_STAGE_SETTINGS_SELECT = `
   id,
   stage_key,
+  system_key,
   name,
+  display_name,
   position,
   pipeline_state,
   is_active,
@@ -18,7 +21,12 @@ const CRM_STAGE_SETTINGS_SELECT = `
   is_lost,
   brevo_template_code,
   brevo_template_id,
+  email_template_id,
   brevo_template_config,
+  ignored_roles,
+  initial_delay_hours,
+  stagnancy_follow_up_enabled,
+  follow_up_template_id,
   archived_at,
   archived_by_user_id,
   archive_reason,
@@ -108,6 +116,7 @@ const CRM_LEAD_WITH_STAGE_SELECT = `
   last_call_outcome,
   last_interaction_at,
   next_action_at,
+  last_stage_change_at,
   approved_revenue_billing_month,
   approved_revenue_soles,
   approved_payment_count,
@@ -115,16 +124,20 @@ const CRM_LEAD_WITH_STAGE_SELECT = `
   approved_pre_enrollment_at,
   won_at,
   lost_at,
+  stage_follow_up_sent_at,
+  stage_follow_up_stage_id,
   archived_at,
   archived_by_user_id,
   archive_reason,
   last_synced_at,
   created_at,
   updated_at,
-  current_stage:crm_stages (
+  current_stage:crm_stages!crm_leads_current_stage_id_fkey (
     id,
     stage_key,
+    system_key,
     name,
+    display_name,
     position,
     pipeline_state,
     is_won,
@@ -168,6 +181,62 @@ const LIMA_UTC_OFFSET = "-05:00";
 
 function getCrmReadClient(supabase) {
   return hasServiceRoleClient() ? getServiceSupabaseClient() : supabase;
+}
+
+function normalizeTemplateValue(value) {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+function formatTemplateLabelFromEnvKey(envKey) {
+  return String(envKey || "")
+    .replace(/^BREVO_TEMPLATE_/, "")
+    .replace(/_ID$/, "")
+    .split("_")
+    .filter(Boolean)
+    .map((token) => token.charAt(0) + token.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function collectCrmTemplateOptions({ stages = [], automations = [] } = {}) {
+  const optionsByValue = new Map();
+
+  const addOption = (value, label) => {
+    const normalizedValue = normalizeTemplateValue(value);
+    if (!normalizedValue) return;
+    if (!optionsByValue.has(normalizedValue)) {
+      optionsByValue.set(normalizedValue, {
+        value: normalizedValue,
+        label: label || `Template ${normalizedValue}`,
+      });
+    }
+  };
+
+  for (const [envKey, envValue] of Object.entries(process.env || {})) {
+    if (!/^BREVO_TEMPLATE_.+_ID$/.test(envKey)) continue;
+    addOption(envValue, formatTemplateLabelFromEnvKey(envKey));
+  }
+
+  for (const stage of stages || []) {
+    addOption(stage?.email_template_id || stage?.brevo_template_id, `${stage?.display_name || stage?.name || "Stage"} initial`);
+    addOption(stage?.follow_up_template_id, `${stage?.display_name || stage?.name || "Stage"} follow-up`);
+  }
+
+  for (const automation of automations || []) {
+    addOption(automation?.template_key, automation?.name || "CRM automation");
+    addOption(automation?.config?.template_id, automation?.name || "CRM automation");
+    addOption(automation?.config?.brevo_template_id, automation?.name || "CRM automation");
+    addOption(automation?.config?.stage_template_id, automation?.name || "CRM automation");
+  }
+
+  return Array.from(optionsByValue.values()).sort((left, right) => {
+    const leftValue = Number(left.value);
+    const rightValue = Number(right.value);
+    if (Number.isFinite(leftValue) && Number.isFinite(rightValue)) {
+      return leftValue - rightValue;
+    }
+    return left.label.localeCompare(right.label);
+  });
 }
 
 function sanitizeSearchTerm(value) {
@@ -514,6 +583,42 @@ async function attachLatestLeadNotes(client, leads) {
   }));
 }
 
+async function loadCrmKanbanSummary(client, stages) {
+  const closedStageIds = (Array.isArray(stages) ? stages : [])
+    .filter((stage) => isCrmClosedStage(stage))
+    .map((stage) => stage.id)
+    .filter(Boolean);
+
+  const totalCountResult = await client
+    .from("crm_leads")
+    .select("id", { count: "exact", head: true })
+    .neq("lead_status", "archived");
+
+  if (totalCountResult.error) {
+    throw new Error(totalCountResult.error.message || "Failed to load the CRM pipeline summary.");
+  }
+
+  let closedLeadCount = 0;
+  if (closedStageIds.length) {
+    const closedCountResult = await client
+      .from("crm_leads")
+      .select("id", { count: "exact", head: true })
+      .neq("lead_status", "archived")
+      .in("current_stage_id", closedStageIds);
+
+    if (closedCountResult.error) {
+      throw new Error(closedCountResult.error.message || "Failed to load the CRM closed-stage summary.");
+    }
+
+    closedLeadCount = Number(closedCountResult.count || 0);
+  }
+
+  return {
+    totalLeadCount: Number(totalCountResult.count || 0),
+    closedLeadCount,
+  };
+}
+
 export async function loadCrmDashboardData(supabase) {
   const client = getCrmReadClient(supabase);
   const [stages, leads] = await Promise.all([listCrmStages(client), loadCrmLeads(client, { limit: 160 })]);
@@ -549,12 +654,28 @@ export async function loadCrmDashboardData(supabase) {
 
 export async function loadCrmKanbanData(supabase, { search = "", leadStatus = "", sourceType = "" } = {}) {
   const client = getCrmReadClient(supabase);
-  const [stages, leads] = await Promise.all([
+  const [stages, leads, automationsResult] = await Promise.all([
     listCrmStages(client),
     loadCrmLeads(client, { search, leadStatus, sourceType, limit: 240, excludeArchived: true }),
+    client
+      .from("crm_automations")
+      .select(CRM_AUTOMATION_SETTINGS_SELECT)
+      .order("updated_at", { ascending: false }),
   ]);
 
-  return { stages, leads: await attachLatestLeadNotes(client, leads) };
+  if (automationsResult.error) {
+    throw new Error(automationsResult.error.message || "Failed to load CRM automations.");
+  }
+
+  return {
+    stages,
+    leads: await attachLatestLeadNotes(client, leads),
+    summaryMetrics: await loadCrmKanbanSummary(client, stages),
+    templateOptions: collectCrmTemplateOptions({
+      stages,
+      automations: automationsResult.data || [],
+    }),
+  };
 }
 
 export async function loadCrmLeadsPageData(
@@ -619,6 +740,10 @@ export async function loadCrmSettingsData(supabase) {
     stages: stagesResult.data || [],
     automations: automationsResult.data || [],
     automationsByStageId,
+    templateOptions: collectCrmTemplateOptions({
+      stages: stagesResult.data || [],
+      automations: automationsResult.data || [],
+    }),
     operators,
   };
 }

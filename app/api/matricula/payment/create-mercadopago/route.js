@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
+import { UNIFIED_COURSE_PRICE, normalizeUnifiedCourseType } from "@/lib/course-config";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import { resolvePreEnrollmentUserId } from "@/lib/pre-enrollment-session";
 import { ensureReservationStatus, getPreEnrollment } from "@/lib/pre-enrollment";
-
-const FALLBACK_REGULAR_LINK = "https://mpago.la/2dTDU2C";
-const FALLBACK_PREMIUM_LINK = "https://mpago.la/1zXnakz";
 
 export async function POST(request) {
   try {
@@ -18,18 +16,25 @@ export async function POST(request) {
       return NextResponse.json({ error: "Proceso no iniciado." }, { status: 400 });
     }
 
-    const selectedType = preEnrollment.selected_course_type === "PREMIUM" ? "PREMIUM" : "REGULAR";
+    const selectedType = normalizeUnifiedCourseType(preEnrollment.selected_course_type);
     const checkoutUrl =
-      selectedType === "PREMIUM"
-        ? process.env.MERCADOPAGO_PREMIUM_LINK || FALLBACK_PREMIUM_LINK
-        : process.env.MERCADOPAGO_REGULAR_LINK || FALLBACK_REGULAR_LINK;
+      process.env.MERCADOPAGO_COURSE_LINK ||
+      process.env.MERCADOPAGO_PREMIUM_LINK ||
+      process.env.MERCADOPAGO_REGULAR_LINK ||
+      "";
+    if (!checkoutUrl) {
+      return NextResponse.json(
+        { error: "Configura MERCADOPAGO_COURSE_LINK con el enlace de cobro del curso a S/ 179." },
+        { status: 500 }
+      );
+    }
 
     const service = getServiceSupabaseClient();
     const previousMeta =
       preEnrollment?.payment_proof_meta && typeof preEnrollment.payment_proof_meta === "object"
         ? preEnrollment.payment_proof_meta
         : {};
-    const amount = selectedType === "PREMIUM" ? 139 : 99;
+    const amount = UNIFIED_COURSE_PRICE;
 
     const { data: updated } = await service
       .from("pre_enrollments")

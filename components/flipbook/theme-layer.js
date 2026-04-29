@@ -5,6 +5,8 @@ export function buildFlipbookStageStyle(themeId = "paper-cream") {
   return {
     backgroundColor: theme.stageBackground,
     backgroundImage: theme.stageSurface,
+    "--flipbook-stage-bg": theme.stageBackground,
+    "--flipbook-stage-surface": theme.stageSurface,
     "--flipbook-stage-glow": theme.stageGlow,
     "--flipbook-page-bg": theme.pageBackground,
     "--flipbook-page-text": theme.pageText,

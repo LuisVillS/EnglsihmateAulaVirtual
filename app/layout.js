@@ -25,7 +25,10 @@ export default async function RootLayout({ children }) {
   await ensureDefaultAdminUser();
   return (
     <html lang="es">
-      <body className={`${bodyFont.variable} ${headingFont.variable} bg-background text-foreground antialiased`}>
+      <body
+        suppressHydrationWarning
+        className={`${bodyFont.variable} ${headingFont.variable} bg-background text-foreground antialiased`}
+      >
         <FormErrorFocus />
         {children}
       </body>

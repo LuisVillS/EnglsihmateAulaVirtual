@@ -6,6 +6,7 @@ import { requireCrmPageAccess } from "@/lib/admin/access";
 import {
   normalizeCrmCallOutcome,
   normalizeCrmCallingCampaignKey,
+  normalizeCrmLeadSourceOrigin,
 } from "@/lib/crm/constants";
 import { archiveCrmLead, deleteCrmLead, selectCrmLeadById } from "@/lib/crm/leads";
 import { upsertManualCrmLead } from "@/lib/crm/integrations/shared";
@@ -34,6 +35,10 @@ import {
   selectCrmStageById,
   upsertCrmStage,
 } from "@/lib/crm/stages";
+import {
+  resolveCrmStageDisplayName,
+  resolveCrmStageSystemKey,
+} from "@/lib/crm/stage-metadata";
 import { getServiceSupabaseClient, hasServiceRoleClient } from "@/lib/supabase-service";
 
 function parseRequiredString(value, label) {
@@ -184,25 +189,60 @@ function parseCallingHubCriteria(formData) {
 }
 
 function parseSourceRuleConfig(formData) {
-  const sources = [
-    { key: "meta", label: "Meta" },
-    { key: "web_form", label: "WebForm" },
-    { key: "formspree", label: "Formspree (legacy)" },
-    { key: "pre_enrollment", label: "Virtual classroom" },
-    { key: "manual", label: "Manual / other" },
-    { key: "other", label: "Other" },
-  ];
+  const sources = ["meta", "web_form", "formspree", "pre_enrollment", "manual", "other"];
+  const supportedSources = new Set(sources);
 
-  const exclude = [];
+  const exclude = new Set();
 
-  for (const source of sources) {
-    const excludeFlag = parseBooleanFlag(formData.get(`sourceExclude_${source.key}`));
-    if (excludeFlag) exclude.push(source.key);
+  for (const sourceKey of sources) {
+    const excludeFlag = parseBooleanFlag(formData.get(`sourceExclude_${sourceKey}`));
+    if (excludeFlag) exclude.add(sourceKey);
+  }
+
+  if (formData.has("sourceExcludeValuesTouched") || formData.has("sourceExcludeValues")) {
+    for (const value of formData.getAll("sourceExcludeValues")) {
+      const normalized = normalizeCrmLeadSourceOrigin(value);
+      if (normalized && supportedSources.has(normalized)) {
+        exclude.add(normalized);
+      }
+    }
   }
 
   return {
-    exclude,
+    exclude: Array.from(exclude),
   };
+}
+
+function stripLegacyRoleFilterConfig(config) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return {};
+  }
+
+  delete config.ignored_roles;
+  delete config.ignore_roles;
+  delete config.role_exclude;
+  return config;
+}
+
+function parseStageDelayHours(formData) {
+  if (!formData.has("initialDelayHours") && !formData.has("initialDelayHoursTouched")) {
+    return null;
+  }
+  return Math.max(0, parseOptionalInteger(formData.get("initialDelayHours")) || 0);
+}
+
+function parseStagnancyFollowUpEnabled(formData) {
+  if (!formData.has("stagnancyFollowUpTouched")) {
+    return null;
+  }
+  return parseBooleanFlag(formData.get("stagnancyFollowUpEnabled"));
+}
+
+function parseStagnancyFollowUpTemplateId(formData, enabled) {
+  if (!formData.has("stagnancyFollowUpTouched")) {
+    return null;
+  }
+  return enabled ? parseOptionalString(formData.get("followUpTemplateId")) : null;
 }
 
 function getDefaultNextActionAt(callOutcome, explicitNextActionAt) {
@@ -350,8 +390,8 @@ async function resequenceCrmStages(service) {
 
     await upsertCrmStage(service, {
       stageId: stage.id,
-      stageKey: stage.stage_key,
-      name: stage.name,
+      systemKey: resolveCrmStageSystemKey(stage),
+      displayName: resolveCrmStageDisplayName(stage),
       position: nextPosition,
       pipelineState: stage.pipeline_state,
       isActive: stage.is_active,
@@ -359,8 +399,11 @@ async function resequenceCrmStages(service) {
       isWon: stage.is_won,
       isLost: stage.is_lost,
       brevoTemplateCode: null,
-      brevoTemplateId: stage.brevo_template_id,
+      emailTemplateId: stage.email_template_id || stage.brevo_template_id,
       brevoTemplateConfig: stage.brevo_template_config,
+      initialDelayHours: stage.initial_delay_hours,
+      stagnancyFollowUpEnabled: stage.stagnancy_follow_up_enabled,
+      followUpTemplateId: stage.follow_up_template_id,
     });
   }
 }
@@ -380,8 +423,8 @@ async function ensureActiveDefaultStage(service) {
   const fallbackStage = activeStages[0];
   await upsertCrmStage(service, {
     stageId: fallbackStage.id,
-    stageKey: fallbackStage.stage_key,
-    name: fallbackStage.name,
+    systemKey: resolveCrmStageSystemKey(fallbackStage),
+    displayName: resolveCrmStageDisplayName(fallbackStage),
     position: fallbackStage.position,
     pipelineState: fallbackStage.pipeline_state,
     isActive: true,
@@ -389,8 +432,11 @@ async function ensureActiveDefaultStage(service) {
     isWon: fallbackStage.is_won,
     isLost: fallbackStage.is_lost,
     brevoTemplateCode: null,
-    brevoTemplateId: fallbackStage.brevo_template_id,
+    emailTemplateId: fallbackStage.email_template_id || fallbackStage.brevo_template_id,
     brevoTemplateConfig: fallbackStage.brevo_template_config,
+    initialDelayHours: fallbackStage.initial_delay_hours,
+    stagnancyFollowUpEnabled: fallbackStage.stagnancy_follow_up_enabled,
+    followUpTemplateId: fallbackStage.follow_up_template_id,
   });
 }
 
@@ -410,8 +456,8 @@ async function normalizeDefaultStage(service, stageId, isDefault) {
 
     await upsertCrmStage(service, {
       stageId: stage.id,
-      stageKey: stage.stage_key,
-      name: stage.name,
+      systemKey: resolveCrmStageSystemKey(stage),
+      displayName: resolveCrmStageDisplayName(stage),
       position: stage.position,
       pipelineState: stage.pipeline_state,
       isActive: stage.is_active,
@@ -419,8 +465,11 @@ async function normalizeDefaultStage(service, stageId, isDefault) {
       isWon: stage.is_won,
       isLost: stage.is_lost,
       brevoTemplateCode: null,
-      brevoTemplateId: stage.brevo_template_id,
+      emailTemplateId: stage.email_template_id || stage.brevo_template_id,
       brevoTemplateConfig: stage.brevo_template_config,
+      initialDelayHours: stage.initial_delay_hours,
+      stagnancyFollowUpEnabled: stage.stagnancy_follow_up_enabled,
+      followUpTemplateId: stage.follow_up_template_id,
     });
   }
 }
@@ -428,10 +477,12 @@ async function normalizeDefaultStage(service, stageId, isDefault) {
 async function syncStageAutomation(service, stage, { isActive = true } = {}) {
   if (!stage?.id) return null;
 
-  const templateId = parseOptionalString(stage.brevo_template_id);
+  const templateId = parseOptionalString(stage.email_template_id || stage.brevo_template_id);
+  const displayName = resolveCrmStageDisplayName(stage);
+  const systemKey = resolveCrmStageSystemKey(stage);
   const baseConfig =
     stage.brevo_template_config && typeof stage.brevo_template_config === "object"
-      ? { ...stage.brevo_template_config }
+      ? stripLegacyRoleFilterConfig({ ...stage.brevo_template_config })
       : {};
 
   if (templateId) {
@@ -439,6 +490,10 @@ async function syncStageAutomation(service, stage, { isActive = true } = {}) {
   } else {
     delete baseConfig.stage_template_id;
   }
+
+  baseConfig.stage_system_key = systemKey;
+  baseConfig.stage_display_name = displayName;
+  baseConfig.initial_delay_hours = Math.max(0, Number(stage.initial_delay_hours || 0) || 0);
 
   const { data: existingRows, error: selectError } = await service
     .from("crm_automations")
@@ -462,7 +517,7 @@ async function syncStageAutomation(service, stage, { isActive = true } = {}) {
   }
 
   const payload = {
-    name: `${stage.name} stage template`,
+    name: `${displayName} stage template`,
     trigger_event: "lead_stage_changed",
     trigger_stage_id: stage.id,
     delivery_channel: "brevo_email",
@@ -998,14 +1053,26 @@ export async function saveCrmStageAction(formData) {
 
   const stageId = parseOptionalString(formData.get("stageId"));
   const stageKey = parseOptionalString(formData.get("stageKey"));
-  const name = parseRequiredString(formData.get("name"), "Stage name");
+  const systemKey = parseOptionalString(formData.get("systemKey")) || stageKey;
+  const name =
+    parseOptionalString(formData.get("displayName")) ||
+    parseRequiredString(formData.get("name"), "Stage name");
   const pipelineState = parseRequiredString(formData.get("pipelineState"), "Pipeline state");
   const isActive = parseBooleanFlag(formData.get("isActive"));
   const isDefault = isActive && parseBooleanFlag(formData.get("isDefault"));
   const position = Math.max(1, parseOptionalInteger(formData.get("position")) || 1);
-  const brevoTemplateId = parseOptionalString(formData.get("brevoTemplateId"));
-  const brevoTemplateConfig = parseOptionalJson(formData.get("configJson"));
+  const brevoTemplateId =
+    parseOptionalString(formData.get("emailTemplateId")) ||
+    parseOptionalString(formData.get("brevoTemplateId"));
+  const brevoTemplateConfig = stripLegacyRoleFilterConfig(parseOptionalJson(formData.get("configJson")));
   const sourceRules = parseSourceRuleConfig(formData);
+  const initialDelayHours = parseStageDelayHours(formData);
+  const stagnancyFollowUpEnabled = parseStagnancyFollowUpEnabled(formData);
+  const followUpTemplateId = parseStagnancyFollowUpTemplateId(formData, stagnancyFollowUpEnabled);
+  const clearEmailTemplateId =
+    (formData.has("emailTemplateId") || formData.has("brevoTemplateId")) && !brevoTemplateId;
+  const clearFollowUpTemplateId =
+    formData.has("stagnancyFollowUpTouched") && (!stagnancyFollowUpEnabled || !followUpTemplateId);
 
   if (sourceRules.exclude.length) {
     brevoTemplateConfig.source_rules = {
@@ -1015,21 +1082,39 @@ export async function saveCrmStageAction(formData) {
     delete brevoTemplateConfig.source_rules;
   }
 
-  if (!stageId && !stageKey) {
+  if (initialDelayHours !== null) {
+    brevoTemplateConfig.initial_delay_hours = initialDelayHours;
+  }
+  if (stagnancyFollowUpEnabled !== null) {
+    if (stagnancyFollowUpEnabled && followUpTemplateId) {
+      brevoTemplateConfig.follow_up_template_id = followUpTemplateId;
+      brevoTemplateConfig.stagnancy_follow_up_enabled = true;
+    } else {
+      delete brevoTemplateConfig.follow_up_template_id;
+      brevoTemplateConfig.stagnancy_follow_up_enabled = false;
+    }
+  }
+
+  if (!stageId && !systemKey) {
     throw new Error("Stage key is required when creating a new stage.");
   }
 
   const savedStage = await saveStageWithTemplate(service, {
     stageId,
-    stageKey,
-    name,
+    systemKey,
+    displayName: name,
     position,
     pipelineState,
     isActive,
     isDefault,
     brevoTemplateCode: null,
-    brevoTemplateId,
+    emailTemplateId: brevoTemplateId,
     brevoTemplateConfig,
+    initialDelayHours,
+    stagnancyFollowUpEnabled,
+    followUpTemplateId,
+    clearEmailTemplateId,
+    clearFollowUpTemplateId,
   });
 
   await resequenceCrmStages(service);
@@ -1073,8 +1158,8 @@ export async function moveCrmStageAction(formData) {
     const stage = reordered[index];
     await upsertCrmStage(service, {
       stageId: stage.id,
-      stageKey: stage.stage_key,
-      name: stage.name,
+      systemKey: resolveCrmStageSystemKey(stage),
+      displayName: resolveCrmStageDisplayName(stage),
       position: index + 1,
       pipelineState: stage.pipeline_state,
       isActive: stage.is_active,
@@ -1082,8 +1167,11 @@ export async function moveCrmStageAction(formData) {
       isWon: stage.is_won,
       isLost: stage.is_lost,
       brevoTemplateCode: null,
-      brevoTemplateId: stage.brevo_template_id,
+      emailTemplateId: stage.email_template_id || stage.brevo_template_id,
       brevoTemplateConfig: stage.brevo_template_config,
+      initialDelayHours: stage.initial_delay_hours,
+      stagnancyFollowUpEnabled: stage.stagnancy_follow_up_enabled,
+      followUpTemplateId: stage.follow_up_template_id,
     });
   }
 
@@ -1117,8 +1205,8 @@ export async function toggleCrmStageActiveAction(formData) {
   } else {
     await saveStageWithTemplate(service, {
       stageId: stage.id,
-      stageKey: stage.stage_key,
-      name: stage.name,
+      systemKey: resolveCrmStageSystemKey(stage),
+      displayName: resolveCrmStageDisplayName(stage),
       position: stage.position,
       pipelineState: stage.pipeline_state,
       isActive: true,
@@ -1126,8 +1214,11 @@ export async function toggleCrmStageActiveAction(formData) {
       isWon: stage.is_won,
       isLost: stage.is_lost,
       brevoTemplateCode: null,
-      brevoTemplateId: stage.brevo_template_id,
+      emailTemplateId: stage.email_template_id || stage.brevo_template_id,
       brevoTemplateConfig: stage.brevo_template_config,
+      initialDelayHours: stage.initial_delay_hours,
+      stagnancyFollowUpEnabled: stage.stagnancy_follow_up_enabled,
+      followUpTemplateId: stage.follow_up_template_id,
     });
   }
 
@@ -1152,8 +1243,8 @@ export async function saveCrmStageAutomationAction(formData) {
 
   const updatedStage = await saveStageWithTemplate(service, {
     stageId: stage.id,
-    stageKey: stage.stage_key,
-    name: stage.name,
+    systemKey: resolveCrmStageSystemKey(stage),
+    displayName: resolveCrmStageDisplayName(stage),
     position: stage.position,
     pipelineState: stage.pipeline_state,
     isActive: stage.is_active,
@@ -1161,10 +1252,15 @@ export async function saveCrmStageAutomationAction(formData) {
     isWon: stage.is_won,
     isLost: stage.is_lost,
     brevoTemplateCode: null,
-    brevoTemplateId: parseOptionalString(formData.get("brevoTemplateId")),
+    emailTemplateId:
+      parseOptionalString(formData.get("emailTemplateId")) ||
+      parseOptionalString(formData.get("brevoTemplateId")),
     brevoTemplateConfig: (() => {
-      const config = parseOptionalJson(formData.get("configJson"));
+      const config = stripLegacyRoleFilterConfig(parseOptionalJson(formData.get("configJson")));
       const sourceRules = parseSourceRuleConfig(formData);
+      const initialDelayHours = parseStageDelayHours(formData);
+      const stagnancyFollowUpEnabled = parseStagnancyFollowUpEnabled(formData);
+      const followUpTemplateId = parseStagnancyFollowUpTemplateId(formData, stagnancyFollowUpEnabled);
       if (sourceRules.exclude.length) {
         config.source_rules = {
           exclude: sourceRules.exclude,
@@ -1172,8 +1268,38 @@ export async function saveCrmStageAutomationAction(formData) {
       } else if (config.source_rules && typeof config.source_rules === "object") {
         delete config.source_rules;
       }
+      if (initialDelayHours !== null) {
+        config.initial_delay_hours = initialDelayHours;
+      }
+      if (stagnancyFollowUpEnabled !== null) {
+        if (stagnancyFollowUpEnabled && followUpTemplateId) {
+          config.follow_up_template_id = followUpTemplateId;
+          config.stagnancy_follow_up_enabled = true;
+        } else {
+          delete config.follow_up_template_id;
+          config.stagnancy_follow_up_enabled = false;
+        }
+      }
       return config;
     })(),
+    initialDelayHours: parseStageDelayHours(formData),
+    stagnancyFollowUpEnabled: parseStagnancyFollowUpEnabled(formData),
+    followUpTemplateId: parseStagnancyFollowUpTemplateId(
+      formData,
+      parseStagnancyFollowUpEnabled(formData)
+    ),
+    clearEmailTemplateId:
+      (formData.has("emailTemplateId") || formData.has("brevoTemplateId")) &&
+      !(
+        parseOptionalString(formData.get("emailTemplateId")) ||
+        parseOptionalString(formData.get("brevoTemplateId"))
+      ),
+    clearFollowUpTemplateId:
+      formData.has("stagnancyFollowUpTouched") &&
+      !(
+        parseStagnancyFollowUpEnabled(formData) &&
+        parseStagnancyFollowUpTemplateId(formData, parseStagnancyFollowUpEnabled(formData))
+      ),
   });
 
   const isAutomationActive = parseBooleanFlag(formData.get("isActive"));

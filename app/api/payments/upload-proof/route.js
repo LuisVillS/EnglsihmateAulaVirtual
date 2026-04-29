@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { UNIFIED_COURSE_PRICE } from "@/lib/course-config";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { getServiceSupabaseClient } from "@/lib/supabase-service";
 import { resolveCourseRenewalContext } from "@/lib/payments";
@@ -150,7 +151,7 @@ export async function POST(request) {
       contentType: file.type || "application/octet-stream",
     });
 
-    const amount = profile.is_premium ? 139 : 99;
+    const amount = UNIFIED_COURSE_PRICE;
     const { data: payment, error } = await service
       .from("payments")
       .upsert(

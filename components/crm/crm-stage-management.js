@@ -1,6 +1,7 @@
 import { AdminCard, AdminSectionHeader } from "@/components/admin-page";
 import { moveCrmStageAction, saveCrmStageAction, toggleCrmStageActiveAction } from "@/app/admin/crm/actions";
 import { CrmBadge } from "@/components/crm/crm-ui";
+import { resolveCrmStageDisplayName, resolveCrmStageSystemKey } from "@/lib/crm/stage-metadata";
 
 const SOURCE_RULE_OPTIONS = [
   { key: "meta", label: "Meta" },
@@ -51,19 +52,21 @@ function renderSourceRuleGroup({ prefix, title, description, selectedValues = []
 function StageCard({ stage, returnTo, canEdit }) {
   const sourceRules = stage.brevo_template_config?.source_rules || {};
   const excludeRules = Array.isArray(sourceRules.exclude) ? sourceRules.exclude : [];
+  const stageLabel = resolveCrmStageDisplayName(stage);
+  const stageKey = resolveCrmStageSystemKey(stage);
 
   return (
     <div className="space-y-3 rounded-[24px] border border-[rgba(15,23,42,0.08)] bg-[#fcfdff] p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-semibold text-[#111827]">{stage.name}</p>
+            <p className="text-sm font-semibold text-[#111827]">{stageLabel}</p>
             <CrmBadge tone={stage.pipeline_state === "won" ? "success" : stage.pipeline_state === "lost" ? "danger" : "accent"}>
               {stage.pipeline_state}
             </CrmBadge>
             <CrmBadge tone={stage.is_active ? "success" : "neutral"}>{stage.is_active ? "Active" : "Archived"}</CrmBadge>
-            <CrmBadge tone={stage.brevo_template_id ? "accent" : "neutral"}>
-              {stage.brevo_template_id ? "Auto-send enabled" : "No template"}
+            <CrmBadge tone={stage.email_template_id || stage.brevo_template_id ? "accent" : "neutral"}>
+              {stage.email_template_id || stage.brevo_template_id ? "Auto-send enabled" : "No template"}
             </CrmBadge>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -74,7 +77,7 @@ function StageCard({ stage, returnTo, canEdit }) {
             )}
           </div>
           <p className="text-xs text-[#64748b]">
-            Key: <span className="font-medium text-[#334155]">{stage.stage_key}</span> | Position {stage.position}
+            Key: <span className="font-medium text-[#334155]">{stageKey}</span> | Position {stage.position}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -107,19 +110,19 @@ function StageCard({ stage, returnTo, canEdit }) {
 
       <form action={saveCrmStageAction} className="space-y-3 rounded-[20px] border border-[rgba(15,23,42,0.08)] bg-white px-4 py-4">
         <input type="hidden" name="stageId" value={stage.id} />
-        <input type="hidden" name="stageKey" value={stage.stage_key} />
+        <input type="hidden" name="systemKey" value={stageKey} />
         <input type="hidden" name="returnTo" value={returnTo} />
 
         <div className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1 text-sm">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Stage name</span>
-            <input
-              type="text"
-              name="name"
-              defaultValue={stage.name}
-              disabled={!canEdit}
-              className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none disabled:bg-[#f8fafc]"
-            />
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Stage name</span>
+              <input
+                type="text"
+                name="displayName"
+                defaultValue={stageLabel}
+                disabled={!canEdit}
+                className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none disabled:bg-[#f8fafc]"
+              />
           </label>
           <label className="space-y-1 text-sm">
             <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Pipeline state</span>
@@ -172,14 +175,14 @@ function StageCard({ stage, returnTo, canEdit }) {
 
         <div className="grid gap-3 md:grid-cols-1">
           <label className="space-y-1 text-sm">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Template ID</span>
-            <input
-              type="text"
-              name="brevoTemplateId"
-              defaultValue={stage.brevo_template_id || ""}
-              placeholder="123"
-              disabled={!canEdit}
-              className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none disabled:bg-[#f8fafc]"
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Template ID</span>
+              <input
+                type="text"
+                name="emailTemplateId"
+                defaultValue={stage.email_template_id || stage.brevo_template_id || ""}
+                placeholder="123"
+                disabled={!canEdit}
+                className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none disabled:bg-[#f8fafc]"
             />
           </label>
         </div>
@@ -250,7 +253,7 @@ export default function CrmStageManagementPanel({ stages, canEdit, returnTo }) {
               <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Stage key</span>
               <input
                 type="text"
-                name="stageKey"
+                name="systemKey"
                 placeholder="crm_stage_follow_up"
                 className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
               />
@@ -259,7 +262,7 @@ export default function CrmStageManagementPanel({ stages, canEdit, returnTo }) {
               <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Stage name</span>
               <input
                 type="text"
-                name="name"
+                name="displayName"
                 placeholder="Follow up"
                 className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
               />
@@ -290,7 +293,7 @@ export default function CrmStageManagementPanel({ stages, canEdit, returnTo }) {
               <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#94a3b8]">Template ID</span>
               <input
                 type="text"
-                name="brevoTemplateId"
+                name="emailTemplateId"
                 placeholder="123"
                 className="w-full rounded-2xl border border-[rgba(15,23,42,0.1)] bg-white px-3 py-2.5 text-sm text-[#0f172a] focus:border-[#103474] focus:outline-none"
               />

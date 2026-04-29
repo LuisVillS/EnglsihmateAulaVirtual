@@ -4,6 +4,9 @@
 
 This hardening pass fixed the reported critical, high, and medium findings without changing page layouts, routes, or visual design.
 
+- Supabase sensitive tables now enforce stricter RLS and no longer expose broad `anon`/`authenticated` table access.
+- Sensitive `SECURITY DEFINER` functions are no longer executable by `anon`/`authenticated`; execution is now restricted to `service_role`.
+- CRM automation runner secret handling now uses constant-time comparison and no longer accepts secrets in query strings.
 - Calendar feed tokens now require a dedicated private secret, use versioned signing, reject insecure legacy tokens, and stay bound to the signed user.
 - Practice/auth/session flows no longer accept `student_code` as an authentication fallback, and cross-account progress mutations are blocked.
 - Internal `/api/jobs/*` routes now require `Authorization: Bearer CRON_SECRET` and fail closed when the secret is missing.
@@ -35,6 +38,7 @@ Public `NEXT_PUBLIC_*` values are no longer used as fallbacks for privileged sig
 Added migration:
 
 - [`supabase/migrations/20260327000100_security_auth_hardening.sql`](/C:/Users/luise/OneDrive/Escritorio/EnglishmateApp/supabase/migrations/20260327000100_security_auth_hardening.sql)
+- [`supabase/migrations/20260424000100_security_rls_execute_hardening.sql`](/C:/Users/luise/OneDrive/Escritorio/EnglishmateApp/supabase/migrations/20260424000100_security_rls_execute_hardening.sql)
 
 This migration is additive and introduces:
 
@@ -43,6 +47,14 @@ This migration is additive and introduces:
 - `used_at` on `public.password_recovery_codes`
 - `requested_ip` on `public.password_recovery_codes`
 - supporting indexes and RLS enablement
+
+The latest hardening migration also introduces:
+
+- `FORCE ROW LEVEL SECURITY` on sensitive auth/admin tables where present
+- explicit revocation of broad table grants from `public`, `anon`, and `authenticated`
+- explicit revocation of execute rights for sensitive `SECURITY DEFINER` functions from `public`, `anon`, and `authenticated`
+- explicit grant of execute rights for those functions only to `service_role`
+- explicit `search_path` pinning on `public.handle_new_user`
 
 ## Rollout And Invalidation Notes
 

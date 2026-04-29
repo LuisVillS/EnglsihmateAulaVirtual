@@ -28,7 +28,7 @@ export default async function OportunidadesAcademicasPage() {
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <StudentHubCard
           href="/app/study-with-me"
-          eyebrow="Premium"
+          eyebrow="Guiado"
           title="Study With Me"
           description="Reserva sesiones personalizadas y aprovecha la práctica guiada disponible para alumnos habilitados."
           icon="opportunities"

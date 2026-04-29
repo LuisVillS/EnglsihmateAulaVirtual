@@ -6,6 +6,7 @@ import {
   resolveCommissionForPreEnrollment,
   updatePreEnrollmentSelection,
 } from "@/lib/pre-enrollment";
+import { UNIFIED_COURSE_PRICE } from "@/lib/course-config";
 import { resolvePreEnrollmentUserId } from "@/lib/pre-enrollment-session";
 
 export async function POST(request) {
@@ -78,7 +79,7 @@ export async function POST(request) {
     });
     payload.step = selectedCommissionId ? "TERMS" : "COURSE_SELECTION";
     payload.status = "IN_PROGRESS";
-    payload.price_total = courseType?.toString().toLowerCase() === "premium" ? 139 : 99;
+    payload.price_total = UNIFIED_COURSE_PRICE;
 
     if (startReservation && selectedCommissionId) {
       payload.status = "RESERVED";

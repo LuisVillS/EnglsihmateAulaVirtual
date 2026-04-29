@@ -159,12 +159,12 @@ export default function FlipbookBookFrame({
   );
   const leftStackWeight = Math.max(readingProgress, pagesReadRamp);
   const rightStackWeight = Math.max(1 - readingProgress, pagesRemainingRamp);
-  const leftStackDepth = isPortrait ? 0 : 6 + Math.round(leftStackWeight * 24);
-  const rightStackDepth = isPortrait ? 0 : 6 + Math.round(rightStackWeight * 24);
-  const leftStackWidth = isPortrait ? 0 : 6 + leftStackWeight * 38;
-  const rightStackWidth = isPortrait ? 0 : 10 + rightStackWeight * 38;
-  const leftStackOpacity = isPortrait ? 0 : 0.22 + leftStackWeight * 0.54;
-  const rightStackOpacity = isPortrait ? 0 : 0.22 + rightStackWeight * 0.54;
+  const leftStackDepth = isPortrait ? 0 : 10 + Math.round(leftStackWeight * 20);
+  const rightStackDepth = isPortrait ? 0 : 10 + Math.round(rightStackWeight * 20);
+  const leftStackWidth = isPortrait ? 0 : 10 + leftStackWeight * 30;
+  const rightStackWidth = isPortrait ? 0 : 12 + rightStackWeight * 30;
+  const leftStackOpacity = isPortrait ? 0 : 0.18 + leftStackWeight * 0.34;
+  const rightStackOpacity = isPortrait ? 0 : 0.18 + rightStackWeight * 0.34;
   const readingWidth = isPortrait
     ? FLIPBOOK_CANONICAL_PAGE_WIDTH
     : FLIPBOOK_CANONICAL_SPREAD_WIDTH;
@@ -328,7 +328,7 @@ export default function FlipbookBookFrame({
     () => ({
       position: "absolute",
       top: 0,
-      left: `${Math.max(0, sideReserve - leftStackWidth * 0.82)}px`,
+      left: `${Math.max(0, sideReserve - leftStackWidth * 0.74)}px`,
       width: `${leftStackWidth}px`,
       height: `${activeHeight * scale}px`,
       opacity: isClosedBook || isPortrait ? 0 : 1,
@@ -343,7 +343,7 @@ export default function FlipbookBookFrame({
     () => ({
       position: "absolute",
       top: 0,
-      left: `${sideReserve + readingWidth * scale - rightStackWidth * 0.18}px`,
+      left: `${sideReserve + readingWidth * scale - rightStackWidth * 0.26}px`,
       width: `${rightStackWidth}px`,
       height: `${activeHeight * scale}px`,
       opacity: isClosedBook || isPortrait ? 0 : 1,
@@ -553,7 +553,7 @@ export default function FlipbookBookFrame({
           overflow: visible;
           background: transparent;
           box-shadow:
-            0 24px 52px rgba(0, 0, 0, 0.24);
+            0 26px 52px rgba(0, 0, 0, 0.18);
         }
         .flipbook-reading-frame-stack {
           position: absolute;
@@ -565,7 +565,7 @@ export default function FlipbookBookFrame({
           z-index: 5;
           border-radius: 0;
           overflow: visible;
-          filter: drop-shadow(0 16px 18px rgba(0, 0, 0, 0.16));
+          filter: drop-shadow(0 10px 14px rgba(0, 0, 0, 0.1));
           backface-visibility: hidden;
         }
         .flipbook-reading-frame-stack::before,
@@ -576,62 +576,64 @@ export default function FlipbookBookFrame({
           pointer-events: none;
         }
         .flipbook-reading-frame-stack.left {
-          clip-path: polygon(100% 0, 18% 0, 10% 100%, 100% 100%);
-          transform: perspective(1200px) rotateY(-34deg) translateZ(0);
+          clip-path: polygon(100% 0, 24% 0, 8% 100%, 100% 100%);
+          transform: perspective(1400px) rotateY(-24deg) skewY(-0.4deg) translateZ(0);
           transform-origin: right center;
         }
         .flipbook-reading-frame-stack.left::before {
           background:
+            linear-gradient(180deg, rgba(255,255,255,0.8), rgba(240,236,228,0.92) 38%, rgba(226,221,213,0.94) 100%),
             repeating-linear-gradient(
               90deg,
-              rgba(251,250,246,0.96) 0,
-              rgba(251,250,246,0.96) 1px,
-              rgba(227,225,220,0.98) 1px,
-              rgba(227,225,220,0.98) 2px,
-              rgba(177,175,171,0.26) 2px,
-              rgba(148,146,142,0.14) calc(100% / var(--flipbook-stack-depth))
+              rgba(247,244,238,0.88) 0,
+              rgba(247,244,238,0.88) 1px,
+              rgba(230,226,219,0.88) 1px,
+              rgba(230,226,219,0.88) 2px,
+              rgba(207,202,194,0.22) 2px,
+              rgba(207,202,194,0.08) calc(100% / var(--flipbook-stack-depth))
             );
           box-shadow:
-            inset -2px 0 0 rgba(255,255,255,0.66),
-            9px 0 16px rgba(0,0,0,0.14);
+            inset -1px 0 0 rgba(255,255,255,0.72),
+            5px 0 10px rgba(0,0,0,0.08);
         }
         .flipbook-reading-frame-stack.left::after {
           background:
-            linear-gradient(90deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.16) 22%, rgba(255,255,255,0.12) 56%, rgba(255,255,255,0.34) 100%),
-            linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0));
+            linear-gradient(90deg, rgba(90,72,46,0.16) 0%, rgba(90,72,46,0.08) 24%, rgba(255,255,255,0.08) 58%, rgba(255,255,255,0.22) 100%),
+            linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0));
         }
         .flipbook-reading-frame-stack.right {
-          clip-path: polygon(0 0, 82% 0, 100% 100%, 0 100%);
-          transform: perspective(1200px) rotateY(34deg) translateZ(0);
+          clip-path: polygon(0 0, 76% 0, 100% 100%, 0 100%);
+          transform: perspective(1400px) rotateY(24deg) skewY(0.4deg) translateZ(0);
           transform-origin: left center;
         }
         .flipbook-reading-frame-stack.right::before {
           background:
+            linear-gradient(180deg, rgba(255,255,255,0.84), rgba(241,237,230,0.92) 38%, rgba(228,223,215,0.94) 100%),
             repeating-linear-gradient(
               90deg,
-              rgba(251,250,246,0.98) 0,
-              rgba(251,250,246,0.98) 1px,
-              rgba(229,227,222,0.98) 1px,
-              rgba(229,227,222,0.98) 2px,
-              rgba(164,162,158,0.24) 2px,
-              rgba(144,142,138,0.14) calc(100% / var(--flipbook-stack-depth))
+              rgba(248,245,239,0.88) 0,
+              rgba(248,245,239,0.88) 1px,
+              rgba(232,228,221,0.88) 1px,
+              rgba(232,228,221,0.88) 2px,
+              rgba(208,203,196,0.22) 2px,
+              rgba(208,203,196,0.08) calc(100% / var(--flipbook-stack-depth))
             );
           box-shadow:
-            inset 2px 0 0 rgba(255,255,255,0.66),
-            -9px 0 16px rgba(0,0,0,0.14);
+            inset 1px 0 0 rgba(255,255,255,0.72),
+            -5px 0 10px rgba(0,0,0,0.08);
         }
         .flipbook-reading-frame-stack.right::after {
           background:
-            linear-gradient(90deg, rgba(255,255,255,0.34) 0%, rgba(255,255,255,0.12) 44%, rgba(0,0,0,0.16) 78%, rgba(0,0,0,0.3) 100%),
-            linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0));
+            linear-gradient(90deg, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.08) 42%, rgba(90,72,46,0.08) 76%, rgba(90,72,46,0.16) 100%),
+            linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0));
         }
         .flipbook-reading-frame::before {
           content: "";
           position: absolute;
           inset: 0;
           background:
-            radial-gradient(ellipse at 50% 54%, rgba(0,0,0,0.14) 0%, rgba(0,0,0,0.06) 20%, rgba(0,0,0,0) 44%),
-            linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 20%, rgba(255,255,255,0) 82%, rgba(0,0,0,0.04));
+            radial-gradient(ellipse at 50% 54%, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.03) 18%, rgba(0,0,0,0) 42%),
+            linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 18%, rgba(255,255,255,0) 82%, rgba(0,0,0,0.025));
           pointer-events: none;
         }
         .flipbook-reading-frame::after {
@@ -643,10 +645,10 @@ export default function FlipbookBookFrame({
           width: 10px;
           border-radius: 999px;
           background:
-            linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02)),
-            linear-gradient(270deg, rgba(0,0,0,0.18), rgba(0,0,0,0));
-          box-shadow: -4px 0 10px rgba(0, 0, 0, 0.12);
-          opacity: 0.56;
+            linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)),
+            linear-gradient(270deg, rgba(0,0,0,0.12), rgba(0,0,0,0));
+          box-shadow: -2px 0 6px rgba(0, 0, 0, 0.08);
+          opacity: 0.34;
           pointer-events: none;
         }
         .flipbook-reading-frame-depth {
@@ -655,9 +657,9 @@ export default function FlipbookBookFrame({
           bottom: 1%;
           width: 6px;
           border-radius: 999px;
-          background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.03));
-          box-shadow: 0 0 8px rgba(0, 0, 0, 0.08);
-          opacity: 0.22;
+          background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+          box-shadow: 0 0 4px rgba(0, 0, 0, 0.04);
+          opacity: 0.14;
         }
         .flipbook-reading-frame-depth.left {
           left: 0;
@@ -672,26 +674,27 @@ export default function FlipbookBookFrame({
           left: 50%;
           top: 0;
           bottom: 0;
-          width: 64px;
+          width: 76px;
           transform: translateX(-50%);
           background:
             linear-gradient(
               90deg,
               rgba(0,0,0,0) 0%,
-              rgba(0,0,0,0.22) 8%,
-              rgba(0,0,0,0.5) 24%,
-              rgba(255,255,255,0.14) 40%,
-              rgba(255,255,255,0.16) 47%,
-              rgba(14,10,8,0.54) 50%,
-              rgba(0,0,0,0.5) 58%,
-              rgba(0,0,0,0.22) 86%,
+              rgba(61,46,27,0.12) 10%,
+              rgba(61,46,27,0.22) 22%,
+              rgba(255,255,255,0.08) 36%,
+              rgba(255,255,255,0.14) 46%,
+              rgba(48,35,20,0.28) 50%,
+              rgba(255,255,255,0.14) 54%,
+              rgba(255,255,255,0.08) 64%,
+              rgba(61,46,27,0.22) 78%,
+              rgba(61,46,27,0.12) 90%,
               rgba(0,0,0,0) 100%
             ),
-            radial-gradient(ellipse at center, rgba(0,0,0,0.32) 0%, rgba(0,0,0,0.12) 54%, rgba(0,0,0,0) 100%);
+            radial-gradient(ellipse at center, rgba(0,0,0,0.16) 0%, rgba(0,0,0,0.08) 50%, rgba(0,0,0,0) 100%);
           box-shadow:
-            inset 14px 0 18px rgba(0, 0, 0, 0.16),
-            inset -14px 0 18px rgba(0, 0, 0, 0.22),
-            0 0 18px rgba(0, 0, 0, 0.18);
+            inset 16px 0 20px rgba(61,46,27,0.08),
+            inset -16px 0 20px rgba(61,46,27,0.1);
           opacity: 1;
         }
         .flipbook-reading-frame-gutter::before {
@@ -700,10 +703,10 @@ export default function FlipbookBookFrame({
           left: 50%;
           top: 0;
           bottom: 0;
-          width: 4px;
+          width: 2px;
           transform: translateX(-50%);
-          background: linear-gradient(180deg, rgba(255,255,255,0.34), rgba(255,255,255,0.06), rgba(255,255,255,0.18));
-          opacity: 0.8;
+          background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.02), rgba(255,255,255,0.12));
+          opacity: 0.65;
         }
         .flipbook-reading-frame-gutter::after {
           content: "";
@@ -711,10 +714,12 @@ export default function FlipbookBookFrame({
           left: 50%;
           top: 0;
           bottom: 0;
-          width: 44px;
+          width: 54px;
           transform: translateX(-50%);
-          background: radial-gradient(ellipse at center, rgba(0,0,0,0.42) 0%, rgba(0,0,0,0.22) 42%, rgba(0,0,0,0) 100%);
-          opacity: 1;
+          background:
+            radial-gradient(ellipse at center, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.08) 44%, rgba(0,0,0,0) 100%),
+            linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,255,255,0) 30%, rgba(255,255,255,0) 70%, rgba(255,255,255,0.05));
+          opacity: 0.9;
         }
         .flipbook-drag-gesture-zone {
           position: absolute;

@@ -28,7 +28,7 @@ export default async function AdminLoginPage({ searchParams }) {
     <section className="relative flex min-h-screen items-center justify-center overflow-hidden px-6 py-16">
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-background via-surface to-surface-2" />
       <div className="relative w-full max-w-2xl">
-        <PrivateLoginCard context="admin" initialError={initialError} />
+        <PrivateLoginCard context="admin" initialError={initialError} allowGoogle={false} />
       </div>
     </section>
   );

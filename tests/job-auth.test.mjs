@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { authorizeInternalJobRequest } from "../lib/jobs/internal-auth.js";
 import {
+  runBlogWeeklyDigestJob,
   runCourseEmailRemindersJob,
   runPreEnrollmentCleanupJob,
 } from "../lib/jobs/internal-job-handlers.js";
@@ -117,4 +118,15 @@ test("pre-enrollment cleanup succeeds with a valid bearer token", async () => {
   assert.deepEqual(result.body, { ok: true });
   assert.ok(service.operations.some((entry) => entry.table === "email_verification_tokens" && entry.op === "delete"));
   assert.ok(service.operations.some((entry) => entry.table === "pre_enrollments" && entry.op === "update"));
+});
+
+test("blog weekly digest rejects anonymous requests", async () => {
+  const result = await runBlogWeeklyDigestJob({
+    request: createRequest("/api/jobs/blog-weekly-digest"),
+    env: { CRON_SECRET: "cron-secret" },
+    service: createMockService(),
+  });
+
+  assert.equal(result.status, 401);
+  assert.deepEqual(result.body, { error: "Unauthorized" });
 });

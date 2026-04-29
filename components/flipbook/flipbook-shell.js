@@ -69,8 +69,8 @@ const FULL_STAGE_FRAME_STYLE = {
 const FLIPBOOK_STAGE_EDGE_INSET = "clamp(4px, 0.55vw, 8px)";
 const FLIPBOOK_STAGE_TOP_CHROME_HEIGHT = "clamp(8px, 1.2vw, 14px)";
 const FLIPBOOK_STAGE_BOTTOM_CHROME_HEIGHT = "clamp(60px, 6vw, 82px)";
-const FLIPBOOK_EDITORIAL_CONTENT_TOP_INSET = 54;
-const FLIPBOOK_EDITORIAL_CONTENT_BOTTOM_INSET = 92;
+const FLIPBOOK_EDITORIAL_CONTENT_TOP_INSET = 44;
+const FLIPBOOK_EDITORIAL_CONTENT_BOTTOM_INSET = 72;
 const FLIPBOOK_FULLSCREEN_WHEEL_THROTTLE_MS = 520;
 
 function debugFlipbookEvent(label, payload = {}) {
@@ -2216,7 +2216,7 @@ export default function FlipbookShell({ initialBook }) {
   return (
     <section
       ref={rootRef}
-      className="flipbook-reader-stage relative flex h-full min-h-0 w-full flex-col overflow-hidden text-white"
+      className="flipbook-reader-stage relative flex h-full min-h-0 w-full flex-col overflow-hidden text-[#103474]"
       data-theme={theme}
       style={{
         ...FULL_STAGE_FRAME_STYLE,
@@ -2224,17 +2224,13 @@ export default function FlipbookShell({ initialBook }) {
         height: isFullscreen ? "100dvh" : FULL_STAGE_HEIGHT,
         minHeight: isFullscreen ? "100dvh" : FULL_STAGE_HEIGHT,
         borderRadius: "0px",
-        backgroundColor: "#000000",
+        backgroundColor: "var(--flipbook-stage-bg, #ffffff)",
       }}
       onMouseMove={() => registerReaderActivity()}
       onPointerDown={() => registerReaderActivity()}
       onTouchStart={() => registerReaderActivity()}
     >
       <div className="relative flex-1 min-h-0">
-        <div
-          className="pointer-events-none absolute left-1/2 top-1/2 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-          style={{ background: "var(--flipbook-stage-glow)" }}
-        />
         <div
           className="absolute inset-0"
           style={{
@@ -2245,22 +2241,6 @@ export default function FlipbookShell({ initialBook }) {
           }}
         >
           <div className="flipbook-stage-shell flipbook-stage-body relative h-full w-full overflow-hidden">
-            <div
-              className="pointer-events-none absolute inset-x-0 top-0 z-20"
-              style={{
-                height: FLIPBOOK_STAGE_TOP_CHROME_HEIGHT,
-                background:
-                  "linear-gradient(180deg, rgba(0,0,0,0.14) 0%, rgba(0,0,0,0.04) 52%, rgba(0,0,0,0) 100%)",
-              }}
-            />
-            <div
-              className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
-              style={{
-                height: FLIPBOOK_STAGE_BOTTOM_CHROME_HEIGHT,
-                background:
-                  "linear-gradient(0deg, rgba(0,0,0,0.38) 0%, rgba(0,0,0,0.12) 58%, rgba(0,0,0,0) 100%)",
-              }}
-            />
             <div
               className="absolute inset-x-0 bottom-0 z-30"
               style={{
@@ -2320,7 +2300,7 @@ export default function FlipbookShell({ initialBook }) {
         .flipbook-reader-stage > div,
         .flipbook-reader-stage .flipbook-stage-shell {
           min-height: 0;
-          background: #000;
+          background: var(--flipbook-stage-bg, #ffffff);
         }
         .flipbook-reader-stage .flipbook-stage-body {
           background: transparent;
@@ -2394,7 +2374,7 @@ export default function FlipbookShell({ initialBook }) {
           background: var(--flipbook-page-bg);
           color: var(--flipbook-page-text);
           border: 1px solid var(--flipbook-page-border);
-          box-shadow: 0 16px 32px rgba(0, 0, 0, 0.2);
+          box-shadow: 0 12px 24px rgba(46, 36, 24, 0.12);
           backface-visibility: hidden;
           transform: translateZ(0);
           will-change: transform;
@@ -2406,9 +2386,9 @@ export default function FlipbookShell({ initialBook }) {
           position: absolute;
           inset: 0;
           box-shadow:
-            inset 0 0 0 1px rgba(255, 255, 255, 0.03),
-            inset 0 24px 36px rgba(255, 255, 255, 0.02),
-            inset 0 -18px 30px rgba(0, 0, 0, 0.05);
+            inset 0 0 0 1px rgba(255, 255, 255, 0.02),
+            inset 0 18px 26px rgba(255, 255, 255, 0.018),
+            inset 0 -12px 22px rgba(46, 36, 24, 0.03);
           pointer-events: none;
         }
         .flipbook-page-sheet {
@@ -2447,17 +2427,19 @@ export default function FlipbookShell({ initialBook }) {
         }
         .flipbook-page-sheet.page-side-left::before {
           right: 0;
-          width: 64px;
+          width: 78px;
           background:
-            linear-gradient(270deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.32) 24%, rgba(255, 255, 255, 0.16) 50%, rgba(255, 255, 255, 0.06) 72%, rgba(0, 0, 0, 0) 100%);
-          opacity: 1;
+            radial-gradient(ellipse at 102% 50%, rgba(0, 0, 0, 0.16) 0%, rgba(0, 0, 0, 0.08) 36%, rgba(0, 0, 0, 0) 72%),
+            linear-gradient(270deg, rgba(74, 55, 30, 0.26) 0%, rgba(74, 55, 30, 0.14) 28%, rgba(255, 255, 255, 0.14) 56%, rgba(255, 255, 255, 0.04) 74%, rgba(0, 0, 0, 0) 100%);
+          opacity: 0.96;
         }
         .flipbook-page-sheet.page-side-right::before {
           left: 0;
-          width: 64px;
+          width: 78px;
           background:
-            linear-gradient(90deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.32) 24%, rgba(255, 255, 255, 0.16) 50%, rgba(255, 255, 255, 0.06) 72%, rgba(0, 0, 0, 0) 100%);
-          opacity: 1;
+            radial-gradient(ellipse at -2% 50%, rgba(0, 0, 0, 0.16) 0%, rgba(0, 0, 0, 0.08) 36%, rgba(0, 0, 0, 0) 72%),
+            linear-gradient(90deg, rgba(74, 55, 30, 0.26) 0%, rgba(74, 55, 30, 0.14) 28%, rgba(255, 255, 255, 0.14) 56%, rgba(255, 255, 255, 0.04) 74%, rgba(0, 0, 0, 0) 100%);
+          opacity: 0.96;
         }
         .flipbook-page-sheet.page-side-right::after {
           right: 0;
@@ -2498,10 +2480,22 @@ export default function FlipbookShell({ initialBook }) {
           color: var(--flipbook-page-text);
           box-sizing: border-box;
           font-family: Georgia, Times New Roman, serif;
-          font-size: 18px;
-          line-height: 1.58;
+          font-size: ${DEFAULT_FLIPBOOK_LAYOUT_PROFILE.fontSize}px;
+          line-height: ${DEFAULT_FLIPBOOK_LAYOUT_PROFILE.lineHeight};
+          text-rendering: optimizeLegibility;
+          -webkit-font-smoothing: antialiased;
           overflow: hidden;
           pointer-events: none;
+        }
+        @media (min-width: 1280px) {
+          .flipbook-page-inner {
+            font-size: ${Number(DEFAULT_FLIPBOOK_LAYOUT_PROFILE.fontSize) + 0.4}px;
+          }
+        }
+        @media (max-width: 767px) {
+          .flipbook-page-inner {
+            font-size: ${DEFAULT_FLIPBOOK_LAYOUT_PROFILE.fontSize}px;
+          }
         }
         .flipbook-selection-mode .flipbook-page-sheet,
         .flipbook-selection-mode .flipbook-page-content,
@@ -2612,10 +2606,10 @@ export default function FlipbookShell({ initialBook }) {
           background: var(--flipbook-page-chrome-line);
         }
         .flipbook-page-meta-line.top {
-          top: 2.18rem;
+          top: 1.92rem;
         }
         .flipbook-page-meta-line.bottom {
-          bottom: 2.14rem;
+          bottom: 1.82rem;
         }
         .flipbook-page-meta-row {
           position: absolute;
@@ -2625,14 +2619,14 @@ export default function FlipbookShell({ initialBook }) {
           align-items: center;
           justify-content: space-between;
           gap: 1rem;
-          font-size: 12.5px;
+          font-size: 12px;
           line-height: 1;
         }
         .flipbook-page-meta-row.top {
-          top: 0.96rem;
+          top: 0.84rem;
         }
         .flipbook-page-meta-row.bottom {
-          bottom: 0.7rem;
+          bottom: 0.52rem;
         }
         .flipbook-page-meta-row.bottom span:last-child {
           min-width: 2rem;
@@ -2686,7 +2680,7 @@ export default function FlipbookShell({ initialBook }) {
           margin: 0;
         }
         .flipbook-block + .flipbook-block {
-          margin-top: 18px;
+          margin-top: 16px;
         }
         .flipbook-block.flipbook-block-h1,
         .flipbook-block.flipbook-block-h2,
@@ -2705,6 +2699,21 @@ export default function FlipbookShell({ initialBook }) {
         .flipbook-block.flipbook-block-figure,
         .flipbook-block figcaption {
           margin: 0;
+        }
+        .flipbook-block.flipbook-block-p,
+        .flipbook-block.flipbook-block-li {
+          color: color-mix(in srgb, var(--flipbook-page-text) 92%, black 8%);
+        }
+        .flipbook-block.flipbook-block-h1,
+        .flipbook-block.flipbook-block-h2,
+        .flipbook-block.flipbook-block-h3 {
+          color: color-mix(in srgb, var(--flipbook-page-text) 90%, black 10%);
+          letter-spacing: 0.01em;
+        }
+        .flipbook-block.flipbook-block-blockquote {
+          padding-left: 20px;
+          border-left: 2px solid color-mix(in srgb, var(--flipbook-page-border) 78%, white 22%);
+          color: color-mix(in srgb, var(--flipbook-page-text) 84%, #53412b 16%);
         }
         .flipbook-block img {
           display: block;

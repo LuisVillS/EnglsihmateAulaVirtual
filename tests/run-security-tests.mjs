@@ -4,8 +4,10 @@ const securityTests = [
   "tests/security-env.test.mjs",
   "tests/calendar-feed-token.test.mjs",
   "tests/student-auth-hardening.test.mjs",
+  "tests/crm-external-lead-merge-policy.test.mjs",
   "tests/job-auth.test.mjs",
   "tests/auth-security.test.mjs",
+  "tests/supabase-rls-hardening.test.mjs",
   "tests/google-calendar-oauth.test.mjs",
   "tests/webhook-security.test.mjs",
 ];

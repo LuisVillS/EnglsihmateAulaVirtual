@@ -51,7 +51,7 @@ function SubmitButton({ label, variant = "primary" }) {
       : "w-full rounded-2xl bg-primary px-4 py-3 text-white text-sm font-semibold text-foreground shadow-lg shadow-black/30 transition hover:brightness-110 disabled:opacity-60";
 
   return (
-    <button type="submit" className={baseClasses} disabled={pending}>
+    <button suppressHydrationWarning type="submit" className={baseClasses} disabled={pending}>
       {pending ? "Procesando..." : label}
     </button>
   );
@@ -93,14 +93,14 @@ function EmailForm({ formAction, context, state }) {
 
   return (
     <form action={formAction} className="space-y-4">
-      <input type="hidden" name="context" value={context} />
-      <input type="hidden" name="intent" value="lookup" />
-      <input type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
+      <input suppressHydrationWarning type="hidden" name="context" value={context} />
+      <input suppressHydrationWarning type="hidden" name="intent" value="lookup" />
+      <input suppressHydrationWarning type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
       <div className="space-y-2">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">
           Correo institucional o código
         </label>
-        <input
+        <input suppressHydrationWarning
           type="text"
           name="email"
           required
@@ -114,7 +114,7 @@ function EmailForm({ formAction, context, state }) {
         <>
           <div className="space-y-2">
             <label className="text-xs font-semibold uppercase tracking-wide text-muted">Codigo de Acceso</label>
-            <input
+            <input suppressHydrationWarning
               type="text"
               name="otp"
               required
@@ -125,7 +125,7 @@ function EmailForm({ formAction, context, state }) {
             />
           </div>
           <div className="space-y-2">
-            <button
+            <button suppressHydrationWarning
               type="button"
               onClick={handleResendOtp}
               disabled={sendingOtp}
@@ -148,16 +148,16 @@ function SetPasswordForm({ formAction, state }) {
   const requireOtp = Boolean(state?.requireOtp);
   return (
     <form action={formAction} className="space-y-4">
-      <input type="hidden" name="context" value={context} />
-      <input type="hidden" name="intent" value="set_password" />
-      <input type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
-      <input type="hidden" name="email" value={state.email} />
+      <input suppressHydrationWarning type="hidden" name="context" value={context} />
+      <input suppressHydrationWarning type="hidden" name="intent" value="set_password" />
+      <input suppressHydrationWarning type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
+      <input suppressHydrationWarning type="hidden" name="email" value={state.email} />
       <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground">
         Codigo: <span className="font-semibold text-foreground">{state.identifier || "N/A"}</span>
       </div>
       <div className="space-y-2">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">Nueva contrasena</label>
-        <input
+        <input suppressHydrationWarning
           type="password"
           name="newPassword"
           autoComplete="new-password"
@@ -169,7 +169,7 @@ function SetPasswordForm({ formAction, state }) {
       </div>
       <div className="space-y-2">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">Confirmar contrasena</label>
-        <input
+        <input suppressHydrationWarning
           type="password"
           name="confirmPassword"
           autoComplete="new-password"
@@ -189,16 +189,16 @@ function PasswordForm({ formAction, state }) {
   const requireOtp = Boolean(state?.requireOtp);
   return (
     <form action={formAction} className="space-y-4">
-      <input type="hidden" name="context" value={context} />
-      <input type="hidden" name="intent" value="login" />
-      <input type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
-      <input type="hidden" name="email" value={state.email} />
+      <input suppressHydrationWarning type="hidden" name="context" value={context} />
+      <input suppressHydrationWarning type="hidden" name="intent" value="login" />
+      <input suppressHydrationWarning type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
+      <input suppressHydrationWarning type="hidden" name="email" value={state.email} />
       <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground">
         Acceso para <span className="font-semibold text-foreground">{state.fullName || state.email}</span>
       </div>
       <div className="space-y-2">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">Contrasena</label>
-        <input
+        <input suppressHydrationWarning
           type="password"
           name="password"
           autoComplete="current-password"
@@ -216,14 +216,14 @@ function PasswordForm({ formAction, state }) {
 function ResetRequestForm({ formAction, context, requireOtp = false }) {
   return (
     <form action={formAction} className="space-y-4">
-      <input type="hidden" name="context" value={context} />
-      <input type="hidden" name="intent" value="reset_request" />
-      <input type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
+      <input suppressHydrationWarning type="hidden" name="context" value={context} />
+      <input suppressHydrationWarning type="hidden" name="intent" value="reset_request" />
+      <input suppressHydrationWarning type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
       <div className="space-y-2">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">
           Correo (no código)
         </label>
-        <input
+        <input suppressHydrationWarning
           type="email"
           name="email"
           required
@@ -241,13 +241,13 @@ function ResetCodeForm({ formAction, state }) {
   const requireOtp = Boolean(state?.requireOtp);
   return (
     <form action={formAction} className="space-y-4">
-      <input type="hidden" name="context" value={context} />
-      <input type="hidden" name="intent" value="reset_verify" />
-      <input type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
-      <input type="hidden" name="email" value={state.resetEmail || state.email} />
+      <input suppressHydrationWarning type="hidden" name="context" value={context} />
+      <input suppressHydrationWarning type="hidden" name="intent" value="reset_verify" />
+      <input suppressHydrationWarning type="hidden" name="requireOtp" value={requireOtp ? "true" : "false"} />
+      <input suppressHydrationWarning type="hidden" name="email" value={state.resetEmail || state.email} />
       <div className="space-y-2">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">Codigo</label>
-        <input
+        <input suppressHydrationWarning
           type="text"
           name="resetCode"
           maxLength={6}
@@ -257,7 +257,7 @@ function ResetCodeForm({ formAction, state }) {
       </div>
       <div className="space-y-2">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">Nueva contrasena</label>
-        <input
+        <input suppressHydrationWarning
           type="password"
           name="newPassword"
           minLength={6}
@@ -267,7 +267,7 @@ function ResetCodeForm({ formAction, state }) {
       </div>
       <div className="space-y-2">
         <label className="text-xs font-semibold uppercase tracking-wide text-muted">Confirma contrasena</label>
-        <input
+        <input suppressHydrationWarning
           type="password"
           name="confirmPassword"
           minLength={6}
@@ -350,10 +350,10 @@ export default function PrivateLoginCard({
 
       {state.step !== "email" ? (
         <form action={formAction} className="text-center">
-          <input type="hidden" name="context" value={activeContext} />
-          <input type="hidden" name="intent" value="reset" />
-          <input type="hidden" name="requireOtp" value={state.requireOtp ? "true" : "false"} />
-          <button type="submit" className="text-xs font-semibold text-muted underline-offset-4 hover:underline">
+          <input suppressHydrationWarning type="hidden" name="context" value={activeContext} />
+          <input suppressHydrationWarning type="hidden" name="intent" value="reset" />
+          <input suppressHydrationWarning type="hidden" name="requireOtp" value={state.requireOtp ? "true" : "false"} />
+          <button suppressHydrationWarning type="submit" className="text-xs font-semibold text-muted underline-offset-4 hover:underline">
             Usar otro correo
           </button>
         </form>
@@ -363,18 +363,18 @@ export default function PrivateLoginCard({
         <div className="h-px w-full bg-surface-2" />
         {allowGoogle ? (
           <form action={formAction}>
-            <input type="hidden" name="context" value={activeContext} />
-            <input type="hidden" name="intent" value="google" />
-            <input type="hidden" name="requireOtp" value={state.requireOtp ? "true" : "false"} />
+            <input suppressHydrationWarning type="hidden" name="context" value={activeContext} />
+            <input suppressHydrationWarning type="hidden" name="intent" value="google" />
+            <input suppressHydrationWarning type="hidden" name="requireOtp" value={state.requireOtp ? "true" : "false"} />
             <SubmitButton label="Ingresar con Google" variant="ghost" />
           </form>
         ) : null}
         {state.step !== "reset_request" && state.step !== "reset_code" ? (
           <form action={formAction} className="text-center">
-            <input type="hidden" name="context" value={activeContext} />
-            <input type="hidden" name="intent" value="reset_request" />
-            <input type="hidden" name="requireOtp" value={state.requireOtp ? "true" : "false"} />
-            <button type="submit" className="text-xs font-semibold text-muted underline-offset-4 hover:underline">
+            <input suppressHydrationWarning type="hidden" name="context" value={activeContext} />
+            <input suppressHydrationWarning type="hidden" name="intent" value="reset_request" />
+            <input suppressHydrationWarning type="hidden" name="requireOtp" value={state.requireOtp ? "true" : "false"} />
+            <button suppressHydrationWarning type="submit" className="text-xs font-semibold text-muted underline-offset-4 hover:underline">
               ¿Olvidaste tu contrasena?
             </button>
           </form>

@@ -252,17 +252,25 @@ function StatCard({ label, value, accent = "" }) {
   );
 }
 
-function ModeCard({ title, description, actionLabel, onClick, disabled = false, tone = "" }) {
+function ModeCard({
+  title,
+  description,
+  actionLabel,
+  onClick,
+  disabled = false,
+  tone = "",
+  compact = false,
+}) {
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`rounded-[18px] border border-[rgba(16,52,116,0.1)] bg-white p-5 text-left shadow-[0_14px_30px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_36px_rgba(15,23,42,0.08)] disabled:cursor-not-allowed disabled:opacity-60 ${tone}`}
+      className={`rounded-[18px] border border-[rgba(16,52,116,0.1)] bg-white p-5 shadow-[0_14px_30px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_36px_rgba(15,23,42,0.08)] disabled:cursor-not-allowed disabled:opacity-60 ${compact ? "flex min-h-[132px] items-center justify-center text-center sm:min-h-[148px]" : "text-left"} ${tone}`}
     >
       <h3 className="text-lg font-semibold text-foreground">{title}</h3>
-      <p className="mt-2 text-sm leading-6 text-muted">{description}</p>
-      <p className="mt-4 text-sm font-semibold text-primary">{actionLabel}</p>
+      {!compact ? <p className="mt-2 text-sm leading-6 text-muted">{description}</p> : null}
+      {!compact ? <p className="mt-4 text-sm font-semibold text-primary">{actionLabel}</p> : null}
     </button>
   );
 }
@@ -271,6 +279,7 @@ export default function FlashcardArcadePlayer({
   deck,
   gamification = null,
   embedded = false,
+  minimalLauncher = false,
   initialMode = "",
   sourceContext = "flashcard_arcade",
   onGamificationChange,
@@ -376,6 +385,13 @@ export default function FlashcardArcadePlayer({
     [cards]
   );
   const currentLevel = Number(gamification?.level || 1) || 1;
+  const showMinimalLauncher = Boolean(embedded && minimalLauncher && !activeRun && !completionSummary);
+
+  function returnToModeMenu(run = activeRun) {
+    if (!run) return;
+    stopCurrentPlayback();
+    void finishRun(run, { completed: false, silent: true });
+  }
 
   function stopCurrentPlayback() {
     if (audioRef.current) {
@@ -840,34 +856,36 @@ export default function FlashcardArcadePlayer({
 
   return (
     <section className={`space-y-5 text-foreground ${embedded ? "" : "student-panel px-6 py-6 sm:px-7"}`}>
-      <header className="space-y-4 rounded-[24px] border border-[rgba(16,52,116,0.08)] bg-[linear-gradient(180deg,#ffffff_0%,#f7fbff_100%)] px-5 py-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.32em] text-muted">Flashcard Arcade</p>
-            <h1 className="mt-2 text-2xl font-semibold text-foreground">{deckState?.title || "Flashcards"}</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-              {deckState?.description || "Choose a mode, build mastery, and convert flashcard practice into account XP."}
-            </p>
+      {!showMinimalLauncher ? (
+        <header className="space-y-4 rounded-[24px] border border-[rgba(16,52,116,0.08)] bg-[linear-gradient(180deg,#ffffff_0%,#f7fbff_100%)] px-5 py-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.32em] text-muted">Flashcard Arcade</p>
+              <h1 className="mt-2 text-2xl font-semibold text-foreground">{deckState?.title || "Flashcards"}</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+                {deckState?.description || "Choose a mode, build mastery, and convert flashcard practice into account XP."}
+              </p>
+            </div>
+            <div className="rounded-full border border-[rgba(16,52,116,0.12)] bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-[#103474]">
+              {deckState?.sourceLabel || "Arcade deck"}
+            </div>
           </div>
-          <div className="rounded-full border border-[rgba(16,52,116,0.12)] bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-[#103474]">
-            {deckState?.sourceLabel || "Arcade deck"}
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard label="Cards" value={deckStats.totalCards} />
+            <StatCard label="Completion" value={`${deckStats.completionPercent}%`} />
+            <StatCard label="Avg mastery" value={`${deckStats.averageMastery}%`} />
+            <StatCard label="Level" value={`Lv ${currentLevel}`} />
           </div>
-        </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Cards" value={deckStats.totalCards} />
-          <StatCard label="Completion" value={`${deckStats.completionPercent}%`} />
-          <StatCard label="Avg mastery" value={`${deckStats.averageMastery}%`} />
-          <StatCard label="Level" value={`Lv ${currentLevel}`} />
-        </div>
-
-        <div className="h-3 w-full rounded-full bg-white">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
-            style={{ width: `${deckStats.completionPercent}%` }}
-          />
-        </div>
-      </header>
+          <div className="h-3 w-full rounded-full bg-white">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-primary via-primary-2 to-accent"
+              style={{ width: `${deckStats.completionPercent}%` }}
+            />
+          </div>
+        </header>
+      ) : null}
 
       {error ? (
         <div className="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
@@ -923,84 +941,121 @@ export default function FlashcardArcadePlayer({
 
       {!activeRun ? (
         <div className="space-y-4">
-          <section className="grid gap-4 lg:grid-cols-2">
-            <ModeCard
-              title="Study Mode"
-              description="Flip, shuffle, listen, and move through the full deck with a cleaner mastery view."
-              actionLabel={loadingMode === FLASHCARD_GAME_MODES.STUDY ? "Loading..." : "Open study mode"}
-              onClick={() => beginMode(FLASHCARD_GAME_MODES.STUDY)}
-              disabled={Boolean(loadingMode)}
-              tone="bg-[linear-gradient(180deg,#ffffff_0%,#f6fbff_100%)]"
-            />
-            <ModeCard
-              title="Speed Match"
-              description="Fast prompt rounds with image, meaning, or audio cues under pressure."
-              actionLabel={loadingMode === FLASHCARD_GAME_MODES.SPEED_MATCH ? "Loading..." : "Start speed round"}
-              onClick={() => beginMode(FLASHCARD_GAME_MODES.SPEED_MATCH)}
-              disabled={Boolean(loadingMode)}
-              tone="bg-[linear-gradient(180deg,#ffffff_0%,#fff7f8_100%)]"
-            />
-            <ModeCard
-              title="Writing Sprint"
-              description="Type the right word from meaning or image prompts. Accepted answers still count."
-              actionLabel={loadingMode === FLASHCARD_GAME_MODES.WRITING_SPRINT ? "Loading..." : "Start sprint"}
-              onClick={() => beginMode(FLASHCARD_GAME_MODES.WRITING_SPRINT)}
-              disabled={Boolean(loadingMode)}
-              tone="bg-[linear-gradient(180deg,#ffffff_0%,#fffaf2_100%)]"
-            />
-            <ModeCard
-              title="Memory Grid"
-              description="Clear a lightweight board by matching word and meaning pairs."
-              actionLabel={loadingMode === FLASHCARD_GAME_MODES.MEMORY_GRID ? "Loading..." : "Open grid"}
-              onClick={() => beginMode(FLASHCARD_GAME_MODES.MEMORY_GRID)}
-              disabled={Boolean(loadingMode)}
-              tone="bg-[linear-gradient(180deg,#ffffff_0%,#f7fffb_100%)]"
-            />
-            <ModeCard
-              title="Survival Mode"
-              description="Three lives, escalating pace, and a tighter pressure loop are scaffolded for the next phase."
-              actionLabel="Coming soon"
-              onClick={() => {}}
-              disabled
-              tone="bg-[linear-gradient(180deg,#ffffff_0%,#f8f8ff_100%)] lg:col-span-2"
-            />
-          </section>
-
-          <section className="rounded-[22px] border border-[rgba(16,52,116,0.08)] bg-white px-5 py-5 shadow-[0_16px_34px_rgba(15,23,42,0.05)]">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-muted">Deck mastery</p>
-                <h2 className="mt-2 text-xl font-semibold text-foreground">Your strongest and weakest cards</h2>
+          {showMinimalLauncher ? (
+            <section className="mx-auto w-full max-w-4xl py-1">
+              <div className="grid gap-4 md:grid-cols-2">
+                <ModeCard
+                  title="Study Mode"
+                  onClick={() => beginMode(FLASHCARD_GAME_MODES.STUDY)}
+                  disabled={Boolean(loadingMode)}
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#f6fbff_100%)]"
+                  compact
+                />
+                <ModeCard
+                  title="Speed Match"
+                  onClick={() => beginMode(FLASHCARD_GAME_MODES.SPEED_MATCH)}
+                  disabled={Boolean(loadingMode)}
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#fff7f8_100%)]"
+                  compact
+                />
+                <ModeCard
+                  title="Writing Sprint"
+                  onClick={() => beginMode(FLASHCARD_GAME_MODES.WRITING_SPRINT)}
+                  disabled={Boolean(loadingMode)}
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#fffaf2_100%)]"
+                  compact
+                />
+                <ModeCard
+                  title="Memory Grid"
+                  onClick={() => beginMode(FLASHCARD_GAME_MODES.MEMORY_GRID)}
+                  disabled={Boolean(loadingMode)}
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#f7fffb_100%)]"
+                  compact
+                />
               </div>
-              {onExit ? (
-                <button type="button" onClick={() => onExit(deckState)} className="student-button-secondary px-4 py-3 text-sm">
-                  Back
-                </button>
-              ) : null}
-            </div>
+            </section>
+          ) : (
+            <>
+              <section className="grid gap-4 lg:grid-cols-2">
+                <ModeCard
+                  title="Study Mode"
+                  description="Flip, shuffle, listen, and move through the full deck with a cleaner mastery view."
+                  actionLabel={loadingMode === FLASHCARD_GAME_MODES.STUDY ? "Loading..." : "Open study mode"}
+                  onClick={() => beginMode(FLASHCARD_GAME_MODES.STUDY)}
+                  disabled={Boolean(loadingMode)}
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#f6fbff_100%)]"
+                />
+                <ModeCard
+                  title="Speed Match"
+                  description="Fast prompt rounds with image, meaning, or audio cues under pressure."
+                  actionLabel={loadingMode === FLASHCARD_GAME_MODES.SPEED_MATCH ? "Loading..." : "Start speed round"}
+                  onClick={() => beginMode(FLASHCARD_GAME_MODES.SPEED_MATCH)}
+                  disabled={Boolean(loadingMode)}
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#fff7f8_100%)]"
+                />
+                <ModeCard
+                  title="Writing Sprint"
+                  description="Type the right word from meaning or image prompts. Accepted answers still count."
+                  actionLabel={loadingMode === FLASHCARD_GAME_MODES.WRITING_SPRINT ? "Loading..." : "Start sprint"}
+                  onClick={() => beginMode(FLASHCARD_GAME_MODES.WRITING_SPRINT)}
+                  disabled={Boolean(loadingMode)}
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#fffaf2_100%)]"
+                />
+                <ModeCard
+                  title="Memory Grid"
+                  description="Clear a lightweight board by matching word and meaning pairs."
+                  actionLabel={loadingMode === FLASHCARD_GAME_MODES.MEMORY_GRID ? "Loading..." : "Open grid"}
+                  onClick={() => beginMode(FLASHCARD_GAME_MODES.MEMORY_GRID)}
+                  disabled={Boolean(loadingMode)}
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#f7fffb_100%)]"
+                />
+                <ModeCard
+                  title="Survival Mode"
+                  description="Three lives, escalating pace, and a tighter pressure loop are scaffolded for the next phase."
+                  actionLabel="Coming soon"
+                  onClick={() => {}}
+                  disabled
+                  tone="bg-[linear-gradient(180deg,#ffffff_0%,#f8f8ff_100%)] lg:col-span-2"
+                />
+              </section>
 
-            <div className="mt-5 grid gap-3 lg:grid-cols-2">
-              {cards.slice(0, 6).map((card) => (
-                <div key={card.id} className="rounded-[18px] border border-[rgba(16,52,116,0.08)] bg-[#fbfdff] px-4 py-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">{card.word}</p>
-                      <p className="text-sm text-muted">{card.meaning}</p>
-                    </div>
-                    <span className="rounded-full border border-[rgba(16,52,116,0.12)] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#103474]">
-                      {formatStage(card.progress?.masteryStage)}
-                    </span>
+              <section className="rounded-[22px] border border-[rgba(16,52,116,0.08)] bg-white px-5 py-5 shadow-[0_16px_34px_rgba(15,23,42,0.05)]">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-muted">Deck mastery</p>
+                    <h2 className="mt-2 text-xl font-semibold text-foreground">Your strongest and weakest cards</h2>
                   </div>
-                  <div className="mt-3 h-2.5 w-full rounded-full bg-white">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-primary to-accent"
-                      style={{ width: `${Math.max(0, Math.min(100, Number(card.progress?.masteryScore || 0) || 0))}%` }}
-                    />
-                  </div>
+                  {onExit ? (
+                    <button type="button" onClick={() => onExit(deckState)} className="student-button-secondary px-4 py-3 text-sm">
+                      Back
+                    </button>
+                  ) : null}
                 </div>
-              ))}
-            </div>
-          </section>
+
+                <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                  {cards.slice(0, 6).map((card) => (
+                    <div key={card.id} className="rounded-[18px] border border-[rgba(16,52,116,0.08)] bg-[#fbfdff] px-4 py-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">{card.word}</p>
+                          <p className="text-sm text-muted">{card.meaning}</p>
+                        </div>
+                        <span className="rounded-full border border-[rgba(16,52,116,0.12)] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#103474]">
+                          {formatStage(card.progress?.masteryStage)}
+                        </span>
+                      </div>
+                      <div className="mt-3 h-2.5 w-full rounded-full bg-white">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-primary to-accent"
+                          style={{ width: `${Math.max(0, Math.min(100, Number(card.progress?.masteryScore || 0) || 0))}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
         </div>
       ) : null}
 
@@ -1011,6 +1066,14 @@ export default function FlashcardArcadePlayer({
               {activeRun.index + 1} / {cards.length}
             </p>
             <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => returnToModeMenu(activeRun)}
+                disabled={savingSummary}
+                className="student-button-secondary px-4 py-3 text-sm disabled:opacity-60"
+              >
+                Change game
+              </button>
               <button
                 type="button"
                 onClick={handleStudyShuffle}
@@ -1160,10 +1223,10 @@ export default function FlashcardArcadePlayer({
           <div className="flex justify-end">
             <button
               type="button"
-              onClick={() => void finishRun(activeRun, { completed: false, silent: true })}
+              onClick={() => returnToModeMenu(activeRun)}
               className="student-button-secondary px-4 py-3 text-sm"
             >
-              Leave round
+              Change game
             </button>
           </div>
         </section>
@@ -1227,10 +1290,10 @@ export default function FlashcardArcadePlayer({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void finishRun(activeRun, { completed: false, silent: true })}
+                  onClick={() => returnToModeMenu(activeRun)}
                   className="student-button-secondary px-4 py-3 text-sm"
                 >
-                  Leave round
+                  Change game
                 </button>
               </div>
             </div>
@@ -1265,10 +1328,10 @@ export default function FlashcardArcadePlayer({
           <div className="flex justify-end">
             <button
               type="button"
-              onClick={() => void finishRun(activeRun, { completed: false, silent: true })}
+              onClick={() => returnToModeMenu(activeRun)}
               className="student-button-secondary px-4 py-3 text-sm"
             >
-              Leave round
+              Change game
             </button>
           </div>
         </section>

@@ -56,7 +56,7 @@ export default function AdminStudentImportModal() {
             Importar alumnos
           </button>
           <p className="text-xs text-muted">
-            Columnas: full_name, email, dni, phone, birth_date, course_level, is_premium, start_month, enrollment_date,
+            Columnas: full_name, email, dni, phone, birth_date, course_level, start_month, enrollment_date,
             preferred_hour, modality
           </p>
           {state?.error ? (

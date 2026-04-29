@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useActionState, useEffect, useMemo, useState } from "react";
 import { upsertStudent } from "@/app/admin/actions";
+import { formatUnifiedCourseType } from "@/lib/course-config";
 
 const DAY_LABELS = {
   1: "Lun",
@@ -214,7 +215,6 @@ export default function StudentForm({
   const [state, formAction] = useActionState(upsertStudent, INITIAL_STATE);
   const title = student ? "Editar alumno" : "Registrar alumno";
   const buttonLabel = student ? "Guardar cambios" : "Crear alumno";
-  const defaultType = student?.is_premium ? "premium" : "regular";
   const redirectTarget = redirectTo ?? (student ? "/admin/students" : "");
   const filteredCommissions = student?.course_level
     ? commissions.filter((commission) => commission.course_level === student.course_level)
@@ -297,19 +297,10 @@ export default function StudentForm({
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Tipo de curso</label>
-            <select
-              name="courseType"
-              defaultValue={defaultType}
-              className="w-full rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-foreground focus:border-primary focus:outline-none"
-            >
-              <option className="text-foreground" value="regular">
-                Regular
-              </option>
-              <option className="text-foreground" value="premium">
-                Premium
-              </option>
-            </select>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Plan del curso</label>
+            <div className="w-full rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm font-semibold text-foreground">
+              {formatUnifiedCourseType()}
+            </div>
           </div>
           <div className="space-y-1">
             <label className="text-xs font-semibold uppercase tracking-wide text-muted">
